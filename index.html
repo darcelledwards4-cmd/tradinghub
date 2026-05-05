@@ -184,7 +184,9 @@
         .btn-cancel { background:var(--bg3); border:1px solid var(--border); color:var(--text); border-radius:6px; padding:7px 14px; font-size:13px; cursor:pointer; }
         .btn-save { background:var(--blue); border:none; color:#000; border-radius:6px; padding:7px 14px; font-size:13px; font-weight:700; cursor:pointer; }
         .disclaimer { background:rgba(210,153,34,.05); border-top:1px solid rgba(210,153,34,.15); padding:5px 16px; font-size:10px; color:var(--orange); text-align:center; flex-shrink:0; }
-        --purple:#bc8cff;
+        :root { --purple:#bc8cff; }
+
+        /* ── AGENT CARDS ── */
         .agent-card { background:var(--bg2); border:1px solid var(--border); border-radius:10px; overflow:hidden; margin-bottom:12px; }
         .agent-card-head { padding:12px 16px; display:flex; align-items:center; gap:10px; border-bottom:1px solid var(--border); }
         .agent-icon { font-size:20px; }
@@ -201,14 +203,78 @@
         .agent-body strong { color:var(--text); }
         .agent-body .bull { color:var(--green); font-weight:700; }
         .agent-body .bear { color:var(--red); font-weight:700; }
+
+        /* ── VERDICT ── */
         .verdict-card { background:linear-gradient(135deg,rgba(188,140,255,.1),rgba(88,166,255,.08)); border:1px solid rgba(188,140,255,.3); border-radius:10px; padding:20px; margin-bottom:12px; }
-        .verdict-header { font-size:14px; font-weight:800; margin-bottom:12px; color:#bc8cff; }
+        .verdict-header { font-size:14px; font-weight:800; margin-bottom:12px; color:var(--purple); }
         .verdict-decision { font-size:22px; font-weight:800; margin-bottom:8px; }
         .verdict-body { font-size:13px; line-height:1.75; color:var(--muted); }
         .verdict-levels { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin-top:14px; }
         .vl { background:var(--bg3); border-radius:7px; padding:10px 12px; }
         .vl-label { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.4px; color:var(--muted); margin-bottom:4px; }
         .vl-val { font-size:16px; font-weight:800; }
+
+        /* ── NEWS ARTICLES ── */
+        .news-section { margin-bottom:20px; }
+        .section-title { font-size:13px; font-weight:700; color:var(--purple); text-transform:uppercase; letter-spacing:.5px; margin-bottom:10px; display:flex; align-items:center; gap:6px; }
+        .news-list { display:flex; flex-direction:column; gap:8px; }
+        .news-item { background:var(--bg2); border:1px solid var(--border); border-radius:8px; padding:12px 14px; display:flex; gap:12px; align-items:flex-start; transition:border-color .15s; text-decoration:none; color:inherit; }
+        .news-item:hover { border-color:rgba(88,166,255,.4); }
+        .news-item-body { flex:1; }
+        .news-headline { font-size:13px; font-weight:600; color:var(--text); line-height:1.45; margin-bottom:4px; }
+        .news-meta { font-size:11px; color:var(--muted); display:flex; gap:10px; }
+        .news-sentiment { font-size:10px; font-weight:700; padding:2px 7px; border-radius:20px; margin-left:auto; flex-shrink:0; }
+        .sent-pos { background:rgba(63,185,80,.12); color:var(--green); }
+        .sent-neg { background:rgba(248,81,73,.1); color:var(--red); }
+        .sent-neu { background:rgba(139,148,158,.1); color:var(--muted); }
+
+        /* ── TIER CARDS ── */
+        .tier-section { margin-bottom:20px; }
+        .tier-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; }
+        .tier-card { background:var(--bg2); border:1px solid var(--border); border-radius:10px; overflow:hidden; }
+        .tier-card.low  { border-top:3px solid var(--green); }
+        .tier-card.mod  { border-top:3px solid var(--orange); }
+        .tier-card.high { border-top:3px solid var(--red); }
+        .tier-head { padding:14px 16px 10px; border-bottom:1px solid var(--border); }
+        .tier-label { font-size:15px; font-weight:800; margin-bottom:3px; }
+        .tier-label.low  { color:var(--green); }
+        .tier-label.mod  { color:var(--orange); }
+        .tier-label.high { color:var(--red); }
+        .tier-sublabel { font-size:11px; color:var(--muted); }
+        .tier-body { padding:14px 16px; display:flex; flex-direction:column; gap:12px; }
+        .tier-strategy { font-size:12px; color:var(--text); line-height:1.6; }
+        .pros-cons { display:flex; flex-direction:column; gap:5px; }
+        .pc-item { display:flex; gap:7px; align-items:flex-start; font-size:11px; line-height:1.5; }
+        .pc-icon { font-size:12px; flex-shrink:0; margin-top:1px; }
+        .pc-pro { color:#7ee787; }
+        .pc-con { color:#f85149; }
+        .entries-section { background:var(--bg3); border-radius:7px; padding:10px 12px; }
+        .entries-title { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.4px; color:var(--muted); margin-bottom:7px; }
+        .entry-item { display:flex; justify-content:space-between; align-items:flex-start; padding:5px 0; border-bottom:1px solid var(--border); gap:8px; }
+        .entry-item:last-child { border-bottom:none; padding-bottom:0; }
+        .entry-trigger { font-size:11px; color:var(--text); line-height:1.4; flex:1; }
+        .entry-price { font-size:12px; font-weight:800; color:var(--blue); white-space:nowrap; }
+        .levels-row { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+        .mini-level { background:var(--bg3); border-radius:6px; padding:8px 10px; }
+        .mini-level-lbl { font-size:9px; font-weight:700; text-transform:uppercase; letter-spacing:.4px; color:var(--muted); margin-bottom:3px; }
+        .mini-level-val { font-size:13px; font-weight:800; }
+        .mini-target { background:var(--bg3); border-radius:6px; padding:8px 10px; }
+        .mini-target-lbl { font-size:9px; font-weight:700; text-transform:uppercase; letter-spacing:.4px; color:var(--muted); margin-bottom:3px; }
+        .mini-target-vals { display:flex; flex-direction:column; gap:2px; }
+        .mini-t-item { font-size:11px; font-weight:600; }
+        .loss-rule { font-size:10px; background:rgba(248,81,73,.07); border:1px solid rgba(248,81,73,.15); border-radius:5px; padding:6px 8px; color:var(--red); line-height:1.5; }
+        .option-row { font-size:11px; color:var(--muted); background:rgba(88,166,255,.05); border:1px solid rgba(88,166,255,.12); border-radius:5px; padding:7px 9px; line-height:1.5; }
+
+        /* ── FEAR INDICATOR ── */
+        .fear-card { border-radius:10px; padding:16px 18px; margin-bottom:16px; }
+        .fear-good { background:linear-gradient(135deg,rgba(63,185,80,.1),rgba(63,185,80,.04)); border:1px solid rgba(63,185,80,.25); }
+        .fear-bad  { background:linear-gradient(135deg,rgba(248,81,73,.08),rgba(248,81,73,.03)); border:1px solid rgba(248,81,73,.2); }
+        .fear-warn { background:linear-gradient(135deg,rgba(210,153,34,.1),rgba(210,153,34,.04)); border:1px solid rgba(210,153,34,.25); }
+        .fear-heading { font-size:14px; font-weight:800; margin-bottom:6px; }
+        .fear-why { font-size:13px; color:var(--muted); line-height:1.65; margin-bottom:10px; }
+        .fear-signals { display:flex; flex-direction:column; gap:5px; }
+        .fear-signal-item { font-size:12px; display:flex; gap:8px; align-items:flex-start; line-height:1.5; }
+        .fear-signal-icon { flex-shrink:0; }
     </style>
 </head>
 <body>
@@ -622,11 +688,11 @@ Return ONLY a valid JSON object with these exact keys: ticker, company, current_
 
 // ── AGENT ANALYSIS ───────────────────────────────────────────
 const AGENTS=[
-    {id:'technical', icon:'📊', name:'Technical Analyst', role:'Reads price action, trends & chart patterns'},
-    {id:'news',      icon:'📰', name:'News & Sentiment Agent', role:'Scans recent news and market mood'},
-    {id:'bull',      icon:'🐂', name:'Bull Researcher', role:'Makes the strongest case FOR this trade'},
-    {id:'bear',      icon:'🐻', name:'Bear Researcher', role:'Makes the strongest case AGAINST this trade'},
-    {id:'risk',      icon:'⚖️',  name:'Risk Manager', role:'Weighs both sides & assesses your risk'},
+    {id:'technical', icon:'📊', name:'Technical Analyst',        role:'Reads price action, trends & chart patterns'},
+    {id:'news',      icon:'📰', name:'News & Sentiment Agent',   role:'Scans recent news and market mood'},
+    {id:'bull',      icon:'🐂', name:'Bull Researcher',          role:'Makes the strongest case FOR this trade'},
+    {id:'bear',      icon:'🐻', name:'Bear Researcher',          role:'Makes the strongest case AGAINST this trade'},
+    {id:'risk',      icon:'⚖️',  name:'Risk Manager',            role:'Builds 3 trade plans & flags your fear signals'},
 ];
 
 function agentCard(agent, status='waiting', content=''){
@@ -639,21 +705,6 @@ function agentCard(agent, status='waiting', content=''){
             <div class="agent-status ${statusClass}" id="astatus-${agent.id}">${statusText}</div>
         </div>
         <div class="agent-body${content?' loaded':''}" id="abody-${agent.id}">${content||'<span style="color:var(--muted);font-style:italic">Waiting for previous agents to finish...</span>'}</div>
-    </div>`;
-}
-
-function verdictCard(decision, entry, stop, target, summary){
-    const isBuy=decision.toLowerCase().includes('buy')||decision.toLowerCase().includes('enter')||decision.toLowerCase().includes('bullish');
-    const color=isBuy?'var(--green)':'var(--red)';
-    return`<div class="verdict-card">
-        <div class="verdict-header">🎯 FINAL VERDICT</div>
-        <div class="verdict-decision" style="color:${color}">${decision}</div>
-        <div class="verdict-body">${summary}</div>
-        <div class="verdict-levels">
-            <div class="vl"><div class="vl-label">📥 Entry Zone</div><div class="vl-val" style="color:var(--blue)">${entry}</div></div>
-            <div class="vl"><div class="vl-label">🛑 Stop Loss</div><div class="vl-val" style="color:var(--red)">${stop}</div></div>
-            <div class="vl"><div class="vl-label">🎯 Target</div><div class="vl-val" style="color:var(--green)">${target}</div></div>
-        </div>
     </div>`;
 }
 
@@ -670,6 +721,90 @@ function fmt_agent(text){
     return text.replace(/#{1,3} (.+)/g,'<h4>$1</h4>').replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>').replace(/\n\n/g,'</p><p>').replace(/\n/g,'<br>');
 }
 
+// Fetch recent news articles from Finnhub
+async function fetchNewsArticles(ticker){
+    try{
+        const key=(typeof FINNHUB_API_KEY!=='undefined'&&FINNHUB_API_KEY!=='paste-finnhub-key-here')?FINNHUB_API_KEY:null;
+        if(!key)return[];
+        const to=new Date().toISOString().split('T')[0];
+        const from=new Date(Date.now()-10*24*60*60*1000).toISOString().split('T')[0];
+        const r=await fetch(`https://finnhub.io/api/v1/company-news?symbol=${ticker}&from=${from}&to=${to}&token=${key}`);
+        const d=await r.json();
+        return Array.isArray(d)?d.slice(0,5):[];
+    }catch(e){return[];}
+}
+
+function renderNewsSection(articles, ticker){
+    if(!articles.length) return`<div class="news-section">
+        <div class="section-title">📰 Recent News — ${ticker}</div>
+        <div style="font-size:12px;color:var(--muted);padding:12px 0">No recent news articles found via Finnhub. Check the News & Flow tab for live headlines.</div>
+    </div>`;
+    const items=articles.map(a=>{
+        const src=a.source||'News';
+        const ts=a.datetime?new Date(a.datetime*1000).toLocaleDateString('en-US',{month:'short',day:'numeric'}):'';
+        const sent=a.sentiment?.score>0.2?'Bullish':a.sentiment?.score<-0.2?'Bearish':'Neutral';
+        const sentCls=sent==='Bullish'?'sent-pos':sent==='Bearish'?'sent-neg':'sent-neu';
+        return`<a class="news-item" href="${a.url||'#'}" target="_blank">
+            <div class="news-item-body">
+                <div class="news-headline">${a.headline||'No title'}</div>
+                <div class="news-meta"><span>${src}</span>${ts?`<span>${ts}</span>`:''}</div>
+            </div>
+            <div class="news-sentiment ${sentCls}">${sent}</div>
+        </a>`;
+    }).join('');
+    return`<div class="news-section">
+        <div class="section-title">📰 Recent News — ${ticker}</div>
+        <div class="news-list">${items}</div>
+    </div>`;
+}
+
+function renderTierCard(tier, tierClass, label, sublabel, data){
+    const entries=(data.entries||[]).map(e=>`<div class="entry-item">
+        <div class="entry-trigger">${e.trigger}</div>
+        <div class="entry-price">${e.price}</div>
+    </div>`).join('');
+    const pros=(data.pros||[]).map(p=>`<div class="pc-item"><span class="pc-icon">✅</span><span class="pc-pro">${p}</span></div>`).join('');
+    const cons=(data.cons||[]).map(c=>`<div class="pc-item"><span class="pc-icon">❌</span><span class="pc-con">${c}</span></div>`).join('');
+    const targets=(data.targets||[]).map((t,i)=>`<div class="mini-t-item" style="color:var(--green)">${i===0?'🎯 ':'💰 '}${t}</div>`).join('');
+    return`<div class="tier-card ${tierClass}">
+        <div class="tier-head">
+            <div class="tier-label ${tierClass}">${label}</div>
+            <div class="tier-sublabel">${sublabel}</div>
+        </div>
+        <div class="tier-body">
+            <div class="tier-strategy">${data.strategy||''}</div>
+            <div class="pros-cons">${pros}${cons}</div>
+            <div class="entries-section">
+                <div class="entries-title">📥 Where to Enter</div>
+                ${entries}
+            </div>
+            <div class="levels-row">
+                <div class="mini-level">
+                    <div class="mini-level-lbl">🛑 Stop Loss</div>
+                    <div class="mini-level-val" style="color:var(--red)">${data.stop||'—'}</div>
+                </div>
+                <div class="mini-target">
+                    <div class="mini-target-lbl">🎯 Take Profit</div>
+                    <div class="mini-target-vals">${targets}</div>
+                </div>
+            </div>
+            <div class="loss-rule">🔒 15% rule: On a $500 account, never risk more than $75 per trade. ${data.sizing||''}</div>
+            <div class="option-row">📋 ${data.option_detail||''}</div>
+        </div>
+    </div>`;
+}
+
+function renderFearCard(fear){
+    const level=(fear.level||'').toLowerCase();
+    const cls=level.includes('good')||level.includes('opportun')?'fear-good':level.includes('caution')||level.includes('warn')?'fear-warn':'fear-bad';
+    const signals=(fear.signals||[]).map(s=>`<div class="fear-signal-item"><span class="fear-signal-icon">⚡</span><span style="color:var(--text)">${s}</span></div>`).join('');
+    return`<div class="fear-card ${cls}">
+        <div class="fear-heading">${fear.heading||'⚠️ Market Timing Check'}</div>
+        <div class="fear-why">${fear.why||''}</div>
+        ${signals?`<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--muted);margin-bottom:6px">WATCH OUT IF…</div><div class="fear-signals">${signals}</div>`:''}
+    </div>`;
+}
+
 async function runAgents(){
     const ticker=document.getElementById('agent-ticker').value.trim().toUpperCase().replace(/[^A-Z]/g,'');
     if(!ticker){alert('Enter a ticker first.');return;}
@@ -682,21 +817,28 @@ async function runAgents(){
         `<div id="verdictOutput"></div>`;
 
     try{
-        // Fetch price data
-        const quote=await fetchQuote(ticker);
-        const priceCtx=quote?`Current price: $${quote.price.toFixed(2)} (${quote.chg>=0?'+':''}${quote.chg.toFixed(2)}% today)`:`Ticker: ${ticker} — use your latest market knowledge`;
+        // Fetch price + news in parallel
+        const [quote, articles] = await Promise.all([
+            fetchQuote(ticker),
+            fetchNewsArticles(ticker)
+        ]);
+        const priceCtx=quote?`Current price: $${quote.price.toFixed(2)} (${quote.chg>=0?'+':''}${quote.chg.toFixed(2)}% today, high of day: $${(quote.high52||quote.price).toFixed(2)})`:`Ticker: ${ticker} — use your latest market knowledge`;
 
         // ── AGENT 1: Technical ──
         setAgent('technical','thinking','');
         const techPrompt=`You are a technical analyst. Analyze ${ticker} for a beginner options trader.
 ${priceCtx}
-In 3-4 sentences of plain English (no jargon), describe: what the trend looks like, whether it's near support or resistance, and what the chart is suggesting. End with one sentence on what you'd watch for as a signal to enter.`;
+In 3-4 sentences of plain English (no jargon), describe: what the trend looks like, whether it's near support or resistance, and what the chart is suggesting. End with one sentence on what to watch for as a signal to enter.`;
         const techResult=await callClaude(techPrompt);
         setAgent('technical','done',fmt_agent(techResult));
 
         // ── AGENT 2: News ──
         setAgent('news','thinking','');
-        const newsPrompt=`You are a news and sentiment analyst. For ${ticker}, summarize in 3-4 plain English sentences: what's been in the news recently for this company/sector, what the overall market mood is around it, and whether sentiment is positive, negative or mixed right now. Be specific and current.`;
+        const recentHeadlines=articles.length?articles.map(a=>a.headline).join(' | '):'No live headlines available';
+        const newsPrompt=`You are a news and sentiment analyst for ${ticker}.
+Recent headlines: ${recentHeadlines}
+${priceCtx}
+In 3-4 plain English sentences summarize: what's been happening news-wise for this company/sector, what the overall market mood is, and whether sentiment is positive, negative, or mixed right now. Be specific.`;
         const newsResult=await callClaude(newsPrompt);
         setAgent('news','done',fmt_agent(newsResult));
 
@@ -705,40 +847,87 @@ In 3-4 sentences of plain English (no jargon), describe: what the trend looks li
         setAgent('bear','thinking','');
         const context=`Ticker: ${ticker}\n${priceCtx}\nTechnical read: ${techResult}\nNews/sentiment: ${newsResult}`;
         const [bullResult, bearResult] = await Promise.all([
-            callClaude(`You are a bullish researcher arguing FOR buying ${ticker} options right now. Use the context below. Give 3 strong, specific reasons why this is a good trade. Be direct and compelling. Plain English only.\n\n${context}`),
-            callClaude(`You are a bearish researcher arguing AGAINST buying ${ticker} options right now. Use the context below. Give 3 strong, specific reasons why this trade is risky or not worth it right now. Be direct and honest. Plain English only.\n\n${context}`)
+            callClaude(`You are a bullish researcher arguing FOR buying ${ticker} options right now. Context:\n${context}\n\nGive 3 strong, specific reasons why this is a good trade. Direct and compelling. Plain English only.`),
+            callClaude(`You are a bearish researcher arguing AGAINST buying ${ticker} options right now. Context:\n${context}\n\nGive 3 strong, specific reasons why this trade is risky. Direct and honest. Plain English only.`)
         ]);
         setAgent('bull','done',`<span class="bull">BULL CASE ↑</span><br><br>${fmt_agent(bullResult)}`);
         setAgent('bear','done',`<span class="bear">BEAR CASE ↓</span><br><br>${fmt_agent(bearResult)}`);
 
-        // ── AGENT 5: Risk + Final Verdict ──
+        // ── AGENT 5: Risk + Three Trade Plans ──
         setAgent('risk','thinking','');
-        const finalPrompt=`You are a risk manager and final decision maker for a beginner options trader with a $500 account trading 1-3 month options.
+        const finalPrompt=`You are a risk manager building trade plans for a beginner options trader with a $500 account, trading 1-3 month options on tech stocks. Her rule: never lose more than 15% of her account ($75 max) on any single trade.
 
-Here is the full analysis for ${ticker}:
+Full analysis for ${ticker}:
+Price context: ${priceCtx}
 Technical: ${techResult}
 News: ${newsResult}
 Bull case: ${bullResult}
 Bear case: ${bearResult}
 
-Return ONLY a JSON object with these keys:
-- decision (string: "✅ BUY — Enter the Trade" or "❌ PASS — Skip This One" or "⚠️ WAIT — Watch But Don't Enter Yet")
-- summary (2-3 plain English sentences explaining the final call)
-- entry (string, e.g. "$122–$126")
-- stop (string, e.g. "$117")
-- target (string, e.g. "$138")
-- risk_note (1 sentence on what to watch out for with $500)
+Return ONLY a JSON object with these exact keys (no markdown, raw JSON only):
 
-Raw JSON only, no markdown.`;
+{
+  "conservative": {
+    "strategy": "1-2 sentences describing this low-risk approach in plain English",
+    "pros": ["pro 1", "pro 2", "pro 3"],
+    "cons": ["con 1", "con 2"],
+    "entries": [
+      {"trigger": "Enter if price pulls back to support", "price": "$X"},
+      {"trigger": "Enter on a green open above $X with volume", "price": "$X"},
+      {"trigger": "Enter after earnings dust settles (if upcoming)", "price": "$X"}
+    ],
+    "stop": "$X — exit here to cap your loss",
+    "targets": ["$X — take 50% profit here", "$X — let the rest ride to full target"],
+    "sizing": "e.g. 1 contract at $1.50 = $150 risk. Buy 1 contract only.",
+    "option_detail": "e.g. $120 Call · Expiry ~Aug 15 · Deep enough to move with the stock"
+  },
+  "moderate": { same structure — medium risk, strike closer to current price },
+  "aggressive": { same structure — higher risk, more reward, shorter expiry or aggressive strike },
+  "fear": {
+    "level": "Good Time" OR "Proceed With Caution" OR "High Risk Environment",
+    "heading": "emoji + short headline, e.g. '🟢 Conditions Look Favorable Right Now'",
+    "why": "2-3 sentences explaining why now is or isn't a good entry. Reference VIX level, recent market direction, sector momentum, earnings risk, macro events.",
+    "signals": ["Watch out signal 1", "Watch out signal 2", "Watch out signal 3"]
+  },
+  "decision": "✅ BUY — Enter the Trade" OR "❌ PASS — Skip This One" OR "⚠️ WAIT — Watch But Don't Enter Yet",
+  "summary": "2-3 plain English sentences — the final call with your reasoning"
+}`;
         const finalRaw=await callClaude(finalPrompt);
         let verdict;
-        try{const m=finalRaw.match(/\{[\s\S]*\}/);verdict=JSON.parse(m?m[0]:finalRaw);}
-        catch(e){verdict={decision:'Analysis Complete',summary:finalRaw,entry:'See analysis',stop:'See analysis',target:'See analysis',risk_note:''};}
+        try{const m=finalRaw.match(/\{[\s\S]*\}/s);verdict=JSON.parse(m?m[0]:finalRaw);}
+        catch(e){
+            setAgent('risk','done',`<span style="color:var(--red)">Could not parse the structured response. Raw analysis below:</span><br><br>${fmt_agent(finalRaw)}`);
+            btn.disabled=false; btn.textContent='⚡ Run Full Analysis'; return;
+        }
 
-        setAgent('risk','done',`<strong>Risk Assessment:</strong><br>${verdict.summary}<br><br><em style="color:var(--orange)">${verdict.risk_note}</em>`);
+        setAgent('risk','done',`<strong>Trade plans built.</strong> Three options — conservative, moderate, and aggressive — with entries, stops, and targets are below.<br><br><em style="color:var(--orange)">Remember: max $75 risk on any single trade with your $500 account.</em>`);
+
+        const isBuy=(verdict.decision||'').toLowerCase().includes('buy')||((verdict.decision||'').toLowerCase().includes('enter'));
+        const decColor=isBuy?'var(--green)':(verdict.decision||'').toLowerCase().includes('pass')?'var(--red)':'var(--orange)';
 
         document.getElementById('verdictOutput').innerHTML=
-            verdictCard(verdict.decision, verdict.entry, verdict.stop, verdict.target, verdict.summary);
+            // News articles
+            renderNewsSection(articles, ticker)+
+
+            // Fear indicator
+            (verdict.fear?renderFearCard(verdict.fear):'')+
+
+            // Final decision banner
+            `<div class="verdict-card" style="margin-bottom:20px">
+                <div class="verdict-header">🎯 FINAL VERDICT</div>
+                <div class="verdict-decision" style="color:${decColor}">${verdict.decision||'Analysis Complete'}</div>
+                <div class="verdict-body">${verdict.summary||''}</div>
+            </div>`+
+
+            // Three trade tier cards
+            `<div class="tier-section">
+                <div class="section-title">📋 3 Ways to Trade This — Pick Your Risk Level</div>
+                <div class="tier-grid">
+                    ${verdict.conservative?renderTierCard('conservative','low','🟢 Conservative','Low Risk · Lower Reward',verdict.conservative):''}
+                    ${verdict.moderate?renderTierCard('moderate','mod','🟡 Moderate','Balanced Risk & Reward',verdict.moderate):''}
+                    ${verdict.aggressive?renderTierCard('aggressive','high','🔴 Aggressive','High Risk · High Reward',verdict.aggressive):''}
+                </div>
+            </div>`;
 
     }catch(e){
         document.getElementById('agentOutput').innerHTML=`<div class="empty-state"><div class="empty-icon">⚠️</div><div class="empty-title">Error</div><div class="empty-sub">${e.message}</div></div>`;
