@@ -60,6 +60,21 @@
         .scan-btn:hover { border-color:var(--blue); color:var(--blue); }
         .scan-btn:disabled { opacity:.5; cursor:not-allowed; }
         .last-scan { font-size:11px; color:var(--muted); margin-top:3px; }
+        .edit-wl-btn { background:var(--bg3); border:1px solid var(--border); color:var(--muted); border-radius:7px; padding:6px 13px; font-size:12px; font-weight:600; cursor:pointer; transition:all .15s; }
+        .edit-wl-btn:hover { border-color:var(--blue); color:var(--blue); }
+        .wl-panel { background:var(--bg2); border:1px solid var(--border); border-radius:10px; padding:16px; margin-bottom:20px; display:none; }
+        .wl-panel.open { display:block; }
+        .wl-panel-title { font-size:13px; font-weight:700; margin-bottom:12px; }
+        .wl-chips { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:14px; }
+        .wl-chip { display:inline-flex; align-items:center; gap:6px; background:var(--bg3); border:1px solid var(--border); border-radius:6px; padding:5px 10px; font-size:12px; font-weight:600; }
+        .wl-chip-remove { background:none; border:none; color:var(--muted); cursor:pointer; font-size:14px; padding:0; line-height:1; transition:color .15s; }
+        .wl-chip-remove:hover { color:var(--red); }
+        .wl-add-row { display:flex; gap:8px; }
+        .wl-add-input { flex:1; background:var(--bg3); border:1px solid var(--border); border-radius:6px; color:var(--text); padding:7px 12px; font-size:13px; font-family:inherit; outline:none; text-transform:uppercase; transition:border-color .15s; max-width:180px; }
+        .wl-add-input:focus { border-color:var(--blue); }
+        .wl-add-btn { background:var(--blue); color:#000; border:none; border-radius:6px; padding:7px 14px; font-size:12px; font-weight:700; cursor:pointer; }
+        .wl-reset { background:none; border:none; color:var(--muted); font-size:11px; cursor:pointer; text-decoration:underline; padding:0; margin-left:auto; }
+        .wl-reset:hover { color:var(--red); }
         .loading-state { text-align:center; padding:50px 20px; }
         .spinner { width:32px; height:32px; border:3px solid var(--border); border-top-color:var(--blue); border-radius:50%; animation:spin .7s linear infinite; margin:0 auto 14px; }
         @keyframes spin { to { transform:rotate(360deg); } }
@@ -335,9 +350,27 @@
                         <div class="scan-title">Today's Watchlist Ideas</div>
                         <div class="last-scan" id="lastScan">Hit "Scan" to generate today's trade ideas</div>
                     </div>
-                    <button class="scan-btn" onclick="scanWatchlist()" id="scanBtn">
-                        <span>⚡</span><span>Scan My Watchlist</span>
-                    </button>
+                    <div style="display:flex;gap:8px;align-items:center">
+                        <button class="edit-wl-btn" onclick="toggleWLPanel()" id="editWLBtn">✏️ Edit Watchlist</button>
+                        <button class="scan-btn" onclick="scanWatchlist()" id="scanBtn">
+                            <span>⚡</span><span>Scan My Watchlist</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- WATCHLIST EDITOR -->
+                <div class="wl-panel" id="wlPanel">
+                    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+                        <div class="wl-panel-title">📋 My Watchlist</div>
+                        <button class="wl-reset" onclick="resetWatchlist()">Reset to defaults</button>
+                    </div>
+                    <div class="wl-chips" id="wlChips"></div>
+                    <div class="wl-add-row">
+                        <input class="wl-add-input" id="wlAddInput" placeholder="Add ticker..." maxlength="6"
+                            onkeydown="if(event.key==='Enter')addToWatchlist()"
+                            oninput="this.value=this.value.toUpperCase().replace(/[^A-Z]/g,'')" />
+                        <button class="wl-add-btn" onclick="addToWatchlist()">+ Add</button>
+                    </div>
                 </div>
                 <div id="ideasOutput">
                     <div class="empty-state">
@@ -663,8 +696,54 @@ function buildCard(idea){
     </div>`;
 }
 
+// ── WATCHLIST MANAGEMENT ──────────────────────────────────────
+const DEFAULT_WATCHLIST=['NVDA','SPY','QQQ','AAPL','MSFT','META','AMD','GOOGL','ARM','PLTR'];
+let WATCHLIST=JSON.parse(localStorage.getItem('darcell_watchlist')||'null')||[...DEFAULT_WATCHLIST];
+
+function saveWatchlist(){localStorage.setItem('darcell_watchlist',JSON.stringify(WATCHLIST));}
+
+function renderWLChips(){
+    const c=document.getElementById('wlChips');
+    if(!c)return;
+    c.innerHTML=WATCHLIST.map(t=>`<div class="wl-chip">
+        ${t}<button class="wl-chip-remove" onclick="removeFromWatchlist('${t}')" title="Remove ${t}">×</button>
+    </div>`).join('');
+}
+
+function toggleWLPanel(){
+    const p=document.getElementById('wlPanel');
+    p.classList.toggle('open');
+    if(p.classList.contains('open')) renderWLChips();
+}
+
+function addToWatchlist(){
+    const inp=document.getElementById('wlAddInput');
+    const t=inp.value.trim().toUpperCase().replace(/[^A-Z]/g,'');
+    if(!t){alert('Enter a valid ticker symbol.');return;}
+    if(WATCHLIST.includes(t)){alert(`${t} is already on your watchlist.`);inp.value='';return;}
+    if(WATCHLIST.length>=20){alert('Max 20 tickers on your watchlist.');return;}
+    WATCHLIST.push(t);
+    saveWatchlist();
+    renderWLChips();
+    inp.value='';
+    inp.focus();
+}
+
+function removeFromWatchlist(ticker){
+    if(WATCHLIST.length<=1){alert("You need at least one ticker on your watchlist.");return;}
+    WATCHLIST=WATCHLIST.filter(t=>t!==ticker);
+    saveWatchlist();
+    renderWLChips();
+}
+
+function resetWatchlist(){
+    if(!confirm('Reset to the default watchlist? This will remove any tickers you added.'))return;
+    WATCHLIST=[...DEFAULT_WATCHLIST];
+    saveWatchlist();
+    renderWLChips();
+}
+
 // ── SCAN WATCHLIST ────────────────────────────────────────────
-const WATCHLIST=['NVDA','SPY','QQQ','AAPL','MSFT','META','AMD','GOOGL','ARM','PLTR'];
 async function scanWatchlist(){
     const btn=document.getElementById('scanBtn');
     btn.disabled=true; btn.innerHTML='<span>⏳</span><span>Scanning...</span>';
