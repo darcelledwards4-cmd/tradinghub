@@ -418,28 +418,14 @@ setInterval(updateClock,1000); updateClock();
 
 // ── FETCH STOCK DATA ──────────────────────────────────────────
 async function fetchQuote(ticker){
-    const url=`https://query1.finance.yahoo.com/v8/finance/chart/${ticker}?interval=1d&range=5d`;
-    const proxies=[
-        `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
-        `https://corsproxy.io/?${encodeURIComponent(url)}`,
-        `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`
-    ];
-    for(const proxy of proxies){
-        try{
-            const r=await fetch(proxy,{signal:AbortSignal.timeout(6000)});
-            if(!r.ok)continue;
-            const d=await r.json();
-            const res=d.chart?.result?.[0];
-            if(!res)continue;
-            const meta=res.meta;
-            const closes=res.indicators.quote[0].close.filter(x=>x!=null);
-            const price=meta.regularMarketPrice||closes.at(-1);
-            const prev=meta.previousClose||meta.chartPreviousClose||closes.at(-2);
-            return{ticker,price,chg:prev?((price-prev)/prev*100):0,closes,
-                high52:meta.fiftyTwoWeekHigh,low52:meta.fiftyTwoWeekLow,vol:meta.regularMarketVolume};
-        }catch(e){continue;}
-    }
-    return null;
+    try{
+        const key=(typeof FINNHUB_API_KEY!=='undefined'&&FINNHUB_API_KEY!=='paste-finnhub-key-here')?FINNHUB_API_KEY:null;
+        if(!key)return null;
+        const r=await fetch(`https://finnhub.io/api/v1/quote?symbol=${ticker}&token=${key}`);
+        const d=await r.json();
+        if(!d.c||d.c===0)return null;
+        return{ticker,price:d.c,chg:d.dp||0,closes:[d.pc,d.c],high52:d.h,low52:d.l,vol:0};
+    }catch(e){return null;}
 }
 
 // ── CLAUDE ────────────────────────────────────────────────────
@@ -506,9 +492,12 @@ async function scanWatchlist(){
     btn.disabled=true; btn.innerHTML='<span>⏳</span><span>Scanning...</span>';
     document.getElementById('ideasOutput').innerHTML=`<div class="loading-state"><div class="spinner"></div><div class="loading-text">Pulling live prices and finding your best setups...</div></div>`;
     try{
-        const quotes=(await Promise.all(WATCHLIST.map(fetchQuote))).filter(Boolean);
-        if(!quotes.length)throw new Error('Could not fetch price data — try again in a moment.');
-        const priceData=quotes.map(q=>`${q.ticker}: $${q.price.toFixed(2)} (${q.chg>=0?'+':''}${q.chg.toFixed(2)}% today), recent closes: ${q.closes.slice(-5).map(p=>p?'$'+p.toFixed(0):'—').join(', ')}`).join('\n');
+        const rawQuotes=await Promise.all(WATCHLIST.map(fetchQuote));
+        const quotes=rawQuotes.filter(Boolean);
+        const hasPrices=quotes.length>0;
+        const priceData=hasPrices
+            ?quotes.map(q=>`${q.ticker}: $${q.price.toFixed(2)} (${q.chg>=0?'+':''}${q.chg.toFixed(2)}% today)`).join('\n')
+            :WATCHLIST.join(', ')+' — use your latest knowledge of these stocks';
         const prompt=`You are a trading analyst helping a beginner options trader with a $500 account who trades 1-3 month options on tech stocks.
 
 Live price data:
