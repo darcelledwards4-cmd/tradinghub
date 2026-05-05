@@ -800,52 +800,50 @@ Return raw JSON array only. No markdown. No code fences.`;
 }
 
 // ── DISCOVER: BEYOND YOUR WATCHLIST ──────────────────────────
-async function scanDiscover(){
-    document.getElementById('discoverSection').style.display='block';
-    document.getElementById('discoverOutput').innerHTML=`<div class="loading-state"><div class="spinner"></div><div class="loading-text">Finding opportunities outside your watchlist...</div></div>`;
-    try{
-        const prompt=`You are a stock analyst helping a beginner options trader with a $500 account find opportunities OUTSIDE her normal watchlist (NVDA, SPY, QQQ, AAPL, MSFT, META, AMD, GOOGL, ARM, PLTR).
+// Shared prompt for a single discover category — returns a JSON array of 3 stocks
+function discoverPrompt(categoryDesc){
+    const excluded=WATCHLIST.join(', ');
+    return `You are a stock analyst helping a beginner options trader with a $500 account. Her max loss per trade is $75 (15% rule).
 
-Suggest exactly 9 stocks across 3 categories (3 per category). Return ONLY a raw JSON object — no markdown, no code fences.
+Find exactly 3 stocks that fit this description: ${categoryDesc}
+Do NOT include any of these tickers she already watches: ${excluded}
 
-{
-  "value_gems": [ /* 3 stocks: cheap price (<$50/share ideally), historically solid companies, currently undervalued or showing recovery */ ],
-  "momentum_movers": [ /* 3 stocks: showing significant recent movement, high upside potential, strong trend */ ],
-  "community_favorites": [ /* 3 stocks: what retail traders and communities are actively buying and talking about right now */ ]
+Return ONLY a raw JSON array of exactly 3 objects. No markdown. No code fences. No explanation.
+
+Each object must have these keys:
+ticker, company, current_price (number), price_change (number), direction ("bullish" or "bearish"), summary (1 plain English sentence — why this is interesting right now), pros (array of exactly 2 short strings), cons (array of exactly 1 short string), potential ("high" or "moderate" or "avoid"), entry_low (number), entry_high (number), stop_loss (number), target (number), option_type ("CALL" or "PUT"), option_detail (short string e.g. "$25 Call · Expires ~Aug 15 · Est. $0.80/contract"), account_sizing (one sentence for a $500 account keeping risk under $75), confidence ("high" or "medium" or "low"), risk_reward (string e.g. "1:2.5")
+
+Raw JSON array only. Nothing else.`;
 }
 
-Each stock object needs these exact keys:
-- ticker, company, current_price (number), price_change (number), direction ("bullish"/"bearish"), summary (1-2 plain English sentences — why this is interesting right now), pros (array of 2 strings), cons (array of 1-2 strings), potential ("high"/"moderate"/"avoid"), entry_low (number), entry_high (number), stop_loss (number), target (number), option_type ("CALL"/"PUT"), option_detail (string), account_sizing (string — advice for $500 account, keep risk under $75), confidence ("high"/"medium"/"low"), risk_reward (string)
+async function scanDiscover(){
+    document.getElementById('discoverSection').style.display='block';
+    // Show 3 loading placeholders immediately
+    const cats=[
+        {key:'gems',      label:'💎 Cheap Gems — Solid Companies at Good Prices',       desc:'cheap stocks under $60/share that are historically strong companies currently undervalued or recovering'},
+        {key:'momentum',  label:'🚀 Momentum Movers — High Upside Right Now',            desc:'stocks showing strong recent price movement, high upside potential, and a clear trend in either direction'},
+        {key:'community', label:'🔥 Community Favorites — What People Are Buying',       desc:'stocks that retail traders and investing communities are actively buying and discussing right now'},
+    ];
+    document.getElementById('discoverOutput').innerHTML=cats.map(c=>`
+        <div class="discover-category" id="dcat-${c.key}">
+            <div class="d-cat-label">${c.label}</div>
+            <div class="loading-state" style="padding:20px"><div class="spinner"></div><div class="loading-text">Loading...</div></div>
+        </div>`).join('');
 
-For potential: "high" = strong setup with clear upside, "moderate" = decent but mixed signals, "avoid" = too risky or uncertain right now.
-
-Raw JSON only. No markdown. No code fences.`;
-        const raw=await callClaude(prompt);
-        let data;
+    // Fire all 3 calls in parallel
+    await Promise.all(cats.map(async cat=>{
+        const el=document.getElementById('dcat-'+cat.key);
         try{
-            data=JSON.parse(stripJSON(raw));
-        }catch(e){throw new Error('Could not parse discover results — try scanning again.');}
-
-        const categories=[
-            {key:'value_gems',      label:'💎 Cheap Gems — Solid Companies at Good Prices'},
-            {key:'momentum_movers', label:'🚀 Momentum Movers — High Upside Right Now'},
-            {key:'community_favorites', label:'🔥 Community Favorites — What People Are Buying'},
-        ];
-        let html='';
-        for(const cat of categories){
-            const stocks=data[cat.key]||[];
-            if(!stocks.length) continue;
-            html+=`<div class="discover-category">
-                <div class="d-cat-label">${cat.label}</div>
-                <div class="ideas-grid">
-                    ${stocks.map(s=>buildCard({...s,category:cat.label})).join('')}
-                </div>
-            </div>`;
+            const raw=await callClaude(discoverPrompt(cat.desc));
+            const stocks=JSON.parse(stripJSON(raw));
+            if(!Array.isArray(stocks)||!stocks.length) throw new Error('Empty response');
+            el.innerHTML=`<div class="d-cat-label">${cat.label}</div>
+                <div class="ideas-grid">${stocks.map(s=>buildCard({...s,category:cat.label})).join('')}</div>`;
+        }catch(e){
+            el.innerHTML=`<div class="d-cat-label">${cat.label}</div>
+                <div style="font-size:12px;color:var(--muted);padding:8px 0">Could not load — try scanning again.</div>`;
         }
-        document.getElementById('discoverOutput').innerHTML=html||'<div class="empty-state"><div class="empty-icon">🔍</div><div class="empty-title">Nothing found</div></div>';
-    }catch(e){
-        document.getElementById('discoverOutput').innerHTML=`<div class="empty-state"><div class="empty-icon">⚠️</div><div class="empty-sub">${e.message}</div></div>`;
-    }
+    }));
 }
 
 // ── ANALYZE SINGLE ────────────────────────────────────────────
