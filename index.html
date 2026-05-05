@@ -184,6 +184,31 @@
         .btn-cancel { background:var(--bg3); border:1px solid var(--border); color:var(--text); border-radius:6px; padding:7px 14px; font-size:13px; cursor:pointer; }
         .btn-save { background:var(--blue); border:none; color:#000; border-radius:6px; padding:7px 14px; font-size:13px; font-weight:700; cursor:pointer; }
         .disclaimer { background:rgba(210,153,34,.05); border-top:1px solid rgba(210,153,34,.15); padding:5px 16px; font-size:10px; color:var(--orange); text-align:center; flex-shrink:0; }
+        --purple:#bc8cff;
+        .agent-card { background:var(--bg2); border:1px solid var(--border); border-radius:10px; overflow:hidden; margin-bottom:12px; }
+        .agent-card-head { padding:12px 16px; display:flex; align-items:center; gap:10px; border-bottom:1px solid var(--border); }
+        .agent-icon { font-size:20px; }
+        .agent-name { font-size:13px; font-weight:700; }
+        .agent-role { font-size:11px; color:var(--muted); margin-top:1px; }
+        .agent-status { margin-left:auto; font-size:11px; font-weight:600; padding:3px 9px; border-radius:20px; }
+        .status-thinking { background:rgba(210,153,34,.12); color:var(--orange); }
+        .status-done { background:rgba(63,185,80,.12); color:var(--green); }
+        .status-waiting { background:rgba(139,148,158,.1); color:var(--muted); }
+        .agent-body { padding:16px; font-size:13px; line-height:1.75; color:var(--muted); }
+        .agent-body.loaded { color:var(--text); }
+        .agent-body h4 { color:var(--purple); font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.5px; margin:12px 0 4px; }
+        .agent-body h4:first-child { margin-top:0; }
+        .agent-body strong { color:var(--text); }
+        .agent-body .bull { color:var(--green); font-weight:700; }
+        .agent-body .bear { color:var(--red); font-weight:700; }
+        .verdict-card { background:linear-gradient(135deg,rgba(188,140,255,.1),rgba(88,166,255,.08)); border:1px solid rgba(188,140,255,.3); border-radius:10px; padding:20px; margin-bottom:12px; }
+        .verdict-header { font-size:14px; font-weight:800; margin-bottom:12px; color:#bc8cff; }
+        .verdict-decision { font-size:22px; font-weight:800; margin-bottom:8px; }
+        .verdict-body { font-size:13px; line-height:1.75; color:var(--muted); }
+        .verdict-levels { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin-top:14px; }
+        .vl { background:var(--bg3); border-radius:7px; padding:10px 12px; }
+        .vl-label { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.4px; color:var(--muted); margin-bottom:4px; }
+        .vl-val { font-size:16px; font-weight:800; }
     </style>
 </head>
 <body>
@@ -205,6 +230,7 @@
     <div class="tab-btn" onclick="showTab('charts')">📈 Charts</div>
     <div class="tab-btn" onclick="showTab('news')">📰 News &amp; Flow</div>
     <div class="tab-btn" onclick="showTab('activity')">👥 Trader Activity</div>
+    <div class="tab-btn" onclick="showTab('agents')" style="color:#bc8cff;border-bottom:2px solid transparent">🤖 Agent Analysis</div>
     <div class="tab-btn" onclick="showTab('journal')">📒 Journal</div>
 </div>
 
@@ -337,6 +363,33 @@
         </div>
     </div>
 
+    <!-- AGENT ANALYSIS -->
+    <div class="tab" id="tab-agents">
+        <div class="scroll">
+            <div style="max-width:860px;margin:0 auto;padding:20px;display:flex;flex-direction:column;gap:16px">
+
+                <div>
+                    <div style="font-size:17px;font-weight:700;margin-bottom:4px">🤖 Agent Analysis</div>
+                    <div style="font-size:12px;color:var(--muted)">A team of AI agents debates your trade from every angle — bull case, bear case, risk, and a final verdict. Based on the TradingAgents framework.</div>
+                </div>
+
+                <div style="display:flex;gap:10px">
+                    <input id="agent-ticker" class="search-input" placeholder="Enter a ticker — e.g. NVDA, AAPL, AMD..." style="font-size:14px" onkeydown="if(event.key==='Enter')runAgents()" />
+                    <button onclick="runAgents()" id="agentBtn" class="search-btn" style="background:var(--purple);white-space:nowrap">⚡ Run Full Analysis</button>
+                </div>
+
+                <div id="agentOutput">
+                    <div class="empty-state">
+                        <div class="empty-icon">🤖</div>
+                        <div class="empty-title">Ready to deploy agents</div>
+                        <div class="empty-sub">Enter a ticker and run the analysis. A team of specialized AI agents will debate the trade from every angle before giving you a final verdict.</div>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+    </div>
+
     <!-- JOURNAL -->
     <div class="tab" id="tab-journal">
         <div class="journal-scroll">
@@ -393,7 +446,7 @@
 
 <script>
 // ── TABS ──────────────────────────────────────────────────────
-const TABS=['ideas','charts','news','activity','journal'];
+const TABS=['ideas','charts','news','activity','agents','journal'];
 function showTab(t){
     TABS.forEach((id,i)=>{
         document.getElementById('tab-'+id).classList.toggle('active',id===t);
@@ -565,6 +618,132 @@ Return ONLY a valid JSON object with these exact keys: ticker, company, current_
         out.innerHTML=`<div class="empty-state"><div class="empty-icon">⚠️</div><div class="empty-title">Error</div><div class="empty-sub">${e.message}</div></div>`;
     }
     btn.disabled=false; btn.textContent='Analyze This Stock →';
+}
+
+// ── AGENT ANALYSIS ───────────────────────────────────────────
+const AGENTS=[
+    {id:'technical', icon:'📊', name:'Technical Analyst', role:'Reads price action, trends & chart patterns'},
+    {id:'news',      icon:'📰', name:'News & Sentiment Agent', role:'Scans recent news and market mood'},
+    {id:'bull',      icon:'🐂', name:'Bull Researcher', role:'Makes the strongest case FOR this trade'},
+    {id:'bear',      icon:'🐻', name:'Bear Researcher', role:'Makes the strongest case AGAINST this trade'},
+    {id:'risk',      icon:'⚖️',  name:'Risk Manager', role:'Weighs both sides & assesses your risk'},
+];
+
+function agentCard(agent, status='waiting', content=''){
+    const statusClass=status==='thinking'?'status-thinking':status==='done'?'status-done':'status-waiting';
+    const statusText=status==='thinking'?'⏳ Thinking...':status==='done'?'✅ Done':'⏸ Waiting';
+    return`<div class="agent-card" id="acard-${agent.id}">
+        <div class="agent-card-head">
+            <div class="agent-icon">${agent.icon}</div>
+            <div><div class="agent-name">${agent.name}</div><div class="agent-role">${agent.role}</div></div>
+            <div class="agent-status ${statusClass}" id="astatus-${agent.id}">${statusText}</div>
+        </div>
+        <div class="agent-body${content?' loaded':''}" id="abody-${agent.id}">${content||'<span style="color:var(--muted);font-style:italic">Waiting for previous agents to finish...</span>'}</div>
+    </div>`;
+}
+
+function verdictCard(decision, entry, stop, target, summary){
+    const isBuy=decision.toLowerCase().includes('buy')||decision.toLowerCase().includes('enter')||decision.toLowerCase().includes('bullish');
+    const color=isBuy?'var(--green)':'var(--red)';
+    return`<div class="verdict-card">
+        <div class="verdict-header">🎯 FINAL VERDICT</div>
+        <div class="verdict-decision" style="color:${color}">${decision}</div>
+        <div class="verdict-body">${summary}</div>
+        <div class="verdict-levels">
+            <div class="vl"><div class="vl-label">📥 Entry Zone</div><div class="vl-val" style="color:var(--blue)">${entry}</div></div>
+            <div class="vl"><div class="vl-label">🛑 Stop Loss</div><div class="vl-val" style="color:var(--red)">${stop}</div></div>
+            <div class="vl"><div class="vl-label">🎯 Target</div><div class="vl-val" style="color:var(--green)">${target}</div></div>
+        </div>
+    </div>`;
+}
+
+function setAgent(id, status, content){
+    const statusClass=status==='thinking'?'status-thinking':status==='done'?'status-done':'status-waiting';
+    const statusText=status==='thinking'?'⏳ Thinking...':status==='done'?'✅ Done':'⏸ Waiting';
+    const s=document.getElementById('astatus-'+id);
+    const b=document.getElementById('abody-'+id);
+    if(s){s.textContent=statusText;s.className='agent-status '+statusClass;}
+    if(b&&content){b.innerHTML=content;b.classList.add('loaded');}
+}
+
+function fmt_agent(text){
+    return text.replace(/#{1,3} (.+)/g,'<h4>$1</h4>').replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>').replace(/\n\n/g,'</p><p>').replace(/\n/g,'<br>');
+}
+
+async function runAgents(){
+    const ticker=document.getElementById('agent-ticker').value.trim().toUpperCase().replace(/[^A-Z]/g,'');
+    if(!ticker){alert('Enter a ticker first.');return;}
+    const btn=document.getElementById('agentBtn');
+    btn.disabled=true; btn.textContent='Running...';
+
+    // Render all agent cards in waiting state
+    document.getElementById('agentOutput').innerHTML=
+        AGENTS.map(a=>agentCard(a)).join('')+
+        `<div id="verdictOutput"></div>`;
+
+    try{
+        // Fetch price data
+        const quote=await fetchQuote(ticker);
+        const priceCtx=quote?`Current price: $${quote.price.toFixed(2)} (${quote.chg>=0?'+':''}${quote.chg.toFixed(2)}% today)`:`Ticker: ${ticker} — use your latest market knowledge`;
+
+        // ── AGENT 1: Technical ──
+        setAgent('technical','thinking','');
+        const techPrompt=`You are a technical analyst. Analyze ${ticker} for a beginner options trader.
+${priceCtx}
+In 3-4 sentences of plain English (no jargon), describe: what the trend looks like, whether it's near support or resistance, and what the chart is suggesting. End with one sentence on what you'd watch for as a signal to enter.`;
+        const techResult=await callClaude(techPrompt);
+        setAgent('technical','done',fmt_agent(techResult));
+
+        // ── AGENT 2: News ──
+        setAgent('news','thinking','');
+        const newsPrompt=`You are a news and sentiment analyst. For ${ticker}, summarize in 3-4 plain English sentences: what's been in the news recently for this company/sector, what the overall market mood is around it, and whether sentiment is positive, negative or mixed right now. Be specific and current.`;
+        const newsResult=await callClaude(newsPrompt);
+        setAgent('news','done',fmt_agent(newsResult));
+
+        // ── AGENTS 3 & 4: Bull and Bear (parallel) ──
+        setAgent('bull','thinking','');
+        setAgent('bear','thinking','');
+        const context=`Ticker: ${ticker}\n${priceCtx}\nTechnical read: ${techResult}\nNews/sentiment: ${newsResult}`;
+        const [bullResult, bearResult] = await Promise.all([
+            callClaude(`You are a bullish researcher arguing FOR buying ${ticker} options right now. Use the context below. Give 3 strong, specific reasons why this is a good trade. Be direct and compelling. Plain English only.\n\n${context}`),
+            callClaude(`You are a bearish researcher arguing AGAINST buying ${ticker} options right now. Use the context below. Give 3 strong, specific reasons why this trade is risky or not worth it right now. Be direct and honest. Plain English only.\n\n${context}`)
+        ]);
+        setAgent('bull','done',`<span class="bull">BULL CASE ↑</span><br><br>${fmt_agent(bullResult)}`);
+        setAgent('bear','done',`<span class="bear">BEAR CASE ↓</span><br><br>${fmt_agent(bearResult)}`);
+
+        // ── AGENT 5: Risk + Final Verdict ──
+        setAgent('risk','thinking','');
+        const finalPrompt=`You are a risk manager and final decision maker for a beginner options trader with a $500 account trading 1-3 month options.
+
+Here is the full analysis for ${ticker}:
+Technical: ${techResult}
+News: ${newsResult}
+Bull case: ${bullResult}
+Bear case: ${bearResult}
+
+Return ONLY a JSON object with these keys:
+- decision (string: "✅ BUY — Enter the Trade" or "❌ PASS — Skip This One" or "⚠️ WAIT — Watch But Don't Enter Yet")
+- summary (2-3 plain English sentences explaining the final call)
+- entry (string, e.g. "$122–$126")
+- stop (string, e.g. "$117")
+- target (string, e.g. "$138")
+- risk_note (1 sentence on what to watch out for with $500)
+
+Raw JSON only, no markdown.`;
+        const finalRaw=await callClaude(finalPrompt);
+        let verdict;
+        try{const m=finalRaw.match(/\{[\s\S]*\}/);verdict=JSON.parse(m?m[0]:finalRaw);}
+        catch(e){verdict={decision:'Analysis Complete',summary:finalRaw,entry:'See analysis',stop:'See analysis',target:'See analysis',risk_note:''};}
+
+        setAgent('risk','done',`<strong>Risk Assessment:</strong><br>${verdict.summary}<br><br><em style="color:var(--orange)">${verdict.risk_note}</em>`);
+
+        document.getElementById('verdictOutput').innerHTML=
+            verdictCard(verdict.decision, verdict.entry, verdict.stop, verdict.target, verdict.summary);
+
+    }catch(e){
+        document.getElementById('agentOutput').innerHTML=`<div class="empty-state"><div class="empty-icon">⚠️</div><div class="empty-title">Error</div><div class="empty-sub">${e.message}</div></div>`;
+    }
+    btn.disabled=false; btn.textContent='⚡ Run Full Analysis';
 }
 
 // ── TRADINGVIEW ───────────────────────────────────────────────
