@@ -579,6 +579,18 @@ async function fetchQuote(ticker){
     }catch(e){return null;}
 }
 
+// ── STRIP JSON FROM CLAUDE RESPONSES ─────────────────────────
+// Claude sometimes wraps JSON in ```json ... ``` — strip all of that
+function stripJSON(raw){
+    // Remove any markdown code fences (```json, ```JSON, ```, etc.)
+    let s = raw.replace(/```[^\n]*\n?/g, '').replace(/```/g, '').trim();
+    // Find the outermost { } or [ ] and extract just that
+    const obj = s.match(/\{[\s\S]*\}/);
+    const arr = s.match(/\[[\s\S]*\]/);
+    if(obj && arr) return obj.index < arr.index ? obj[0] : arr[0];
+    return (obj||arr||[s])[0];
+}
+
 // ── CLAUDE ────────────────────────────────────────────────────
 async function callClaude(prompt){
     const key=(typeof CLAUDE_API_KEY!=='undefined'&&CLAUDE_API_KEY!=='paste-your-key-here')?CLAUDE_API_KEY:null;
@@ -694,7 +706,7 @@ Each object needs these exact keys:
 Return raw JSON array only. No markdown. No code fences.`;
         const raw=await callClaude(prompt);
         let ideas;
-        try{const m=raw.match(/\[[\s\S]*\]/);ideas=JSON.parse(m?m[0]:raw);}
+        try{ideas=JSON.parse(stripJSON(raw));}
         catch(e){throw new Error('Could not read trade ideas — try scanning again.');}
         document.getElementById('ideasOutput').innerHTML=`<div class="ideas-grid">${ideas.map(buildCard).join('')}</div>`;
         const now=new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'});
@@ -732,9 +744,7 @@ Raw JSON only. No markdown. No code fences.`;
         const raw=await callClaude(prompt);
         let data;
         try{
-            let cleaned=raw.replace(/```[\w]*\s*/g,'').replace(/```\s*/g,'').trim();
-            const m=cleaned.match(/\{[\s\S]*\}/);
-            data=JSON.parse(m?m[0]:cleaned);
+            data=JSON.parse(stripJSON(raw));
         }catch(e){throw new Error('Could not parse discover results — try scanning again.');}
 
         const categories=[
@@ -780,7 +790,7 @@ Return ONLY a raw JSON object with these exact keys: ticker, company, current_pr
 Raw JSON only. No markdown. No code fences.`;
         const raw=await callClaude(prompt);
         let idea;
-        try{const m=raw.match(/\{[\s\S]*\}/);idea=JSON.parse(m?m[0]:raw);}
+        try{idea=JSON.parse(stripJSON(raw));}
         catch(e){throw new Error('Could not parse analysis — try again.');}
         out.innerHTML=`<div style="margin-bottom:8px;font-size:12px;color:var(--muted)">Analysis for <strong style="color:var(--text)">${ticker}</strong>:</div><div class="ideas-grid">${buildCard(idea)}</div>`;
         const now=new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'});
@@ -999,7 +1009,7 @@ Return ONLY a JSON object with these exact keys (no markdown, raw JSON only):
 }`;
         const finalRaw=await callClaude(finalPrompt);
         let verdict;
-        try{let _c=finalRaw.replace(/```[\w\s]*\n?/g,'').replace(/```/g,'').trim();const m=_c.match(/\{[\s\S]*\}/);verdict=JSON.parse(m?m[0]:_c);}
+        try{verdict=JSON.parse(stripJSON(finalRaw));}
         catch(e){
             setAgent('risk','done',`<span style="color:var(--red)">Could not parse the structured response. Raw analysis below:</span><br><br>${fmt_agent(finalRaw)}`);
             btn.disabled=false; btn.textContent='⚡ Run Full Analysis'; return;
