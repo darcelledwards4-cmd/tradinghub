@@ -7,366 +7,291 @@
     <script src="config.js"></script>
     <style>
         :root {
-            --bg-primary: #0d1117;
-            --bg-secondary: #161b22;
-            --bg-tertiary: #21262d;
+            --bg: #0d1117;
+            --bg2: #161b22;
+            --bg3: #21262d;
             --border: #30363d;
-            --text-primary: #e6edf3;
-            --text-secondary: #8b949e;
-            --accent-blue: #58a6ff;
-            --accent-green: #3fb950;
-            --accent-red: #f85149;
-            --accent-orange: #d29922;
+            --text: #e6edf3;
+            --muted: #8b949e;
+            --blue: #58a6ff;
+            --green: #3fb950;
+            --red: #f85149;
+            --orange: #d29922;
         }
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
-            background: var(--bg-primary);
-            color: var(--text-primary);
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-            height: 100vh;
-            overflow: hidden;
-            display: flex;
-            flex-direction: column;
-        }
+        * { margin:0; padding:0; box-sizing:border-box; }
+        body { background:var(--bg); color:var(--text); font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; height:100vh; display:flex; flex-direction:column; overflow:hidden; }
 
-        /* ── Header ── */
-        .header {
-            background: var(--bg-secondary);
-            border-bottom: 1px solid var(--border);
-            padding: 0 16px;
-            display: flex;
-            align-items: center;
-            height: 52px;
-            flex-shrink: 0;
-            gap: 16px;
-        }
-        .logo {
-            font-weight: 700;
-            font-size: 15px;
-            color: var(--accent-blue);
-            white-space: nowrap;
-            letter-spacing: -0.3px;
-            flex-shrink: 0;
-        }
-        .ticker-tape { flex: 1; overflow: hidden; height: 40px; }
+        /* ── HEADER ── */
+        .header { background:var(--bg2); border-bottom:1px solid var(--border); padding:0 16px; height:54px; display:flex; align-items:center; gap:12px; flex-shrink:0; }
+        .logo { font-weight:800; font-size:15px; color:var(--blue); white-space:nowrap; }
+        .tape { flex:1; overflow:hidden; height:38px; }
+        .header-right { display:flex; align-items:center; gap:14px; flex-shrink:0; }
+        .clock { font-size:13px; font-weight:600; color:var(--text); font-variant-numeric:tabular-nums; }
+        .market-pill { font-size:11px; font-weight:700; padding:3px 9px; border-radius:20px; white-space:nowrap; }
+        .market-open { background:rgba(63,185,80,0.15); color:var(--green); border:1px solid rgba(63,185,80,0.3); }
+        .market-closed { background:rgba(248,81,73,0.1); color:var(--red); border:1px solid rgba(248,81,73,0.2); }
+        .last-updated { font-size:11px; color:var(--muted); white-space:nowrap; }
 
-        /* ── Nav ── */
-        .nav {
-            background: var(--bg-secondary);
-            border-bottom: 1px solid var(--border);
-            display: flex;
-            padding: 0 16px;
-            flex-shrink: 0;
-            gap: 2px;
-        }
-        .nav-tab {
-            padding: 10px 14px;
-            font-size: 13px;
-            color: var(--text-secondary);
-            cursor: pointer;
-            border-bottom: 2px solid transparent;
-            transition: all 0.15s;
-            white-space: nowrap;
-            user-select: none;
-        }
-        .nav-tab:hover { color: var(--text-primary); }
-        .nav-tab.active { color: var(--accent-blue); border-bottom-color: var(--accent-blue); }
+        /* ── NAV ── */
+        .nav { background:var(--bg2); border-bottom:1px solid var(--border); display:flex; padding:0 16px; flex-shrink:0; }
+        .tab-btn { padding:10px 14px; font-size:13px; color:var(--muted); cursor:pointer; border-bottom:2px solid transparent; transition:all .15s; white-space:nowrap; user-select:none; }
+        .tab-btn:hover { color:var(--text); }
+        .tab-btn.active { color:var(--blue); border-bottom-color:var(--blue); }
 
-        /* ── Content ── */
-        .content { flex: 1; overflow: hidden; position: relative; }
-        .tab-panel { display: none; height: 100%; flex-direction: column; overflow: hidden; }
-        .tab-panel.active { display: flex; }
+        /* ── CONTENT ── */
+        .content { flex:1; overflow:hidden; }
+        .tab { display:none; height:100%; flex-direction:column; }
+        .tab.active { display:flex; }
+        .scroll { overflow-y:auto; flex:1; }
+        ::-webkit-scrollbar { width:5px; } ::-webkit-scrollbar-track { background:transparent; } ::-webkit-scrollbar-thumb { background:var(--border); border-radius:3px; }
 
-        /* ── Dashboard ── */
-        .dashboard-grid {
-            display: grid;
-            grid-template-columns: 1fr 360px;
-            grid-template-rows: 60% 40%;
-            gap: 1px;
-            background: var(--border);
-            height: 100%;
-        }
-        .panel {
-            background: var(--bg-primary);
-            overflow: hidden;
-            display: flex;
-            flex-direction: column;
-        }
-        .panel-header {
-            background: var(--bg-secondary);
-            padding: 8px 14px;
-            font-size: 11px;
-            font-weight: 600;
-            color: var(--text-secondary);
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-            border-bottom: 1px solid var(--border);
-            flex-shrink: 0;
-        }
-        .panel-body { flex: 1; overflow: hidden; }
+        /* ── TODAY'S IDEAS ── */
+        .ideas-wrap { padding:20px; max-width:1200px; margin:0 auto; }
+        .search-row { display:flex; gap:10px; margin-bottom:24px; }
+        .search-input { flex:1; background:var(--bg2); border:1px solid var(--border); border-radius:8px; color:var(--text); padding:11px 16px; font-size:14px; font-family:inherit; outline:none; transition:border-color .15s; }
+        .search-input:focus { border-color:var(--blue); }
+        .search-input::placeholder { color:var(--muted); }
+        .search-btn { background:var(--blue); color:#000; border:none; border-radius:8px; padding:11px 20px; font-size:13px; font-weight:700; cursor:pointer; white-space:nowrap; transition:opacity .15s; }
+        .search-btn:hover { opacity:.85; }
+        .search-btn:disabled { opacity:.5; cursor:not-allowed; }
+        .scan-row { display:flex; align-items:center; justify-content:space-between; margin-bottom:16px; }
+        .scan-title { font-size:16px; font-weight:700; }
+        .scan-btn { background:var(--bg3); border:1px solid var(--border); color:var(--text); border-radius:7px; padding:8px 16px; font-size:12px; font-weight:600; cursor:pointer; transition:all .15s; display:flex; align-items:center; gap:6px; }
+        .scan-btn:hover { border-color:var(--blue); color:var(--blue); }
+        .scan-btn:disabled { opacity:.5; cursor:not-allowed; }
+        .last-scan { font-size:11px; color:var(--muted); margin-top:3px; }
+        .loading-state { text-align:center; padding:50px 20px; }
+        .spinner { width:32px; height:32px; border:3px solid var(--border); border-top-color:var(--blue); border-radius:50%; animation:spin .7s linear infinite; margin:0 auto 14px; }
+        @keyframes spin { to { transform:rotate(360deg); } }
+        .loading-text { color:var(--muted); font-size:13px; }
+        .empty-state { text-align:center; padding:50px 20px; }
+        .empty-icon { font-size:36px; margin-bottom:12px; }
+        .empty-title { font-size:15px; font-weight:600; margin-bottom:6px; }
+        .empty-sub { font-size:13px; color:var(--muted); line-height:1.6; }
+        .ideas-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(340px,1fr)); gap:16px; }
 
-        /* ── Charts Tab ── */
-        .charts-container { display: flex; flex-direction: column; height: 100%; }
-        .ticker-selector {
-            display: flex;
-            gap: 6px;
-            padding: 10px 14px;
-            background: var(--bg-secondary);
-            border-bottom: 1px solid var(--border);
-            flex-wrap: wrap;
-            align-items: center;
-            flex-shrink: 0;
-        }
-        .ticker-label { font-size: 11px; color: var(--text-secondary); font-weight: 600; letter-spacing: 0.5px; margin-right: 4px; }
-        .ticker-btn {
-            padding: 4px 12px;
-            border-radius: 5px;
-            border: 1px solid var(--border);
-            background: var(--bg-tertiary);
-            color: var(--text-secondary);
-            font-size: 12px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: all 0.15s;
-        }
-        .ticker-btn:hover { border-color: var(--accent-blue); color: var(--text-primary); }
-        .ticker-btn.active { background: var(--accent-blue); color: #000; border-color: var(--accent-blue); }
-        .chart-area { flex: 1; }
+        /* ── IDEA CARD ── */
+        .idea-card { background:var(--bg2); border:1px solid var(--border); border-radius:10px; overflow:hidden; transition:border-color .15s; }
+        .idea-card:hover { border-color:rgba(88,166,255,.4); }
+        .idea-card.bullish { border-top:3px solid var(--green); }
+        .idea-card.bearish { border-top:3px solid var(--red); }
+        .idea-card.neutral { border-top:3px solid var(--orange); }
+        .card-head { padding:14px 16px 10px; display:flex; justify-content:space-between; align-items:flex-start; }
+        .card-ticker { font-size:20px; font-weight:800; letter-spacing:-.5px; }
+        .card-company { font-size:11px; color:var(--muted); margin-top:2px; }
+        .card-price-row { text-align:right; }
+        .card-price { font-size:16px; font-weight:700; }
+        .card-change { font-size:12px; font-weight:600; margin-top:2px; }
+        .up { color:var(--green); } .down { color:var(--red); }
+        .card-summary { padding:0 16px 12px; font-size:13px; color:var(--muted); line-height:1.6; border-bottom:1px solid var(--border); }
+        .card-levels { padding:14px 16px; display:flex; flex-direction:column; gap:10px; border-bottom:1px solid var(--border); }
+        .level-row { display:flex; align-items:center; justify-content:space-between; }
+        .level-left { display:flex; align-items:center; gap:8px; }
+        .level-icon { font-size:14px; width:22px; text-align:center; }
+        .level-lbl { font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.4px; color:var(--muted); }
+        .level-hint { font-size:10px; color:var(--muted); opacity:.7; margin-top:1px; }
+        .level-val { font-size:14px; font-weight:700; }
+        .ev { color:var(--blue); } .sv { color:var(--red); } .tv { color:var(--green); }
+        .card-option { padding:12px 16px; background:rgba(88,166,255,.04); border-bottom:1px solid var(--border); display:flex; align-items:center; gap:10px; }
+        .opt-badge { padding:3px 10px; border-radius:4px; font-size:11px; font-weight:800; letter-spacing:.5px; }
+        .opt-call { background:rgba(63,185,80,.15); color:var(--green); }
+        .opt-put { background:rgba(248,81,73,.15); color:var(--red); }
+        .opt-detail { font-size:12px; color:var(--muted); }
+        .card-account { padding:12px 16px; border-bottom:1px solid var(--border); }
+        .acct-lbl { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.4px; color:var(--muted); margin-bottom:4px; }
+        .acct-detail { font-size:13px; color:var(--text); line-height:1.5; }
+        .card-footer { padding:10px 16px; display:flex; justify-content:space-between; align-items:center; }
+        .conf { font-size:11px; font-weight:700; padding:3px 9px; border-radius:20px; }
+        .ch { background:rgba(63,185,80,.12); color:var(--green); }
+        .cm { background:rgba(210,153,34,.12); color:var(--orange); }
+        .cl { background:rgba(139,148,158,.12); color:var(--muted); }
+        .rr { font-size:12px; font-weight:600; color:var(--muted); }
 
-        /* ── News/Flow Grid ── */
-        .two-col-grid {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 1px;
-            background: var(--border);
-            height: 100%;
-        }
+        /* ── CHARTS ── */
+        .charts-wrap { display:flex; flex-direction:column; height:100%; }
+        .chart-controls { background:var(--bg2); border-bottom:1px solid var(--border); padding:10px 14px; display:flex; gap:8px; flex-wrap:wrap; align-items:center; flex-shrink:0; }
+        .chart-search { background:var(--bg3); border:1px solid var(--border); border-radius:6px; color:var(--text); padding:6px 12px; font-size:13px; font-family:inherit; outline:none; width:130px; transition:border-color .15s; }
+        .chart-search:focus { border-color:var(--blue); }
+        .chart-go { background:var(--blue); color:#000; border:none; border-radius:6px; padding:6px 12px; font-size:12px; font-weight:700; cursor:pointer; }
+        .divider { width:1px; height:20px; background:var(--border); }
+        .tick-btn { padding:4px 11px; border-radius:5px; border:1px solid var(--border); background:var(--bg3); color:var(--muted); font-size:12px; font-weight:600; cursor:pointer; transition:all .15s; }
+        .tick-btn:hover { border-color:var(--blue); color:var(--text); }
+        .tick-btn.active { background:var(--blue); color:#000; border-color:var(--blue); }
+        .chart-main { flex:1; }
 
-        /* ── Sentiment Tab ── */
-        .sentiment-scroll { overflow-y: auto; padding: 16px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; align-content: start; }
-        .s-card { background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
-        .s-card-header {
-            padding: 10px 14px;
-            background: var(--bg-tertiary);
-            border-bottom: 1px solid var(--border);
-            font-size: 12px;
-            font-weight: 600;
-        }
-        .s-card-body { padding: 12px; }
-        .s-link {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 8px 10px;
-            background: var(--bg-tertiary);
-            border-radius: 5px;
-            margin-bottom: 6px;
-            text-decoration: none;
-            color: var(--text-primary);
-            font-size: 12px;
-            border: 1px solid var(--border);
-            transition: all 0.15s;
-        }
-        .s-link:hover { border-color: var(--accent-blue); color: var(--accent-blue); }
-        .s-link:last-child { margin-bottom: 0; }
-        .tip { margin-top: 10px; padding: 9px 11px; border-radius: 5px; font-size: 11px; line-height: 1.6; }
-        .tip-blue { background: rgba(88,166,255,0.08); border: 1px solid rgba(88,166,255,0.2); color: #58a6ff; }
-        .tip-orange { background: rgba(210,153,34,0.08); border: 1px solid rgba(210,153,34,0.2); color: #d29922; }
-        .tip-green { background: rgba(63,185,80,0.08); border: 1px solid rgba(63,185,80,0.2); color: #3fb950; }
-        .s-desc { font-size: 11px; color: var(--text-secondary); margin-bottom: 10px; }
+        /* ── NEWS ── */
+        .two-col { display:grid; grid-template-columns:1fr 1fr; gap:1px; background:var(--border); height:100%; }
+        .panel { background:var(--bg); display:flex; flex-direction:column; overflow:hidden; }
+        .panel-head { background:var(--bg2); padding:8px 14px; font-size:11px; font-weight:700; color:var(--muted); text-transform:uppercase; letter-spacing:.5px; border-bottom:1px solid var(--border); flex-shrink:0; }
+        .panel-body { flex:1; overflow:hidden; }
+        .panel-scroll { flex:1; overflow-y:auto; padding:14px; }
+        .flow-link { display:flex; align-items:center; justify-content:space-between; padding:9px 11px; background:var(--bg3); border-radius:6px; margin-bottom:7px; text-decoration:none; color:var(--text); font-size:12px; border:1px solid var(--border); transition:all .15s; }
+        .flow-link:hover { border-color:var(--blue); color:var(--blue); }
+        .tip { padding:10px 12px; border-radius:6px; font-size:11px; line-height:1.6; margin-top:12px; }
+        .tip-blue { background:rgba(88,166,255,.07); border:1px solid rgba(88,166,255,.2); color:var(--blue); }
+        .tip-orange { background:rgba(210,153,34,.07); border:1px solid rgba(210,153,34,.2); color:var(--orange); }
+        .tip-green { background:rgba(63,185,80,.07); border:1px solid rgba(63,185,80,.2); color:var(--green); }
 
-        /* ── AI Analysis ── */
-        .ai-wrap { overflow-y: auto; flex: 1; }
-        .ai-container { max-width: 860px; margin: 0 auto; padding: 20px; display: flex; flex-direction: column; gap: 14px; }
-        .ai-title { font-size: 17px; font-weight: 600; }
-        .ai-subtitle { font-size: 12px; color: var(--text-secondary); margin-top: 3px; }
-        .setup-form { background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 8px; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
-        .form-row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
-        .form-group { display: flex; flex-direction: column; gap: 4px; }
-        .form-group label { font-size: 10px; font-weight: 700; text-transform: uppercase; color: var(--text-secondary); letter-spacing: 0.5px; }
-        .form-group input, .form-group select, .form-group textarea {
-            background: var(--bg-tertiary);
-            border: 1px solid var(--border);
-            border-radius: 5px;
-            color: var(--text-primary);
-            padding: 7px 10px;
-            font-size: 13px;
-            font-family: inherit;
-            outline: none;
-            transition: border-color 0.15s;
-        }
-        .form-group input:focus, .form-group select:focus, .form-group textarea:focus { border-color: var(--accent-blue); }
-        .form-group select option { background: var(--bg-tertiary); }
-        .form-group textarea { resize: vertical; min-height: 75px; }
-        .analyze-btn {
-            background: var(--accent-blue);
-            color: #000;
-            border: none;
-            border-radius: 6px;
-            padding: 9px 20px;
-            font-size: 13px;
-            font-weight: 700;
-            cursor: pointer;
-            align-self: flex-start;
-            transition: opacity 0.15s;
-        }
-        .analyze-btn:hover { opacity: 0.85; }
-        .analyze-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-        .ai-response { background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 8px; padding: 18px; min-height: 180px; }
-        .ai-placeholder { color: var(--text-secondary); font-size: 13px; text-align: center; padding: 30px 0; }
-        .ai-content { font-size: 13px; line-height: 1.75; }
-        .ai-content h3 { color: var(--accent-blue); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; margin: 16px 0 5px; }
-        .ai-content h3:first-child { margin-top: 0; }
-        .ai-content p { margin-bottom: 6px; }
-        .ai-content strong { color: var(--text-primary); }
-        .thinking { color: var(--text-secondary); font-size: 13px; }
+        /* ── ACTIVITY ── */
+        .activity-scroll { overflow-y:auto; flex:1; padding:16px; display:grid; grid-template-columns:repeat(3,1fr); gap:12px; align-content:start; }
+        .s-card { background:var(--bg2); border:1px solid var(--border); border-radius:8px; overflow:hidden; }
+        .s-head { padding:10px 14px; background:var(--bg3); border-bottom:1px solid var(--border); font-size:12px; font-weight:700; }
+        .s-body { padding:12px; }
+        .s-desc { font-size:11px; color:var(--muted); margin-bottom:10px; line-height:1.5; }
+        .s-link { display:flex; align-items:center; justify-content:space-between; padding:8px 10px; background:var(--bg3); border-radius:5px; margin-bottom:6px; text-decoration:none; color:var(--text); font-size:12px; border:1px solid var(--border); transition:all .15s; }
+        .s-link:hover { border-color:var(--blue); color:var(--blue); }
+        .s-link:last-child { margin-bottom:0; }
 
-        /* ── Journal ── */
-        .journal-scroll { overflow-y: auto; flex: 1; }
-        .journal-inner { padding: 20px; max-width: 1100px; margin: 0 auto; }
-        .journal-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 18px; }
-        .journal-title { font-size: 17px; font-weight: 600; }
-        .add-btn { background: var(--accent-green); color: #000; border: none; border-radius: 6px; padding: 8px 16px; font-size: 13px; font-weight: 700; cursor: pointer; transition: opacity 0.15s; }
-        .add-btn:hover { opacity: 0.85; }
-        .stats-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 18px; }
-        .stat-card { background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; }
-        .stat-label { font-size: 10px; color: var(--text-secondary); font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
-        .stat-value { font-size: 22px; font-weight: 700; }
-        .positive { color: var(--accent-green); }
-        .negative { color: var(--accent-red); }
-        .neutral { color: var(--accent-blue); }
-        .trade-table-wrap { background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
-        .trade-table { width: 100%; border-collapse: collapse; font-size: 12px; }
-        .trade-table thead th { padding: 9px 12px; text-align: left; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-secondary); background: var(--bg-tertiary); border-bottom: 1px solid var(--border); }
-        .trade-table tbody td { padding: 11px 12px; border-bottom: 1px solid var(--border); }
-        .trade-table tbody tr:last-child td { border-bottom: none; }
-        .trade-table tbody tr:hover { background: var(--bg-tertiary); }
-        .badge { display: inline-block; padding: 2px 7px; border-radius: 4px; font-size: 10px; font-weight: 700; letter-spacing: 0.3px; }
-        .badge-call { background: rgba(63,185,80,0.15); color: var(--accent-green); }
-        .badge-put { background: rgba(248,81,73,0.15); color: var(--accent-red); }
-        .badge-open { background: rgba(88,166,255,0.15); color: var(--accent-blue); }
-        .badge-closed { background: rgba(139,148,158,0.12); color: var(--text-secondary); }
-        .del-btn { background: none; border: none; color: var(--text-secondary); cursor: pointer; font-size: 15px; padding: 2px 5px; border-radius: 3px; transition: all 0.15s; }
-        .del-btn:hover { background: rgba(248,81,73,0.15); color: var(--accent-red); }
-        .empty-row td { text-align: center; padding: 36px; color: var(--text-secondary); font-size: 13px; }
+        /* ── JOURNAL ── */
+        .journal-scroll { overflow-y:auto; flex:1; }
+        .journal-inner { padding:20px; max-width:1100px; margin:0 auto; }
+        .j-top { display:flex; justify-content:space-between; align-items:center; margin-bottom:18px; }
+        .j-title { font-size:17px; font-weight:700; }
+        .j-add { background:var(--green); color:#000; border:none; border-radius:6px; padding:8px 16px; font-size:13px; font-weight:700; cursor:pointer; }
+        .stats { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin-bottom:18px; }
+        .stat { background:var(--bg2); border:1px solid var(--border); border-radius:8px; padding:12px 14px; }
+        .stat-lbl { font-size:10px; color:var(--muted); font-weight:700; text-transform:uppercase; letter-spacing:.5px; margin-bottom:4px; }
+        .stat-val { font-size:22px; font-weight:800; }
+        .pos { color:var(--green); } .neg { color:var(--red); } .neu { color:var(--blue); }
+        .tbl-wrap { background:var(--bg2); border:1px solid var(--border); border-radius:8px; overflow:hidden; }
+        .tbl { width:100%; border-collapse:collapse; font-size:12px; }
+        .tbl thead th { padding:9px 12px; text-align:left; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.5px; color:var(--muted); background:var(--bg3); border-bottom:1px solid var(--border); }
+        .tbl tbody td { padding:10px 12px; border-bottom:1px solid var(--border); }
+        .tbl tbody tr:last-child td { border-bottom:none; }
+        .tbl tbody tr:hover { background:var(--bg3); }
+        .badge { display:inline-block; padding:2px 7px; border-radius:4px; font-size:10px; font-weight:700; }
+        .bc { background:rgba(63,185,80,.15); color:var(--green); }
+        .bp { background:rgba(248,81,73,.15); color:var(--red); }
+        .bo { background:rgba(88,166,255,.15); color:var(--blue); }
+        .bx { background:rgba(139,148,158,.1); color:var(--muted); }
+        .del { background:none; border:none; color:var(--muted); cursor:pointer; font-size:15px; padding:2px 5px; border-radius:3px; transition:all .15s; }
+        .del:hover { background:rgba(248,81,73,.15); color:var(--red); }
+        .empty-row td { text-align:center; padding:36px; color:var(--muted); font-size:13px; }
 
-        /* ── Modal ── */
-        .modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.75); z-index: 200; align-items: center; justify-content: center; }
-        .modal-overlay.open { display: flex; }
-        .modal { background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 10px; padding: 22px; width: 520px; max-width: 92vw; }
-        .modal-title { font-size: 15px; font-weight: 600; margin-bottom: 16px; }
-        .modal-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 11px; }
-        .modal-grid .span2 { grid-column: 1 / -1; }
-        .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
-        .btn-cancel { background: var(--bg-tertiary); border: 1px solid var(--border); color: var(--text-primary); border-radius: 6px; padding: 7px 14px; font-size: 13px; cursor: pointer; }
-        .btn-save { background: var(--accent-blue); border: none; color: #000; border-radius: 6px; padding: 7px 14px; font-size: 13px; font-weight: 700; cursor: pointer; }
-
-        /* ── Flow Resources ── */
-        .flow-scroll { overflow-y: auto; padding: 16px; }
-        .flow-desc { font-size: 12px; color: var(--text-secondary); margin-bottom: 14px; line-height: 1.6; }
-        .flow-link { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px; background: var(--bg-tertiary); border-radius: 6px; margin-bottom: 8px; text-decoration: none; color: var(--text-primary); font-size: 13px; border: 1px solid var(--border); transition: all 0.15s; }
-        .flow-link:hover { border-color: var(--accent-blue); color: var(--accent-blue); }
-
-        /* ── Scrollbar ── */
-        ::-webkit-scrollbar { width: 5px; height: 5px; }
-        ::-webkit-scrollbar-track { background: transparent; }
-        ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+        /* ── MODAL ── */
+        .overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,.75); z-index:200; align-items:center; justify-content:center; }
+        .overlay.open { display:flex; }
+        .modal { background:var(--bg2); border:1px solid var(--border); border-radius:10px; padding:22px; width:520px; max-width:92vw; }
+        .modal-title { font-size:15px; font-weight:700; margin-bottom:16px; }
+        .mgrid { display:grid; grid-template-columns:1fr 1fr; gap:11px; }
+        .span2 { grid-column:1/-1; }
+        .fg { display:flex; flex-direction:column; gap:4px; }
+        .fg label { font-size:10px; font-weight:700; text-transform:uppercase; color:var(--muted); letter-spacing:.5px; }
+        .fg input,.fg select,.fg textarea { background:var(--bg3); border:1px solid var(--border); border-radius:5px; color:var(--text); padding:7px 10px; font-size:13px; font-family:inherit; outline:none; transition:border-color .15s; }
+        .fg input:focus,.fg select:focus,.fg textarea:focus { border-color:var(--blue); }
+        .fg textarea { resize:vertical; min-height:65px; }
+        .mactions { display:flex; justify-content:flex-end; gap:8px; margin-top:16px; }
+        .btn-cancel { background:var(--bg3); border:1px solid var(--border); color:var(--text); border-radius:6px; padding:7px 14px; font-size:13px; cursor:pointer; }
+        .btn-save { background:var(--blue); border:none; color:#000; border-radius:6px; padding:7px 14px; font-size:13px; font-weight:700; cursor:pointer; }
+        .disclaimer { background:rgba(210,153,34,.05); border-top:1px solid rgba(210,153,34,.15); padding:5px 16px; font-size:10px; color:var(--orange); text-align:center; flex-shrink:0; }
     </style>
 </head>
 <body>
 
-<!-- Header -->
+<!-- HEADER -->
 <div class="header">
     <div class="logo">⚡ Trading Hub</div>
-    <div class="ticker-tape" id="tickerTape"></div>
+    <div class="tape" id="tape"></div>
+    <div class="header-right">
+        <div class="last-updated" id="lastUpdated">Not yet updated</div>
+        <div class="market-pill market-closed" id="marketPill">Checking...</div>
+        <div class="clock" id="clock">--:--:-- --</div>
+    </div>
 </div>
 
-<!-- Nav -->
+<!-- NAV -->
 <div class="nav">
-    <div class="nav-tab active"  onclick="switchTab('dashboard')">Dashboard</div>
-    <div class="nav-tab"         onclick="switchTab('charts')">Charts</div>
-    <div class="nav-tab"         onclick="switchTab('news')">News &amp; Flow</div>
-    <div class="nav-tab"         onclick="switchTab('sentiment')">Trader Activity</div>
-    <div class="nav-tab"         onclick="switchTab('analysis')">AI Analysis</div>
-    <div class="nav-tab"         onclick="switchTab('journal')">Journal</div>
+    <div class="tab-btn active" onclick="showTab('ideas')">📊 Today's Ideas</div>
+    <div class="tab-btn" onclick="showTab('charts')">📈 Charts</div>
+    <div class="tab-btn" onclick="showTab('news')">📰 News &amp; Flow</div>
+    <div class="tab-btn" onclick="showTab('activity')">👥 Trader Activity</div>
+    <div class="tab-btn" onclick="showTab('journal')">📒 Journal</div>
 </div>
 
-<!-- Content -->
 <div class="content">
 
-    <!-- ── DASHBOARD ── -->
-    <div class="tab-panel active" id="tab-dashboard">
-        <div class="dashboard-grid">
-            <div class="panel" style="grid-row:1/3">
-                <div class="panel-header">Live Chart — NVDA</div>
-                <div class="panel-body" id="dashChart"></div>
-            </div>
-            <div class="panel">
-                <div class="panel-header">Market Overview</div>
-                <div class="panel-body" id="dashMarket"></div>
-            </div>
-            <div class="panel">
-                <div class="panel-header">Latest News</div>
-                <div class="panel-body" id="dashNews"></div>
-            </div>
-        </div>
-    </div>
-
-    <!-- ── CHARTS ── -->
-    <div class="tab-panel" id="tab-charts">
-        <div class="charts-container">
-            <div class="ticker-selector">
-                <span class="ticker-label">Ticker:</span>
-                <button class="ticker-btn active" onclick="switchTicker(this,'NVDA')">NVDA</button>
-                <button class="ticker-btn" onclick="switchTicker(this,'SPY')">SPY</button>
-                <button class="ticker-btn" onclick="switchTicker(this,'QQQ')">QQQ</button>
-                <button class="ticker-btn" onclick="switchTicker(this,'AAPL')">AAPL</button>
-                <button class="ticker-btn" onclick="switchTicker(this,'MSFT')">MSFT</button>
-                <button class="ticker-btn" onclick="switchTicker(this,'META')">META</button>
-                <button class="ticker-btn" onclick="switchTicker(this,'AMD')">AMD</button>
-                <button class="ticker-btn" onclick="switchTicker(this,'GOOGL')">GOOGL</button>
-                <button class="ticker-btn" onclick="switchTicker(this,'ARM')">ARM</button>
-                <button class="ticker-btn" onclick="switchTicker(this,'PLTR')">PLTR</button>
-            </div>
-            <div class="chart-area" id="mainChart"></div>
-        </div>
-    </div>
-
-    <!-- ── NEWS & FLOW ── -->
-    <div class="tab-panel" id="tab-news">
-        <div class="two-col-grid">
-            <div class="panel">
-                <div class="panel-header">Financial News Feed</div>
-                <div class="panel-body" id="newsPanel"></div>
-            </div>
-            <div class="panel">
-                <div class="panel-header">Options Flow Resources</div>
-                <div class="panel-body flow-scroll">
-                    <p class="flow-desc">Live options flow shows where big money is moving. These are the best sources for 1–3 month swing setups.</p>
-                    <a href="https://unusualwhales.com/flow" target="_blank" class="flow-link"><span>🐳 Unusual Whales — Live Flow</span><span>→</span></a>
-                    <a href="https://unusualwhales.com/flow?ticker=NVDA" target="_blank" class="flow-link"><span>📊 Unusual Whales — NVDA</span><span>→</span></a>
-                    <a href="https://unusualwhales.com/flow?ticker=SPY" target="_blank" class="flow-link"><span>📊 Unusual Whales — SPY</span><span>→</span></a>
-                    <a href="https://marketchameleon.com/volReports/OptionsFlowAlerts/" target="_blank" class="flow-link"><span>🦎 Market Chameleon — Flow Alerts</span><span>→</span></a>
-                    <a href="https://finviz.com/screener.ashx?v=111&s=ta_unusualvolume&f=sec_technology" target="_blank" class="flow-link"><span>🔥 Finviz — Unusual Volume (Tech)</span><span>→</span></a>
-                    <a href="https://finance.yahoo.com/most-active/" target="_blank" class="flow-link"><span>📈 Yahoo Finance — Most Active</span><span>→</span></a>
-                    <a href="https://www.cboe.com/us/options/market_statistics/daily/" target="_blank" class="flow-link"><span>📋 CBOE — Daily Options Stats</span><span>→</span></a>
-                    <a href="https://www.barchart.com/options/unusual-activity/stocks" target="_blank" class="flow-link"><span>📉 Barchart — Unusual Options Activity</span><span>→</span></a>
-                    <div class="tip tip-blue" style="margin-top:14px">
-                        <strong>💡 Upgrade tip:</strong> Unusual Whales paid plan (~$50/mo) unlocks API access. When you're ready, I can pipe live flow data directly into this dashboard automatically.
+    <!-- TODAY'S IDEAS -->
+    <div class="tab active" id="tab-ideas">
+        <div class="scroll">
+            <div class="ideas-wrap">
+                <div class="search-row">
+                    <input class="search-input" id="searchTicker" placeholder="🔍  Search any ticker — e.g. TSLA, AMZN, SMCI..." onkeydown="if(event.key==='Enter')analyzeSingle()" />
+                    <button class="search-btn" onclick="analyzeSingle()" id="searchBtn">Analyze This Stock →</button>
+                </div>
+                <div id="singleResult" style="margin-bottom:20px;display:none;"></div>
+                <div class="scan-row">
+                    <div>
+                        <div class="scan-title">Today's Watchlist Ideas</div>
+                        <div class="last-scan" id="lastScan">Hit "Scan" to generate today's trade ideas</div>
+                    </div>
+                    <button class="scan-btn" onclick="scanWatchlist()" id="scanBtn">
+                        <span>⚡</span><span>Scan My Watchlist</span>
+                    </button>
+                </div>
+                <div id="ideasOutput">
+                    <div class="empty-state">
+                        <div class="empty-icon">📡</div>
+                        <div class="empty-title">Ready to scan</div>
+                        <div class="empty-sub">Click "Scan My Watchlist" above and I'll pull live prices<br>and surface the best setups for you right now.</div>
                     </div>
                 </div>
             </div>
         </div>
     </div>
 
-    <!-- ── TRADER ACTIVITY ── -->
-    <div class="tab-panel" id="tab-sentiment">
-        <div class="sentiment-scroll">
+    <!-- CHARTS -->
+    <div class="tab" id="tab-charts">
+        <div class="charts-wrap">
+            <div class="chart-controls">
+                <input class="chart-search" id="chartSearch" placeholder="Type any ticker..." onkeydown="if(event.key==='Enter')goTicker()" />
+                <button class="chart-go" onclick="goTicker()">Go</button>
+                <div class="divider"></div>
+                <button class="tick-btn active" onclick="switchTick(this,'NVDA')">NVDA</button>
+                <button class="tick-btn" onclick="switchTick(this,'SPY')">SPY</button>
+                <button class="tick-btn" onclick="switchTick(this,'QQQ')">QQQ</button>
+                <button class="tick-btn" onclick="switchTick(this,'AAPL')">AAPL</button>
+                <button class="tick-btn" onclick="switchTick(this,'MSFT')">MSFT</button>
+                <button class="tick-btn" onclick="switchTick(this,'META')">META</button>
+                <button class="tick-btn" onclick="switchTick(this,'AMD')">AMD</button>
+                <button class="tick-btn" onclick="switchTick(this,'GOOGL')">GOOGL</button>
+                <button class="tick-btn" onclick="switchTick(this,'ARM')">ARM</button>
+                <button class="tick-btn" onclick="switchTick(this,'PLTR')">PLTR</button>
+            </div>
+            <div class="chart-main" id="chartMain"></div>
+        </div>
+    </div>
 
+    <!-- NEWS & FLOW -->
+    <div class="tab" id="tab-news">
+        <div class="two-col">
+            <div class="panel">
+                <div class="panel-head">Live Financial News</div>
+                <div class="panel-body" id="newsWidget"></div>
+            </div>
+            <div class="panel">
+                <div class="panel-head">Options Flow — Where Big Money Is Moving</div>
+                <div class="panel-scroll">
+                    <p style="font-size:12px;color:var(--muted);margin-bottom:12px;line-height:1.6">These sites show large options orders in real time. When a big fund buys 500 NVDA call contracts, it shows up here. Always worth checking before you enter a trade.</p>
+                    <a href="https://unusualwhales.com/flow" target="_blank" class="flow-link"><span>🐳 Unusual Whales — Live Options Flow</span><span>→</span></a>
+                    <a href="https://unusualwhales.com/flow?ticker=NVDA" target="_blank" class="flow-link"><span>📊 NVDA Flow</span><span>→</span></a>
+                    <a href="https://unusualwhales.com/flow?ticker=SPY" target="_blank" class="flow-link"><span>📊 SPY Flow</span><span>→</span></a>
+                    <a href="https://marketchameleon.com/volReports/OptionsFlowAlerts/" target="_blank" class="flow-link"><span>🦎 Market Chameleon — Flow Alerts</span><span>→</span></a>
+                    <a href="https://www.barchart.com/options/unusual-activity/stocks" target="_blank" class="flow-link"><span>📉 Barchart — Unusual Options Activity</span><span>→</span></a>
+                    <a href="https://finviz.com/screener.ashx?v=111&s=ta_unusualvolume&f=sec_technology" target="_blank" class="flow-link"><span>🔥 Finviz — Unusual Volume (Tech)</span><span>→</span></a>
+                    <a href="https://unusualwhales.com/politicians" target="_blank" class="flow-link"><span>🏛️ Congress Trades</span><span>→</span></a>
+                    <div class="tip tip-blue"><strong>What to look for:</strong> Large call purchases on your watchlist = bullish signal. Large put purchases = bearish. If big money buys calls on NVDA, pay attention.</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- TRADER ACTIVITY -->
+    <div class="tab" id="tab-activity">
+        <div class="activity-scroll">
             <div class="s-card">
-                <div class="s-card-header">📱 Stocktwits — Watchlist</div>
-                <div class="s-card-body">
-                    <p class="s-desc">Real-time retail trader commentary on your tickers</p>
+                <div class="s-head">📱 Stocktwits — Live Trader Sentiment</div>
+                <div class="s-body">
+                    <p class="s-desc">Real-time posts from traders on your tickers</p>
                     <a href="https://stocktwits.com/symbol/NVDA" target="_blank" class="s-link"><span>NVDA</span><span>→</span></a>
                     <a href="https://stocktwits.com/symbol/SPY" target="_blank" class="s-link"><span>SPY</span><span>→</span></a>
                     <a href="https://stocktwits.com/symbol/QQQ" target="_blank" class="s-link"><span>QQQ</span><span>→</span></a>
@@ -377,113 +302,62 @@
                     <a href="https://stocktwits.com/symbol/PLTR" target="_blank" class="s-link"><span>PLTR</span><span>→</span></a>
                 </div>
             </div>
-
             <div class="s-card">
-                <div class="s-card-header">🤖 Reddit Trading Communities</div>
-                <div class="s-card-body">
-                    <p class="s-desc">Where retail traders discuss setups and plays</p>
+                <div class="s-head">🐦 Active Traders on X</div>
+                <div class="s-body">
+                    <p class="s-desc">Follow these for live trade ideas and market takes</p>
+                    <a href="https://twitter.com/unusual_whales" target="_blank" class="s-link"><span>@unusual_whales</span><span>→</span></a>
+                    <a href="https://twitter.com/DeItaone" target="_blank" class="s-link"><span>@DeItaone — Breaking News</span><span>→</span></a>
+                    <a href="https://twitter.com/MarketWatch" target="_blank" class="s-link"><span>@MarketWatch</span><span>→</span></a>
+                    <a href="https://twitter.com/search?q=%24NVDA&f=live" target="_blank" class="s-link"><span>$NVDA Live Feed</span><span>→</span></a>
+                    <a href="https://twitter.com/search?q=%24SPY+options&f=live" target="_blank" class="s-link"><span>$SPY Options Feed</span><span>→</span></a>
+                    <div class="tip tip-green">💡 Best used as a quick check before entering a trade to see if anything unusual is happening.</div>
+                </div>
+            </div>
+            <div class="s-card">
+                <div class="s-head">🤖 Reddit Trading Communities</div>
+                <div class="s-body">
+                    <p class="s-desc">Retail trader discussion and setups</p>
                     <a href="https://reddit.com/r/options" target="_blank" class="s-link"><span>r/options</span><span>→</span></a>
                     <a href="https://reddit.com/r/wallstreetbets" target="_blank" class="s-link"><span>r/wallstreetbets</span><span>→</span></a>
                     <a href="https://reddit.com/r/stocks" target="_blank" class="s-link"><span>r/stocks</span><span>→</span></a>
                     <a href="https://reddit.com/r/investing" target="_blank" class="s-link"><span>r/investing</span><span>→</span></a>
-                    <a href="https://reddit.com/r/SecurityAnalysis" target="_blank" class="s-link"><span>r/SecurityAnalysis</span><span>→</span></a>
-                    <div class="tip tip-orange">⚠️ Use WSB as a contrarian signal — peak euphoria often = near a top. Be skeptical of meme hype.</div>
+                    <div class="tip tip-orange">⚠️ When everyone on WSB is hyped, it's often already too late. Use it as a heads-up, not a buy signal.</div>
                 </div>
             </div>
-
-            <div class="s-card">
-                <div class="s-card-header">🐦 Financial Twitter / X</div>
-                <div class="s-card-body">
-                    <p class="s-desc">Fast-moving news and trader takes</p>
-                    <a href="https://twitter.com/search?q=%24NVDA&f=live" target="_blank" class="s-link"><span>$NVDA Live Feed</span><span>→</span></a>
-                    <a href="https://twitter.com/search?q=%24SPY+options&f=live" target="_blank" class="s-link"><span>$SPY Options Feed</span><span>→</span></a>
-                    <a href="https://twitter.com/unusual_whales" target="_blank" class="s-link"><span>@unusual_whales</span><span>→</span></a>
-                    <a href="https://twitter.com/DeItaone" target="_blank" class="s-link"><span>@DeItaone (breaking news)</span><span>→</span></a>
-                    <a href="https://twitter.com/MarketWatch" target="_blank" class="s-link"><span>@MarketWatch</span><span>→</span></a>
-                    <div class="tip tip-green">💡 @DeItaone is one of the fastest breaking financial news accounts. Great for catching pre-market catalysts.</div>
-                </div>
-            </div>
-
             <div class="s-card" style="grid-column:1/-1">
-                <div class="s-card-header">🏛️ Institutional &amp; Insider Activity</div>
-                <div class="s-card-body" style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px">
-                    <a href="https://finviz.com/insidertrading.ashx?or=-10&tv=1000000&tc=7&o=-trade_date" target="_blank" class="s-link" style="margin:0">Insider Trading — Finviz <span>→</span></a>
-                    <a href="https://openinsider.com/" target="_blank" class="s-link" style="margin:0">Open Insider <span>→</span></a>
+                <div class="s-head">🏛️ What the Big Money Is Doing</div>
+                <div class="s-body" style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px">
+                    <a href="https://openinsider.com/" target="_blank" class="s-link" style="margin:0">Open Insider — Insider Buys <span>→</span></a>
+                    <a href="https://finviz.com/insidertrading.ashx?or=-10&tv=1000000&tc=7&o=-trade_date" target="_blank" class="s-link" style="margin:0">Finviz — Insider Trading <span>→</span></a>
                     <a href="https://www.dataroma.com/m/home.php" target="_blank" class="s-link" style="margin:0">Dataroma — Guru Portfolios <span>→</span></a>
-                    <a href="https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=13F&dateb=&owner=include&count=10" target="_blank" class="s-link" style="margin:0">SEC 13F Filings <span>→</span></a>
-                </div>
-            </div>
-
-        </div>
-    </div>
-
-    <!-- ── AI ANALYSIS ── -->
-    <div class="tab-panel" id="tab-analysis">
-        <div class="ai-wrap">
-            <div class="ai-container">
-                <div>
-                    <div class="ai-title">AI Trade Analysis</div>
-                    <div class="ai-subtitle">Describe your setup or paste chart observations — get a structured entry/exit/risk breakdown</div>
-                </div>
-                <div class="setup-form">
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label>Ticker</label>
-                            <input type="text" id="ai-ticker" placeholder="NVDA" />
-                        </div>
-                        <div class="form-group">
-                            <label>Direction</label>
-                            <select id="ai-direction">
-                                <option value="bullish">Bullish (Call)</option>
-                                <option value="bearish">Bearish (Put)</option>
-                                <option value="neutral">Neutral / Unsure</option>
-                            </select>
-                        </div>
-                        <div class="form-group">
-                            <label>Options Window</label>
-                            <select id="ai-timeframe">
-                                <option value="1 month">1 Month</option>
-                                <option value="2 months" selected>2 Months</option>
-                                <option value="3 months">3 Months</option>
-                            </select>
-                        </div>
-                    </div>
-                    <div class="form-group">
-                        <label>Setup Description</label>
-                        <textarea id="ai-setup" placeholder="Describe what you're seeing. e.g. NVDA has been consolidating between $115–$125 for 2 weeks, volume declining, RSI at 45. Earnings next month. Considering a call option..."></textarea>
-                    </div>
-                    <button class="analyze-btn" onclick="analyzeSetup()" id="analyzeBtn">Analyze Setup →</button>
-                </div>
-                <div class="ai-response" id="aiResponse">
-                    <div class="ai-placeholder">Enter a setup above and hit Analyze. You'll get entry zones, stop levels, targets, R:R, and options-specific guidance.</div>
+                    <a href="https://unusualwhales.com/politicians" target="_blank" class="s-link" style="margin:0">Congress Trades <span>→</span></a>
                 </div>
             </div>
         </div>
     </div>
 
-    <!-- ── JOURNAL ── -->
-    <div class="tab-panel" id="tab-journal">
+    <!-- JOURNAL -->
+    <div class="tab" id="tab-journal">
         <div class="journal-scroll">
             <div class="journal-inner">
-                <div class="journal-top">
-                    <div class="journal-title">Trade Journal</div>
-                    <button class="add-btn" onclick="openModal()">+ Log Trade</button>
+                <div class="j-top">
+                    <div class="j-title">📒 My Trade Journal</div>
+                    <button class="j-add" onclick="openModal()">+ Log a Trade</button>
                 </div>
-                <div class="stats-row">
-                    <div class="stat-card"><div class="stat-label">Total Trades</div><div class="stat-value" id="s-total">0</div></div>
-                    <div class="stat-card"><div class="stat-label">Open Positions</div><div class="stat-value neutral" id="s-open">0</div></div>
-                    <div class="stat-card"><div class="stat-label">Total P&amp;L</div><div class="stat-value" id="s-pnl">$0</div></div>
-                    <div class="stat-card"><div class="stat-label">Win Rate</div><div class="stat-value" id="s-wr">—</div></div>
+                <div class="stats">
+                    <div class="stat"><div class="stat-lbl">Total Trades</div><div class="stat-val" id="s-total">0</div></div>
+                    <div class="stat"><div class="stat-lbl">Open Positions</div><div class="stat-val neu" id="s-open">0</div></div>
+                    <div class="stat"><div class="stat-lbl">Total P&amp;L</div><div class="stat-val" id="s-pnl">$0</div></div>
+                    <div class="stat"><div class="stat-lbl">Win Rate</div><div class="stat-val" id="s-wr">—</div></div>
                 </div>
-                <div class="trade-table-wrap">
-                    <table class="trade-table">
-                        <thead>
-                            <tr>
-                                <th>Date</th><th>Ticker</th><th>Type</th><th>Strike</th>
-                                <th>Expiry</th><th>Qty</th><th>Entry</th><th>Exit</th>
-                                <th>P&amp;L</th><th>Status</th><th>Thesis</th><th></th>
-                            </tr>
-                        </thead>
+                <div class="tbl-wrap">
+                    <table class="tbl">
+                        <thead><tr>
+                            <th>Date</th><th>Ticker</th><th>Type</th><th>Strike</th>
+                            <th>Expiry</th><th>Qty</th><th>Entry $</th><th>Exit $</th>
+                            <th>P&amp;L</th><th>Status</th><th>Why I Took It</th><th></th>
+                        </tr></thead>
                         <tbody id="journalBody"></tbody>
                     </table>
                 </div>
@@ -491,24 +365,26 @@
         </div>
     </div>
 
-</div><!-- /content -->
+</div>
 
-<!-- Add Trade Modal -->
-<div class="modal-overlay" id="tradeModal">
+<div class="disclaimer">⚠️ For educational purposes only — not financial advice. Always do your own research before trading options.</div>
+
+<!-- Modal -->
+<div class="overlay" id="modal">
     <div class="modal">
         <div class="modal-title">Log a Trade</div>
-        <div class="modal-grid">
-            <div class="form-group"><label>Ticker</label><input type="text" id="m-ticker" placeholder="NVDA" /></div>
-            <div class="form-group"><label>Date</label><input type="date" id="m-date" /></div>
-            <div class="form-group"><label>Type</label><select id="m-type"><option value="CALL">CALL</option><option value="PUT">PUT</option></select></div>
-            <div class="form-group"><label>Strike Price ($)</label><input type="number" id="m-strike" placeholder="130" /></div>
-            <div class="form-group"><label>Expiration</label><input type="date" id="m-exp" /></div>
-            <div class="form-group"><label>Contracts</label><input type="number" id="m-contracts" placeholder="1" value="1" min="1" /></div>
-            <div class="form-group"><label>Entry Price (per contract)</label><input type="number" id="m-entry" placeholder="2.50" step="0.01" /></div>
-            <div class="form-group"><label>Exit Price (blank = still open)</label><input type="number" id="m-exit" placeholder="—" step="0.01" /></div>
-            <div class="form-group span2"><label>Trade Thesis</label><textarea id="m-thesis" placeholder="Why are you making this trade? What's the catalyst?"></textarea></div>
+        <div class="mgrid">
+            <div class="fg"><label>Ticker</label><input type="text" id="m-ticker" placeholder="NVDA" /></div>
+            <div class="fg"><label>Date</label><input type="date" id="m-date" /></div>
+            <div class="fg"><label>Call or Put?</label><select id="m-type"><option value="CALL">CALL (betting it goes up)</option><option value="PUT">PUT (betting it goes down)</option></select></div>
+            <div class="fg"><label>Strike Price ($)</label><input type="number" id="m-strike" placeholder="130" /></div>
+            <div class="fg"><label>Expiration Date</label><input type="date" id="m-exp" /></div>
+            <div class="fg"><label>Number of Contracts</label><input type="number" id="m-qty" value="1" min="1" /></div>
+            <div class="fg"><label>What I Paid Per Contract ($)</label><input type="number" id="m-entry" placeholder="2.50" step="0.01" /></div>
+            <div class="fg"><label>What I Sold For (leave blank if still open)</label><input type="number" id="m-exit" placeholder="—" step="0.01" /></div>
+            <div class="fg span2"><label>Why I Took This Trade</label><textarea id="m-thesis" placeholder="e.g. NVDA bouncing off $120 support, big call flow, strong sector momentum..."></textarea></div>
         </div>
-        <div class="modal-actions">
+        <div class="mactions">
             <button class="btn-cancel" onclick="closeModal()">Cancel</button>
             <button class="btn-save" onclick="saveTrade()">Save Trade</button>
         </div>
@@ -516,295 +392,248 @@
 </div>
 
 <script>
-// ── TABS ──────────────────────────────────────────────────────────────
-const TAB_NAMES = ['dashboard','charts','news','sentiment','analysis','journal'];
-function switchTab(tab) {
-    document.querySelectorAll('.nav-tab').forEach((el, i) => el.classList.toggle('active', TAB_NAMES[i] === tab));
-    document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
-    document.getElementById('tab-' + tab).classList.add('active');
-    if (tab === 'charts' && !document.getElementById('mainChart').children.length) {
-        loadChart('mainChart', currentTicker);
+// ── TABS ──────────────────────────────────────────────────────
+const TABS=['ideas','charts','news','activity','journal'];
+function showTab(t){
+    TABS.forEach((id,i)=>{
+        document.getElementById('tab-'+id).classList.toggle('active',id===t);
+        document.querySelectorAll('.tab-btn')[i].classList.toggle('active',id===t);
+    });
+    if(t==='charts'&&!document.getElementById('chartMain').children.length) loadChart(curTicker);
+    if(t==='news'&&!document.getElementById('newsWidget').children.length) loadNews('newsWidget');
+}
+
+// ── CLOCK ─────────────────────────────────────────────────────
+function updateClock(){
+    const et=new Date(new Date().toLocaleString('en-US',{timeZone:'America/New_York'}));
+    const h=et.getHours(),m=et.getMinutes(),s=et.getSeconds();
+    const ampm=h>=12?'PM':'AM',hh=h%12||12;
+    document.getElementById('clock').textContent=`${hh}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')} ${ampm} ET`;
+    const dow=et.getDay(),t=h*100+m,open=dow>0&&dow<6&&t>=930&&t<1600;
+    const pill=document.getElementById('marketPill');
+    pill.textContent=open?'🟢 Market Open':'🔴 Market Closed';
+    pill.className='market-pill '+(open?'market-open':'market-closed');
+}
+setInterval(updateClock,1000); updateClock();
+
+// ── FETCH STOCK DATA ──────────────────────────────────────────
+async function fetchQuote(ticker){
+    try{
+        const url=`https://query1.finance.yahoo.com/v8/finance/chart/${ticker}?interval=1d&range=5d`;
+        const r=await fetch(`https://corsproxy.io/?${encodeURIComponent(url)}`);
+        const d=await r.json();
+        const res=d.chart.result[0],meta=res.meta;
+        const closes=res.indicators.quote[0].close.filter(x=>x!=null);
+        const price=meta.regularMarketPrice||closes.at(-1);
+        const prev=meta.previousClose||meta.chartPreviousClose||closes.at(-2);
+        return{ticker,price,chg:prev?((price-prev)/prev*100):0,closes,
+            high52:meta.fiftyTwoWeekHigh,low52:meta.fiftyTwoWeekLow,vol:meta.regularMarketVolume};
+    }catch(e){return null;}
+}
+
+// ── CLAUDE ────────────────────────────────────────────────────
+async function callClaude(prompt){
+    const key=(typeof CLAUDE_API_KEY!=='undefined'&&CLAUDE_API_KEY!=='paste-your-key-here')?CLAUDE_API_KEY:null;
+    if(!key)throw new Error('API key not set — open config.js and paste your Claude API key.');
+    const r=await fetch('https://api.anthropic.com/v1/messages',{
+        method:'POST',
+        headers:{'Content-Type':'application/json','x-api-key':key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
+        body:JSON.stringify({model:'claude-opus-4-6',max_tokens:2048,messages:[{role:'user',content:prompt}]})
+    });
+    const d=await r.json();
+    if(!d.content?.[0]?.text)throw new Error(d.error?.message||'Claude error');
+    return d.content[0].text;
+}
+
+// ── BUILD CARD ────────────────────────────────────────────────
+function buildCard(idea){
+    const dir=(idea.direction||'bullish').toLowerCase();
+    const chg=parseFloat(idea.price_change||0);
+    const chgHtml=chg>=0?`<div class="card-change up">▲ ${Math.abs(chg).toFixed(2)}%</div>`:`<div class="card-change down">▼ ${Math.abs(chg).toFixed(2)}%</div>`;
+    const confCls=idea.confidence==='high'?'ch':idea.confidence==='low'?'cl':'cm';
+    const confLbl=idea.confidence==='high'?'🟢 High Confidence':idea.confidence==='low'?'🔴 Low Confidence':'🟡 Medium Confidence';
+    const optType=(idea.option_type||'CALL').toUpperCase();
+    return`<div class="idea-card ${dir}">
+        <div class="card-head">
+            <div><div class="card-ticker">${idea.ticker}</div><div class="card-company">${idea.company||''}</div></div>
+            <div class="card-price-row"><div class="card-price">$${parseFloat(idea.current_price||0).toFixed(2)}</div>${chgHtml}</div>
+        </div>
+        <div class="card-summary">${idea.summary||''}</div>
+        <div class="card-levels">
+            <div class="level-row">
+                <div class="level-left"><div class="level-icon">📥</div><div><div class="level-lbl">Enter Between</div><div class="level-hint">Buy when price reaches this zone</div></div></div>
+                <div class="level-val ev">$${idea.entry_low} – $${idea.entry_high}</div>
+            </div>
+            <div class="level-row">
+                <div class="level-left"><div class="level-icon">🛑</div><div><div class="level-lbl">Get Out If It Drops Below</div><div class="level-hint">Exit here to protect yourself — trade isn't working</div></div></div>
+                <div class="level-val sv">$${idea.stop_loss}</div>
+            </div>
+            <div class="level-row">
+                <div class="level-left"><div class="level-icon">🎯</div><div><div class="level-lbl">Take Profit At</div><div class="level-hint">This is your win zone — consider selling here</div></div></div>
+                <div class="level-val tv">$${idea.target}</div>
+            </div>
+        </div>
+        <div class="card-option">
+            <span class="opt-badge ${optType==='CALL'?'opt-call':'opt-put'}">${optType}</span>
+            <span class="opt-detail">${idea.option_detail||''}</span>
+        </div>
+        <div class="card-account">
+            <div class="acct-lbl">💰 With your $500 account:</div>
+            <div class="acct-detail">${idea.account_sizing||'Keep it to 1 contract max'}</div>
+        </div>
+        <div class="card-footer">
+            <div class="conf ${confCls}">${confLbl}</div>
+            <div class="rr">R:R ${idea.risk_reward||'—'}</div>
+        </div>
+    </div>`;
+}
+
+// ── SCAN WATCHLIST ────────────────────────────────────────────
+const WATCHLIST=['NVDA','SPY','QQQ','AAPL','MSFT','META','AMD','GOOGL','ARM','PLTR'];
+async function scanWatchlist(){
+    const btn=document.getElementById('scanBtn');
+    btn.disabled=true; btn.innerHTML='<span>⏳</span><span>Scanning...</span>';
+    document.getElementById('ideasOutput').innerHTML=`<div class="loading-state"><div class="spinner"></div><div class="loading-text">Pulling live prices and finding your best setups...</div></div>`;
+    try{
+        const quotes=(await Promise.all(WATCHLIST.map(fetchQuote))).filter(Boolean);
+        if(!quotes.length)throw new Error('Could not fetch price data — try again in a moment.');
+        const priceData=quotes.map(q=>`${q.ticker}: $${q.price.toFixed(2)} (${q.chg>=0?'+':''}${q.chg.toFixed(2)}% today), recent closes: ${q.closes.slice(-5).map(p=>p?'$'+p.toFixed(0):'—').join(', ')}`).join('\n');
+        const prompt=`You are a trading analyst helping a beginner options trader with a $500 account who trades 1-3 month options on tech stocks.
+
+Live price data:
+${priceData}
+
+Find the TOP 3 best trade setups right now. Return ONLY a valid JSON array — no markdown, no explanation, just raw JSON.
+
+Each object needs these exact keys:
+- ticker (string)
+- company (string, full name)
+- current_price (number)
+- price_change (number, today's % change)
+- direction ("bullish" or "bearish")
+- summary (string, 1-2 sentences in plain English with zero jargon — explain what's happening and why it's interesting like you're talking to someone who just started trading)
+- entry_low (number)
+- entry_high (number)
+- stop_loss (number)
+- target (number)
+- option_type ("CALL" or "PUT")
+- option_detail (string, e.g. "$125 Strike · Expires ~July 18 · Est. $1.00–$2.00/contract")
+- account_sizing (string, specific advice for a $500 account, e.g. "Buy 1 contract. Look for contracts priced under $1.50 so you risk max $150. Set a mental stop if it drops 50%.")
+- confidence ("high", "medium", or "low")
+- risk_reward (string, e.g. "1:2.5")
+
+Return raw JSON array only.`;
+        const raw=await callClaude(prompt);
+        let ideas;
+        try{const m=raw.match(/\[[\s\S]*\]/);ideas=JSON.parse(m?m[0]:raw);}
+        catch(e){throw new Error('Could not read trade ideas — try scanning again.');}
+        document.getElementById('ideasOutput').innerHTML=`<div class="ideas-grid">${ideas.map(buildCard).join('')}</div>`;
+        const now=new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'});
+        document.getElementById('lastScan').textContent=`Last scanned at ${now}`;
+        document.getElementById('lastUpdated').textContent=`Updated ${now}`;
+    }catch(e){
+        document.getElementById('ideasOutput').innerHTML=`<div class="empty-state"><div class="empty-icon">⚠️</div><div class="empty-title">Something went wrong</div><div class="empty-sub">${e.message}</div></div>`;
     }
+    btn.disabled=false; btn.innerHTML='<span>⚡</span><span>Scan My Watchlist</span>';
 }
 
-// ── TRADINGVIEW WIDGETS ───────────────────────────────────────────────
-let currentTicker = 'NVDA';
+// ── ANALYZE SINGLE ────────────────────────────────────────────
+async function analyzeSingle(){
+    const ticker=document.getElementById('searchTicker').value.trim().toUpperCase().replace(/[^A-Z]/g,'');
+    if(!ticker){alert('Enter a ticker first.');return;}
+    const btn=document.getElementById('searchBtn');
+    btn.disabled=true; btn.textContent='Analyzing...';
+    const out=document.getElementById('singleResult');
+    out.style.display='block';
+    out.innerHTML=`<div class="loading-state"><div class="spinner"></div><div class="loading-text">Pulling data for ${ticker}...</div></div>`;
+    try{
+        const q=await fetchQuote(ticker);
+        if(!q)throw new Error(`Couldn't find data for "${ticker}" — double-check the ticker symbol.`);
+        const prompt=`You are a trading analyst helping a beginner with a $500 account who trades 1-3 month options.
 
-function tvWidget(containerId, scriptSrc, config) {
-    const container = document.getElementById(containerId);
-    if (!container) return;
-    container.innerHTML = '';
-    const wrap = document.createElement('div');
-    wrap.style.cssText = 'height:100%;width:100%;';
-    wrap.className = 'tradingview-widget-container';
-    const inner = document.createElement('div');
-    inner.className = 'tradingview-widget-container__widget';
-    inner.style.cssText = 'height:100%;width:100%;';
-    const s = document.createElement('script');
-    s.src = scriptSrc;
-    s.async = true;
-    s.innerHTML = JSON.stringify(config);
-    wrap.appendChild(inner);
-    wrap.appendChild(s);
-    container.appendChild(wrap);
-}
+Live data for ${ticker}: $${q.price.toFixed(2)} (${q.chg>=0?'+':''}${q.chg.toFixed(2)}% today), recent closes: ${q.closes.slice(-5).map(p=>p?'$'+p.toFixed(0):'—').join(', ')}
 
-function loadChart(containerId, symbol) {
-    tvWidget(containerId,
-        'https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js',
-        {
-            autosize: true, symbol, interval: 'D',
-            timezone: 'America/New_York', theme: 'dark', style: '1', locale: 'en',
-            backgroundColor: 'rgba(13,17,23,1)', gridColor: 'rgba(48,54,61,0.3)',
-            studies: ['RSI@tv-basicstudies','MACD@tv-basicstudies','Volume@tv-basicstudies'],
-            allow_symbol_change: true, save_image: false,
-            watchlist: ['NASDAQ:NVDA','AMEX:SPY','NASDAQ:QQQ','NASDAQ:AAPL','NASDAQ:MSFT','NASDAQ:META','NASDAQ:AMD','NASDAQ:GOOGL','NASDAQ:ARM','NASDAQ:PLTR']
-        }
-    );
-}
-
-function loadTickerTape() {
-    tvWidget('tickerTape',
-        'https://s3.tradingview.com/external-embedding/embed-widget-ticker-tape.js',
-        {
-            symbols: [
-                {proName:'NASDAQ:NVDA',title:'NVDA'},{proName:'AMEX:SPY',title:'SPY'},
-                {proName:'NASDAQ:QQQ',title:'QQQ'},{proName:'NASDAQ:AAPL',title:'AAPL'},
-                {proName:'NASDAQ:MSFT',title:'MSFT'},{proName:'NASDAQ:META',title:'META'},
-                {proName:'NASDAQ:AMD',title:'AMD'},{proName:'NASDAQ:GOOGL',title:'GOOGL'},
-                {proName:'NASDAQ:ARM',title:'ARM'},{proName:'NASDAQ:PLTR',title:'PLTR'}
-            ],
-            showSymbolLogo: true, isTransparent: true,
-            displayMode: 'adaptive', colorTheme: 'dark', locale: 'en'
-        }
-    );
-}
-
-function loadMarketOverview() {
-    tvWidget('dashMarket',
-        'https://s3.tradingview.com/external-embedding/embed-widget-market-overview.js',
-        {
-            colorTheme:'dark', dateRange:'1D', showChart:true, locale:'en',
-            isTransparent:false, showSymbolLogo:true, width:'100%', height:'100%',
-            backgroundColor:'rgba(13,17,23,1)',
-            plotLineColorGrowing:'rgba(63,185,80,1)', plotLineColorFalling:'rgba(248,81,73,1)',
-            tabs:[{
-                title:'My Watchlist',
-                symbols:[
-                    {s:'NASDAQ:NVDA',d:'NVIDIA'},{s:'AMEX:SPY',d:'S&P 500 ETF'},
-                    {s:'NASDAQ:QQQ',d:'Nasdaq ETF'},{s:'NASDAQ:AMD',d:'AMD'},
-                    {s:'NASDAQ:AAPL',d:'Apple'},{s:'NASDAQ:MSFT',d:'Microsoft'},
-                    {s:'NASDAQ:META',d:'Meta'},{s:'NASDAQ:PLTR',d:'Palantir'}
-                ],
-                originalTitle:'Watchlist'
-            }]
-        }
-    );
-}
-
-function loadNews(containerId) {
-    tvWidget(containerId,
-        'https://s3.tradingview.com/external-embedding/embed-widget-timeline.js',
-        { feedMode:'market', market:'stock', isTransparent:false, displayMode:'regular',
-          width:'100%', height:'100%', colorTheme:'dark', locale:'en',
-          backgroundColor:'rgba(13,17,23,1)' }
-    );
-}
-
-function switchTicker(btn, ticker) {
-    document.querySelectorAll('.ticker-btn').forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
-    currentTicker = ticker;
-    loadChart('mainChart', ticker);
-}
-
-// ── AI ANALYSIS ──────────────────────────────────────────────────────
-async function analyzeSetup() {
-    const ticker    = (document.getElementById('ai-ticker').value || 'this ticker').toUpperCase();
-    const direction = document.getElementById('ai-direction').value;
-    const timeframe = document.getElementById('ai-timeframe').value;
-    const setup     = document.getElementById('ai-setup').value.trim();
-
-    if (!setup) { alert('Please describe your setup first.'); return; }
-
-    const apiKey = (typeof CLAUDE_API_KEY !== 'undefined' && CLAUDE_API_KEY !== 'paste-your-key-here')
-        ? CLAUDE_API_KEY : null;
-
-    if (!apiKey) {
-        document.getElementById('aiResponse').innerHTML =
-            '<div style="color:#f85149;font-size:13px;text-align:center;padding:30px">⚠️ API key not set. Open <code>config.js</code> and paste your Claude API key.</div>';
-        return;
+Return ONLY a valid JSON object with these exact keys: ticker, company, current_price, price_change, direction, summary, entry_low, entry_high, stop_loss, target, option_type, option_detail, account_sizing, confidence, risk_reward. Raw JSON only, no markdown.`;
+        const raw=await callClaude(prompt);
+        let idea;
+        try{const m=raw.match(/\{[\s\S]*\}/);idea=JSON.parse(m?m[0]:raw);}
+        catch(e){throw new Error('Could not parse analysis — try again.');}
+        out.innerHTML=`<div style="margin-bottom:8px;font-size:12px;color:var(--muted)">Analysis for <strong style="color:var(--text)">${ticker}</strong>:</div><div class="ideas-grid">${buildCard(idea)}</div>`;
+        const now=new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'});
+        document.getElementById('lastUpdated').textContent=`Updated ${now}`;
+    }catch(e){
+        out.innerHTML=`<div class="empty-state"><div class="empty-icon">⚠️</div><div class="empty-title">Error</div><div class="empty-sub">${e.message}</div></div>`;
     }
-
-    const btn = document.getElementById('analyzeBtn');
-    btn.disabled = true; btn.textContent = 'Analyzing...';
-    document.getElementById('aiResponse').innerHTML = '<div class="ai-placeholder thinking">Analyzing setup...</div>';
-
-    const prompt = `You are a professional options trader and technical analyst with deep experience in tech stocks. Analyze this trade setup concisely and actionably.
-
-Ticker: ${ticker}
-Directional Bias: ${direction}
-Options Window: ${timeframe}
-Setup: ${setup}
-
-Respond with these sections using ### headers:
-
-### Setup Assessment
-Quality and conviction level (1-2 sentences).
-
-### Entry Zone
-Specific stock price levels to enter. What confirms it.
-
-### Stop / Invalidation
-Exact price where the setup is dead. No ambiguity.
-
-### Price Targets
-1-2 realistic targets for the timeframe.
-
-### Risk / Reward
-R:R ratio. Worth taking?
-
-### Options Guidance
-Strike selection for a ${timeframe} option (ATM vs OTM), IV timing concerns, and any earnings/catalyst awareness.
-
-### Key Risks
-Top 2-3 things that kill this trade.
-
-Keep it tight, direct, and useful. No fluff.`;
-
-    try {
-        const res = await fetch('https://api.anthropic.com/v1/messages', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'x-api-key': apiKey,
-                'anthropic-version': '2023-06-01',
-                'anthropic-dangerous-direct-browser-access': 'true'
-            },
-            body: JSON.stringify({
-                model: 'claude-opus-4-6',
-                max_tokens: 1024,
-                messages: [{ role: 'user', content: prompt }]
-            })
-        });
-        const data = await res.json();
-        if (data.content?.[0]?.text) {
-            const html = data.content[0].text
-                .replace(/### (.+)/g, '<h3>$1</h3>')
-                .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-                .replace(/\n\n/g, '</p><p>')
-                .replace(/\n/g, '<br>');
-            document.getElementById('aiResponse').innerHTML = `<div class="ai-content"><p>${html}</p></div>`;
-        } else {
-            throw new Error(data.error?.message || 'Unexpected response');
-        }
-    } catch(e) {
-        document.getElementById('aiResponse').innerHTML =
-            `<div style="color:#f85149;font-size:13px;padding:20px">Error: ${e.message}</div>`;
-    }
-    btn.disabled = false; btn.textContent = 'Analyze Setup →';
+    btn.disabled=false; btn.textContent='Analyze This Stock →';
 }
 
-// ── TRADE JOURNAL ─────────────────────────────────────────────────────
-let trades = JSON.parse(localStorage.getItem('darcell_trades') || '[]');
-
-function openModal() {
-    document.getElementById('m-date').value = new Date().toISOString().split('T')[0];
-    document.getElementById('tradeModal').classList.add('open');
+// ── TRADINGVIEW ───────────────────────────────────────────────
+let curTicker='NVDA';
+function tv(id,src,cfg){
+    const el=document.getElementById(id);if(!el)return;
+    el.innerHTML='';
+    const w=document.createElement('div');w.style.cssText='height:100%;width:100%;';
+    const inner=document.createElement('div');inner.className='tradingview-widget-container__widget';inner.style.cssText='height:100%;width:100%;';
+    const s=document.createElement('script');s.src=src;s.async=true;s.innerHTML=JSON.stringify(cfg);
+    w.appendChild(inner);w.appendChild(s);el.appendChild(w);
 }
-function closeModal() { document.getElementById('tradeModal').classList.remove('open'); }
-
-function saveTrade() {
-    const t = {
-        id: Date.now(),
-        date:      document.getElementById('m-date').value,
-        ticker:    document.getElementById('m-ticker').value.toUpperCase().trim(),
-        type:      document.getElementById('m-type').value,
-        strike:    document.getElementById('m-strike').value,
-        exp:       document.getElementById('m-exp').value,
-        qty:       parseInt(document.getElementById('m-contracts').value) || 1,
-        entry:     parseFloat(document.getElementById('m-entry').value) || 0,
-        exit:      document.getElementById('m-exit').value ? parseFloat(document.getElementById('m-exit').value) : null,
-        thesis:    document.getElementById('m-thesis').value.trim(),
-    };
-    t.status = t.exit !== null ? 'Closed' : 'Open';
-    if (!t.ticker || !t.entry) { alert('Ticker and Entry Price are required.'); return; }
-    trades.unshift(t);
-    localStorage.setItem('darcell_trades', JSON.stringify(trades));
-    renderJournal();
-    closeModal();
-    ['m-ticker','m-strike','m-entry','m-exit','m-thesis'].forEach(id => document.getElementById(id).value = '');
-    document.getElementById('m-exp').value = '';
+function loadChart(sym){
+    tv('chartMain','https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js',{
+        autosize:true,symbol:sym,interval:'D',timezone:'America/New_York',theme:'dark',style:'1',locale:'en',
+        backgroundColor:'rgba(13,17,23,1)',gridColor:'rgba(48,54,61,0.3)',
+        studies:['RSI@tv-basicstudies','MACD@tv-basicstudies','Volume@tv-basicstudies'],
+        allow_symbol_change:true,save_image:false,
+        watchlist:['NASDAQ:NVDA','AMEX:SPY','NASDAQ:QQQ','NASDAQ:AAPL','NASDAQ:MSFT','NASDAQ:META','NASDAQ:AMD','NASDAQ:GOOGL','NASDAQ:ARM','NASDAQ:PLTR']
+    });
 }
-
-function deleteTrade(id) {
-    if (!confirm('Delete this trade entry?')) return;
-    trades = trades.filter(t => t.id !== id);
-    localStorage.setItem('darcell_trades', JSON.stringify(trades));
-    renderJournal();
+function loadTape(){
+    tv('tape','https://s3.tradingview.com/external-embedding/embed-widget-ticker-tape.js',{
+        symbols:[{proName:'NASDAQ:NVDA',title:'NVDA'},{proName:'AMEX:SPY',title:'SPY'},{proName:'NASDAQ:QQQ',title:'QQQ'},{proName:'NASDAQ:AAPL',title:'AAPL'},{proName:'NASDAQ:MSFT',title:'MSFT'},{proName:'NASDAQ:META',title:'META'},{proName:'NASDAQ:AMD',title:'AMD'},{proName:'NASDAQ:GOOGL',title:'GOOGL'},{proName:'NASDAQ:ARM',title:'ARM'},{proName:'NASDAQ:PLTR',title:'PLTR'}],
+        showSymbolLogo:true,isTransparent:true,displayMode:'adaptive',colorTheme:'dark',locale:'en'
+    });
 }
-
-function fmt(dateStr) {
-    if (!dateStr) return '—';
-    const d = new Date(dateStr + 'T12:00:00');
-    return d.toLocaleDateString('en-US', { month:'short', day:'numeric', year:'2-digit' });
+function loadNews(id){
+    tv(id,'https://s3.tradingview.com/external-embedding/embed-widget-timeline.js',{
+        feedMode:'market',market:'stock',isTransparent:false,displayMode:'regular',
+        width:'100%',height:'100%',colorTheme:'dark',locale:'en',backgroundColor:'rgba(13,17,23,1)'
+    });
 }
+function switchTick(btn,sym){document.querySelectorAll('.tick-btn').forEach(b=>b.classList.remove('active'));btn.classList.add('active');curTicker=sym;loadChart(sym);}
+function goTicker(){const v=document.getElementById('chartSearch').value.trim().toUpperCase();if(!v)return;document.querySelectorAll('.tick-btn').forEach(b=>b.classList.remove('active'));curTicker=v;loadChart(v);}
 
-function renderJournal() {
-    const body = document.getElementById('journalBody');
-    if (!trades.length) {
-        body.innerHTML = '<tr class="empty-row"><td colspan="12">No trades yet. Click "+ Log Trade" to start your journal.</td></tr>';
-        setStats(0,0,0,null); return;
-    }
-    let totalPnl = 0, wins = 0, closed = 0, open = 0;
-    body.innerHTML = trades.map(t => {
-        const pnl = t.exit !== null ? (t.exit - t.entry) * t.qty * 100 : null;
-        if (pnl !== null) { totalPnl += pnl; closed++; if (pnl > 0) wins++; }
-        if (t.status === 'Open') open++;
-        const pnlHtml = pnl !== null
-            ? `<span class="${pnl>=0?'positive':'negative'}">${pnl>=0?'+':''}$${Math.abs(pnl).toFixed(0)}</span>`
-            : '<span style="color:#8b949e">—</span>';
-        return `<tr>
-            <td style="color:#8b949e;white-space:nowrap">${fmt(t.date)}</td>
-            <td><strong>${t.ticker}</strong></td>
-            <td><span class="badge badge-${t.type.toLowerCase()}">${t.type}</span></td>
-            <td>$${t.strike}</td>
-            <td style="color:#8b949e;white-space:nowrap">${fmt(t.exp)}</td>
-            <td>${t.qty}</td>
-            <td>$${t.entry.toFixed(2)}</td>
-            <td>${t.exit!=null?'$'+t.exit.toFixed(2):'<span style="color:#8b949e">Open</span>'}</td>
-            <td>${pnlHtml}</td>
-            <td><span class="badge badge-${t.status.toLowerCase()}">${t.status}</span></td>
-            <td style="max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#8b949e;font-size:11px" title="${t.thesis||''}">${t.thesis||'—'}</td>
-            <td><button class="del-btn" onclick="deleteTrade(${t.id})">×</button></td>
-        </tr>`;
+// ── JOURNAL ───────────────────────────────────────────────────
+let trades=JSON.parse(localStorage.getItem('darcell_v2_trades')||'[]');
+function openModal(){document.getElementById('m-date').value=new Date().toISOString().split('T')[0];document.getElementById('modal').classList.add('open');}
+function closeModal(){document.getElementById('modal').classList.remove('open');}
+function saveTrade(){
+    const t={id:Date.now(),date:document.getElementById('m-date').value,ticker:document.getElementById('m-ticker').value.toUpperCase().trim(),type:document.getElementById('m-type').value,strike:document.getElementById('m-strike').value,exp:document.getElementById('m-exp').value,qty:parseInt(document.getElementById('m-qty').value)||1,entry:parseFloat(document.getElementById('m-entry').value)||0,exit:document.getElementById('m-exit').value?parseFloat(document.getElementById('m-exit').value):null,thesis:document.getElementById('m-thesis').value.trim()};
+    t.status=t.exit!==null?'Closed':'Open';
+    if(!t.ticker||!t.entry){alert('Ticker and entry price are required.');return;}
+    trades.unshift(t);localStorage.setItem('darcell_v2_trades',JSON.stringify(trades));renderJournal();closeModal();
+    ['m-ticker','m-strike','m-entry','m-exit','m-thesis'].forEach(id=>document.getElementById(id).value='');document.getElementById('m-exp').value='';
+}
+function deleteTrade(id){if(!confirm('Delete this trade?'))return;trades=trades.filter(t=>t.id!==id);localStorage.setItem('darcell_v2_trades',JSON.stringify(trades));renderJournal();}
+function fmt(d){if(!d)return'—';return new Date(d+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'2-digit'});}
+function renderJournal(){
+    const body=document.getElementById('journalBody');
+    if(!trades.length){body.innerHTML='<tr class="empty-row"><td colspan="12">No trades yet — click "+ Log a Trade" to start tracking.</td></tr>';setStats(0,0,0,null);return;}
+    let pnl=0,wins=0,closed=0,open=0;
+    body.innerHTML=trades.map(t=>{
+        const p=t.exit!==null?(t.exit-t.entry)*t.qty*100:null;
+        if(p!==null){pnl+=p;closed++;if(p>0)wins++;}
+        if(t.status==='Open')open++;
+        const ph=p!==null?`<span class="${p>=0?'pos':'neg'}">${p>=0?'+':'-'}$${Math.abs(p).toFixed(0)}</span>`:'<span style="color:var(--muted)">—</span>';
+        return`<tr><td style="color:var(--muted);white-space:nowrap">${fmt(t.date)}</td><td><strong>${t.ticker}</strong></td><td><span class="badge ${t.type==='CALL'?'bc':'bp'}">${t.type}</span></td><td>$${t.strike}</td><td style="color:var(--muted);white-space:nowrap">${fmt(t.exp)}</td><td>${t.qty}</td><td>$${t.entry.toFixed(2)}</td><td>${t.exit!=null?'$'+t.exit.toFixed(2):'<span style="color:var(--muted)">Open</span>'}</td><td>${ph}</td><td><span class="badge ${t.status==='Open'?'bo':'bx'}">${t.status}</span></td><td style="max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:11px" title="${t.thesis||''}">${t.thesis||'—'}</td><td><button class="del" onclick="deleteTrade(${t.id})">×</button></td></tr>`;
     }).join('');
-    setStats(trades.length, open, totalPnl, closed > 0 ? Math.round(wins/closed*100) : null);
+    setStats(trades.length,open,pnl,closed>0?Math.round(wins/closed*100):null);
 }
-
-function setStats(total, open, pnl, wr) {
-    document.getElementById('s-total').textContent = total;
-    document.getElementById('s-open').textContent = open;
-    const pEl = document.getElementById('s-pnl');
-    pEl.textContent = (pnl >= 0 ? '+' : '-') + '$' + Math.abs(pnl).toFixed(0);
-    pEl.className = 'stat-value ' + (pnl >= 0 ? 'positive' : 'negative');
-    const wEl = document.getElementById('s-wr');
-    wEl.textContent = wr !== null ? wr + '%' : '—';
-    if (wr !== null) wEl.className = 'stat-value ' + (wr >= 50 ? 'positive' : 'negative');
+function setStats(total,open,pnl,wr){
+    document.getElementById('s-total').textContent=total;document.getElementById('s-open').textContent=open;
+    const pe=document.getElementById('s-pnl');pe.textContent=(pnl>=0?'+':'-')+'$'+Math.abs(pnl).toFixed(0);pe.className='stat-val '+(pnl>=0?'pos':'neg');
+    const we=document.getElementById('s-wr');we.textContent=wr!==null?wr+'%':'—';if(wr!==null)we.className='stat-val '+(wr>=50?'pos':'neg');
 }
-
-// Close modal on backdrop click
-document.getElementById('tradeModal').addEventListener('click', e => { if (e.target.id === 'tradeModal') closeModal(); });
-
-// ── INIT ─────────────────────────────────────────────────────────────
-window.addEventListener('load', () => {
-    loadTickerTape();
-    loadChart('dashChart', 'NVDA');
-    loadMarketOverview();
-    loadNews('dashNews');
-    loadNews('newsPanel');
-    renderJournal();
-});
+document.getElementById('modal').addEventListener('click',e=>{if(e.target.id==='modal')closeModal();});
+window.addEventListener('load',()=>{loadTape();renderJournal();});
 </script>
 </body>
 </html>
