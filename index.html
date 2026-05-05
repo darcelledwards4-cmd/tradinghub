@@ -399,7 +399,7 @@ function showTab(t){
         document.getElementById('tab-'+id).classList.toggle('active',id===t);
         document.querySelectorAll('.tab-btn')[i].classList.toggle('active',id===t);
     });
-    if(t==='charts'&&!document.getElementById('chartMain').children.length) loadChart(curTicker);
+    if(t==='charts') loadChart(curTicker);
     if(t==='news'&&!document.getElementById('newsWidget').children.length) loadNews('newsWidget');
 }
 
@@ -418,17 +418,28 @@ setInterval(updateClock,1000); updateClock();
 
 // ── FETCH STOCK DATA ──────────────────────────────────────────
 async function fetchQuote(ticker){
-    try{
-        const url=`https://query1.finance.yahoo.com/v8/finance/chart/${ticker}?interval=1d&range=5d`;
-        const r=await fetch(`https://corsproxy.io/?${encodeURIComponent(url)}`);
-        const d=await r.json();
-        const res=d.chart.result[0],meta=res.meta;
-        const closes=res.indicators.quote[0].close.filter(x=>x!=null);
-        const price=meta.regularMarketPrice||closes.at(-1);
-        const prev=meta.previousClose||meta.chartPreviousClose||closes.at(-2);
-        return{ticker,price,chg:prev?((price-prev)/prev*100):0,closes,
-            high52:meta.fiftyTwoWeekHigh,low52:meta.fiftyTwoWeekLow,vol:meta.regularMarketVolume};
-    }catch(e){return null;}
+    const url=`https://query1.finance.yahoo.com/v8/finance/chart/${ticker}?interval=1d&range=5d`;
+    const proxies=[
+        `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+        `https://corsproxy.io/?${encodeURIComponent(url)}`,
+        `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`
+    ];
+    for(const proxy of proxies){
+        try{
+            const r=await fetch(proxy,{signal:AbortSignal.timeout(6000)});
+            if(!r.ok)continue;
+            const d=await r.json();
+            const res=d.chart?.result?.[0];
+            if(!res)continue;
+            const meta=res.meta;
+            const closes=res.indicators.quote[0].close.filter(x=>x!=null);
+            const price=meta.regularMarketPrice||closes.at(-1);
+            const prev=meta.previousClose||meta.chartPreviousClose||closes.at(-2);
+            return{ticker,price,chg:prev?((price-prev)/prev*100):0,closes,
+                high52:meta.fiftyTwoWeekHigh,low52:meta.fiftyTwoWeekLow,vol:meta.regularMarketVolume};
+        }catch(e){continue;}
+    }
+    return null;
 }
 
 // ── CLAUDE ────────────────────────────────────────────────────
@@ -633,7 +644,7 @@ function setStats(total,open,pnl,wr){
     const we=document.getElementById('s-wr');we.textContent=wr!==null?wr+'%':'—';if(wr!==null)we.className='stat-val '+(wr>=50?'pos':'neg');
 }
 document.getElementById('modal').addEventListener('click',e=>{if(e.target.id==='modal')closeModal();});
-window.addEventListener('load',()=>{loadTape();renderJournal();});
+window.addEventListener('load',()=>{loadTape();loadChart(curTicker);renderJournal();});
 </script>
 </body>
 </html>
