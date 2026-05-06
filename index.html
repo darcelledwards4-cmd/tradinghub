@@ -311,6 +311,41 @@
         .fear-signal-item { font-size:12px; display:flex; gap:8px; align-items:flex-start; line-height:1.5; }
         .fear-signal-icon { flex-shrink:0; }
 
+        /* ── FLOW INTELLIGENCE PANEL ── */
+        .flow-tabs { display:flex; background:var(--bg3); border-bottom:1px solid var(--border); flex-shrink:0; }
+        .flow-tab-btn { flex:1; padding:10px 8px; font-size:11px; font-weight:700; color:var(--muted); background:none; border:none; cursor:pointer; border-bottom:2px solid transparent; transition:all .15s; white-space:nowrap; }
+        .flow-tab-btn:hover { color:var(--text); }
+        .flow-tab-btn.active { color:var(--blue); border-bottom-color:var(--blue); background:var(--bg2); }
+        .flow-panel { display:none; flex:1; overflow:hidden; flex-direction:column; }
+        .flow-panel.active { display:flex; }
+        .panel { display:flex; flex-direction:column; overflow:hidden; }
+        .panel-scroll { flex:1; overflow-y:auto; padding:14px; }
+
+        /* ── CONGRESS TRADE CARDS ── */
+        .ct-card { background:var(--bg3); border:1px solid var(--border); border-radius:8px; padding:12px 14px; margin-bottom:8px; }
+        .ct-card.buy  { border-left:3px solid var(--green); }
+        .ct-card.sell { border-left:3px solid var(--red); }
+        .ct-top { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:6px; }
+        .ct-member { font-size:12px; font-weight:700; }
+        .ct-chamber { font-size:10px; font-weight:700; padding:2px 7px; border-radius:20px; margin-left:6px; }
+        .ct-house   { background:rgba(88,166,255,.12); color:var(--blue); }
+        .ct-senate  { background:rgba(188,140,255,.12); color:var(--purple); }
+        .ct-ticker  { font-size:18px; font-weight:800; color:var(--text); }
+        .ct-type    { font-size:11px; font-weight:700; padding:2px 8px; border-radius:4px; }
+        .ct-buy-badge  { background:rgba(63,185,80,.15); color:var(--green); }
+        .ct-sell-badge { background:rgba(248,81,73,.12); color:var(--red); }
+        .ct-meta { font-size:11px; color:var(--muted); display:flex; gap:10px; flex-wrap:wrap; }
+        .ct-asset { font-size:11px; color:var(--muted); margin-top:4px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+        .ct-ai { margin-top:8px; padding:8px 10px; background:rgba(88,166,255,.06); border:1px solid rgba(88,166,255,.15); border-radius:6px; font-size:11px; color:var(--text); line-height:1.6; }
+
+        /* ── DECODE OUTPUT ── */
+        .decode-card { background:var(--bg3); border:1px solid var(--border); border-radius:10px; overflow:hidden; }
+        .decode-head { padding:12px 16px; border-bottom:1px solid var(--border); display:flex; align-items:center; gap:10px; }
+        .decode-signal { font-size:20px; font-weight:800; }
+        .decode-body { padding:14px 16px; display:flex; flex-direction:column; gap:10px; }
+        .decode-section { font-size:12px; line-height:1.65; }
+        .decode-label { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.4px; color:var(--muted); margin-bottom:4px; }
+
         /* ── FILTER BAR ── */
         .filter-bar { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:20px; align-items:center; }
         .filter-pill { padding:8px 16px; border-radius:20px; border:1px solid var(--border); background:var(--bg2); color:var(--muted); font-size:12px; font-weight:700; cursor:pointer; transition:all .15s; white-space:nowrap; user-select:none; }
@@ -476,22 +511,74 @@
     <!-- NEWS & FLOW -->
     <div class="tab" id="tab-news">
         <div class="two-col">
+            <!-- LEFT: Live news -->
             <div class="panel">
-                <div class="panel-head">Live Financial News</div>
+                <div class="panel-head">📰 Live Financial News</div>
                 <div class="panel-body" id="newsWidget"></div>
             </div>
+
+            <!-- RIGHT: Intelligence panel -->
             <div class="panel">
-                <div class="panel-head">Options Flow — Where Big Money Is Moving</div>
-                <div class="panel-scroll">
-                    <p style="font-size:12px;color:var(--muted);margin-bottom:12px;line-height:1.6">These sites show large options orders in real time. When a big fund buys 500 NVDA call contracts, it shows up here. Always worth checking before you enter a trade.</p>
-                    <a href="https://unusualwhales.com/flow" target="_blank" class="flow-link"><span>🐳 Unusual Whales — Live Options Flow</span><span>→</span></a>
-                    <a href="https://unusualwhales.com/flow?ticker=NVDA" target="_blank" class="flow-link"><span>📊 NVDA Flow</span><span>→</span></a>
-                    <a href="https://unusualwhales.com/flow?ticker=SPY" target="_blank" class="flow-link"><span>📊 SPY Flow</span><span>→</span></a>
-                    <a href="https://marketchameleon.com/volReports/OptionsFlowAlerts/" target="_blank" class="flow-link"><span>🦎 Market Chameleon — Flow Alerts</span><span>→</span></a>
-                    <a href="https://www.barchart.com/options/unusual-activity/stocks" target="_blank" class="flow-link"><span>📉 Barchart — Unusual Options Activity</span><span>→</span></a>
-                    <a href="https://finviz.com/screener.ashx?v=111&s=ta_unusualvolume&f=sec_technology" target="_blank" class="flow-link"><span>🔥 Finviz — Unusual Volume (Tech)</span><span>→</span></a>
-                    <a href="https://unusualwhales.com/politicians" target="_blank" class="flow-link"><span>🏛️ Congress Trades</span><span>→</span></a>
-                    <div class="tip tip-blue"><strong>What to look for:</strong> Large call purchases on your watchlist = bullish signal. Large put purchases = bearish. If big money buys calls on NVDA, pay attention.</div>
+                <!-- Sub-tabs -->
+                <div class="flow-tabs">
+                    <button class="flow-tab-btn active" id="ftb-congress" onclick="switchFlowTab('congress')">🏛️ Congress Trades</button>
+                    <button class="flow-tab-btn" id="ftb-decode" onclick="switchFlowTab('decode')">🔍 Decode a Trade</button>
+                    <button class="flow-tab-btn" id="ftb-links" onclick="switchFlowTab('links')">📊 Flow Links</button>
+                </div>
+
+                <!-- CONGRESS TRADES -->
+                <div class="flow-panel active" id="fpanel-congress">
+                    <div class="panel-scroll">
+                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+                            <div>
+                                <div style="font-size:13px;font-weight:700">Recent House &amp; Senate Trades</div>
+                                <div style="font-size:11px;color:var(--muted);margin-top:2px">Official disclosure data — last 90 days</div>
+                            </div>
+                            <button class="scan-btn" onclick="loadCongressTrades()" id="congressLoadBtn" style="padding:7px 14px;font-size:12px">
+                                <span>⚡</span><span>Load Trades</span>
+                            </button>
+                        </div>
+                        <div id="congressOutput">
+                            <div class="empty-state" style="padding:30px 10px">
+                                <div class="empty-icon">🏛️</div>
+                                <div class="empty-title">Congress Trade Disclosures</div>
+                                <div class="empty-sub">Hit "Load Trades" to pull the latest House &amp; Senate stock disclosures and get AI interpretation.</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- DECODE A TRADE -->
+                <div class="flow-panel" id="fpanel-decode">
+                    <div class="panel-scroll">
+                        <div style="margin-bottom:14px">
+                            <div style="font-size:13px;font-weight:700;margin-bottom:4px">🔍 Decode Any Trade</div>
+                            <div style="font-size:11px;color:var(--muted);line-height:1.6">Paste in anything — an Unusual Whales alert, a Congress disclosure, a news headline about a big options bet. Claude will break it down in plain English.</div>
+                        </div>
+                        <textarea id="decodeInput" placeholder="Examples:&#10;• NVDA $150C 6/20 50k contracts sweep bullish&#10;• Nancy Pelosi bought NVDA calls $50k-100k Jan 15&#10;• SPY unusual put activity 200k contracts expiring this Friday&#10;• Berkshire bought $500M of AAPL last quarter" style="width:100%;height:120px;background:var(--bg3);border:1px solid var(--border);border-radius:8px;color:var(--text);padding:10px 12px;font-size:12px;font-family:inherit;resize:none;outline:none;line-height:1.6;margin-bottom:10px"></textarea>
+                        <button class="scan-btn" onclick="decodeTrade()" id="decodeBtn" style="width:100%;justify-content:center;margin-bottom:16px">
+                            <span>🤖</span><span>Decode This Trade</span>
+                        </button>
+                        <div id="decodeOutput"></div>
+                    </div>
+                </div>
+
+                <!-- FLOW LINKS -->
+                <div class="flow-panel" id="fpanel-links">
+                    <div class="panel-scroll">
+                        <p style="font-size:12px;color:var(--muted);margin-bottom:14px;line-height:1.6">Live options flow sites — open them, spot a big trade, then paste it into the <strong style="color:var(--text)">Decode a Trade</strong> tab to get AI interpretation.</p>
+                        <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-bottom:8px">Options Flow</div>
+                        <a href="https://unusualwhales.com/flow" target="_blank" class="flow-link"><span>🐳 Unusual Whales — Live Options Flow</span><span>→</span></a>
+                        <a href="https://www.barchart.com/options/unusual-activity/stocks" target="_blank" class="flow-link"><span>📉 Barchart — Unusual Options Activity</span><span>→</span></a>
+                        <a href="https://marketchameleon.com/volReports/OptionsFlowAlerts/" target="_blank" class="flow-link"><span>🦎 Market Chameleon — Flow Alerts</span><span>→</span></a>
+                        <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin:14px 0 8px">Screeners</div>
+                        <a href="https://finviz.com/screener.ashx?v=111&s=ta_unusualvolume&f=sec_technology" target="_blank" class="flow-link"><span>🔥 Finviz — Unusual Volume (Tech)</span><span>→</span></a>
+                        <a href="https://finviz.com/screener.ashx?v=111&o=-volume&f=sec_technology" target="_blank" class="flow-link"><span>📊 Finviz — Top Tech Volume</span><span>→</span></a>
+                        <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin:14px 0 8px">Congress</div>
+                        <a href="https://unusualwhales.com/politicians" target="_blank" class="flow-link"><span>🏛️ Unusual Whales — Congress Tracker</span><span>→</span></a>
+                        <a href="https://efts.sec.gov/LATEST/search-index?q=%22form+4%22&dateRange=custom&startdt=2024-01-01&enddt=2024-12-31" target="_blank" class="flow-link"><span>📋 SEC Form 4 — Insider Filings</span><span>→</span></a>
+                        <div class="tip tip-blue" style="margin-top:14px"><strong>Tip:</strong> Copy any trade you see from these sites and paste it into the Decode tab — Claude will tell you if it's worth following.</div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -1605,6 +1692,160 @@ Return ONLY a JSON object with these exact keys (no markdown, raw JSON only):
     btn.disabled=false; btn.textContent='⚡ Run Full Analysis';
 }
 
+// ── NEWS & FLOW INTELLIGENCE ──────────────────────────────────
+function switchFlowTab(key){
+    document.querySelectorAll('.flow-tab-btn').forEach(b=>b.classList.remove('active'));
+    document.querySelectorAll('.flow-panel').forEach(p=>p.classList.remove('active'));
+    document.getElementById('ftb-'+key).classList.add('active');
+    document.getElementById('fpanel-'+key).classList.add('active');
+}
+
+async function loadCongressTrades(){
+    const btn=document.getElementById('congressLoadBtn');
+    const out=document.getElementById('congressOutput');
+    btn.disabled=true; btn.innerHTML='<span>⏳</span><span>Loading...</span>';
+    out.innerHTML=`<div class="loading-state" style="padding:30px 10px"><div class="spinner"></div><div class="loading-text">Pulling House & Senate disclosures...</div></div>`;
+    try{
+        const r=await fetch('/api/congress');
+        const data=await r.json();
+        if(data.error) throw new Error(data.error);
+        const trades=data.trades||[];
+        if(!trades.length){ out.innerHTML=`<div class="empty-state" style="padding:20px"><div class="empty-sub">No recent trades found.</div></div>`; return; }
+
+        // Render trade cards
+        out.innerHTML=`
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+                <div style="font-size:11px;color:var(--muted)">${trades.length} disclosures in last 90 days</div>
+                <button class="scan-btn" onclick="interpretCongressTrades()" id="interpretBtn" style="padding:6px 12px;font-size:11px">
+                    <span>🤖</span><span>AI Interpret Top Trades</span>
+                </button>
+            </div>
+            <div id="ctAiOutput"></div>
+            ${trades.map(t=>{
+                const isBuy=(t.type||'').toLowerCase().includes('purchase')||(t.type||'').toLowerCase().includes('buy');
+                const typeClass=isBuy?'ct-buy-badge':'ct-sell-badge';
+                const typeLabel=isBuy?'BUY':'SELL';
+                const cardClass=isBuy?'buy':'sell';
+                const chamberClass=t.chamber==='Senate'?'ct-senate':'ct-house';
+                const tradeDate=t.trade_date?new Date(t.trade_date).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):'';
+                const discDate=t.disclosure_date?new Date(t.disclosure_date).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):'';
+                return`<div class="ct-card ${cardClass}">
+                    <div class="ct-top">
+                        <div>
+                            <span class="ct-ticker">${t.ticker}</span>
+                            <span class="ct-type ${typeClass}" style="margin-left:8px">${typeLabel}</span>
+                        </div>
+                        <div style="text-align:right">
+                            <div style="font-size:12px;font-weight:700;color:var(--text)">${t.amount}</div>
+                        </div>
+                    </div>
+                    <div style="display:flex;align-items:center;gap:6px;margin-bottom:5px">
+                        <span class="ct-member">${t.member}</span>
+                        <span class="ct-chamber ${chamberClass}">${t.chamber}</span>
+                        ${t.party?`<span style="font-size:10px;color:var(--muted)">(${t.party})</span>`:''}
+                    </div>
+                    ${t.asset?`<div class="ct-asset">${t.asset}</div>`:''}
+                    <div class="ct-meta" style="margin-top:5px">
+                        ${tradeDate?`<span>Traded: ${tradeDate}</span>`:''}
+                        ${discDate?`<span>Disclosed: ${discDate}</span>`:''}
+                    </div>
+                </div>`;
+            }).join('')}`;
+        // Store trades for AI interpretation
+        window._congressTrades = trades;
+    }catch(e){
+        out.innerHTML=`<div style="font-size:12px;color:var(--red);padding:8px">Error: ${e.message}</div>`;
+    }
+    btn.disabled=false; btn.innerHTML='<span>⚡</span><span>Refresh</span>';
+}
+
+async function interpretCongressTrades(){
+    const btn=document.getElementById('interpretBtn');
+    const out=document.getElementById('ctAiOutput');
+    if(!window._congressTrades||!window._congressTrades.length) return;
+    btn.disabled=true; btn.innerHTML='<span>⏳</span><span>Analyzing...</span>';
+    out.innerHTML=`<div class="loading-state" style="padding:20px 10px"><div class="spinner"></div><div class="loading-text">Claude is reading the trades...</div></div>`;
+    try{
+        const exp=getExpiryContext();
+        const summary=window._congressTrades.slice(0,30).map(t=>
+            `${t.member} (${t.chamber}${t.party?' '+t.party:''}): ${t.type} ${t.ticker} ${t.amount} on ${t.trade_date}`
+        ).join('\n');
+        const prompt=`You are a financial analyst helping a beginner options trader with a $500 account. Today is ${exp.today}.
+
+Here are recent US Congress stock trade disclosures (last 90 days):
+${summary}
+
+Analyze these trades and answer 3 things in plain English:
+1. Which 3-5 tickers are getting the most congressional buying attention and why it might matter
+2. Any patterns or themes — is there a sector or theme multiple members are betting on?
+3. For each of the top mentioned tickers, is this worth looking at for a short-term options trade (1-3 months) on a $500 account, and what's the risk?
+
+Be direct, use plain English, no jargon. Format with clear sections using ### headers. Keep it practical for someone new to trading.`;
+        const raw=await callClaude(prompt);
+        out.innerHTML=`<div class="decode-card" style="margin-bottom:16px">
+            <div class="decode-head">
+                <div>
+                    <div style="font-size:13px;font-weight:700">🤖 AI Analysis — Congressional Trading Patterns</div>
+                    <div style="font-size:11px;color:var(--muted);margin-top:2px">Based on ${window._congressTrades.length} recent disclosures</div>
+                </div>
+            </div>
+            <div class="decode-body">
+                <div class="decode-section">${fmt_agent(raw)}</div>
+            </div>
+        </div>`;
+    }catch(e){
+        out.innerHTML=`<div style="font-size:12px;color:var(--red);padding:8px">Error: ${e.message}</div>`;
+    }
+    btn.disabled=false; btn.innerHTML='<span>🤖</span><span>AI Interpret Top Trades</span>';
+}
+
+async function decodeTrade(){
+    const input=document.getElementById('decodeInput').value.trim();
+    if(!input){alert('Paste a trade first.');return;}
+    const btn=document.getElementById('decodeBtn');
+    const out=document.getElementById('decodeOutput');
+    btn.disabled=true; btn.innerHTML='<span>⏳</span><span>Decoding...</span>';
+    out.innerHTML=`<div class="loading-state" style="padding:20px 10px"><div class="spinner"></div><div class="loading-text">Claude is reading this trade...</div></div>`;
+    try{
+        const exp=getExpiryContext();
+        const prompt=`You are a trading analyst helping a beginner options trader with a $500 account. Today is ${exp.today}.
+
+The user found this trade and wants to understand it:
+"${input}"
+
+Break it down in plain English across these 5 areas:
+
+1. WHAT IS THIS: What kind of trade is this? (Congress disclosure, unusual options flow, insider buy, institutional bet, etc.) Who made it and what exactly did they do?
+
+2. WHAT ARE THEY BETTING ON: What is the trader expecting to happen? Is this bullish (betting price goes up) or bearish (betting price goes down)? How strong is the conviction?
+
+3. WHY THEY MIGHT HAVE DONE IT: What could be the reasoning? Any upcoming catalysts, earnings, sector trends, or political reasons?
+
+4. SHOULD YOU FOLLOW IT: Is this worth looking into for a $500 account trading 1-3 month options? What's the opportunity and what's the risk of copying this trade?
+
+5. WHAT TO WATCH: If you were going to act on this signal, what would you want to see confirmed first before entering a trade? What price level or event would validate it?
+
+Use plain English. Be honest about risks. No jargon.`;
+        const raw=await callClaude(prompt);
+        // Parse sections from response
+        out.innerHTML=`<div class="decode-card">
+            <div class="decode-head">
+                <div class="decode-signal">🔍</div>
+                <div>
+                    <div style="font-size:13px;font-weight:700">Trade Decoded</div>
+                    <div style="font-size:11px;color:var(--muted);margin-top:2px;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">"${input.slice(0,60)}${input.length>60?'...':''}"</div>
+                </div>
+            </div>
+            <div class="decode-body">
+                <div class="decode-section">${fmt_agent(raw)}</div>
+            </div>
+        </div>`;
+    }catch(e){
+        out.innerHTML=`<div style="font-size:12px;color:var(--red);padding:8px">Error: ${e.message}</div>`;
+    }
+    btn.disabled=false; btn.innerHTML='<span>🤖</span><span>Decode This Trade</span>';
+}
+
 // ── TRADINGVIEW ───────────────────────────────────────────────
 let curTicker='NVDA';
 function tv(id,src,cfg){
@@ -1612,7 +1853,7 @@ function tv(id,src,cfg){
     el.innerHTML='';
     const w=document.createElement('div');w.style.cssText='height:100%;width:100%;';
     const inner=document.createElement('div');inner.className='tradingview-widget-container__widget';inner.style.cssText='height:100%;width:100%;';
-    const s=document.createElement('script');s.src=src;s.async=true;s.innerHTML=JSON.stringify(cfg);
+    const s=document.createElement('script');s.src=src;s.async=true;s.text=JSON.stringify(cfg);
     w.appendChild(inner);w.appendChild(s);el.appendChild(w);
 }
 function loadChart(sym){
