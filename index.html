@@ -360,6 +360,79 @@
         .expiry-tab:last-child { border-right:none; }
         .expiry-tab:hover { background:var(--bg2); color:var(--text); }
         .expiry-tab.active { background:var(--blue); color:#000; }
+
+        /* ── CALL/PUT DIRECTION TOGGLE ── */
+        .dir-toggle-wrap { padding:10px 16px 8px; border-bottom:1px solid var(--border); }
+        .dir-toggle { display:flex; border:1px solid var(--border); border-radius:7px; overflow:hidden; }
+        .dir-tab { flex:1; padding:7px 8px; font-size:12px; font-weight:700; text-align:center; cursor:pointer; border:none; background:var(--bg3); color:var(--muted); transition:all .15s; }
+        .dir-tab:hover { opacity:.85; }
+        .dir-tab:first-child { border-right:1px solid var(--border); }
+        .dir-tab.active-call { background:rgba(63,185,80,.18); color:var(--green); border-color:rgba(63,185,80,.3); }
+        .dir-tab.active-put  { background:rgba(248,81,73,.15);  color:var(--red);   border-color:rgba(248,81,73,.25); }
+
+        /* ── MOBILE — iPhone ── */
+        @media (max-width:640px){
+            body { overflow:hidden; }
+
+            /* Header */
+            .header { padding:0 10px; height:44px; gap:8px; }
+            .logo { font-size:13px; }
+            .tape { display:none; }
+            .last-updated { display:none; }
+            .clock { font-size:11px; }
+            .market-pill { font-size:10px; padding:2px 7px; }
+
+            /* Nav — horizontal scroll */
+            .nav { overflow-x:auto; scrollbar-width:none; padding:0 4px; }
+            .nav::-webkit-scrollbar { display:none; }
+            .tab-btn { padding:10px 10px; font-size:12px; }
+
+            /* Today's Ideas */
+            .ideas-wrap { padding:12px; }
+            .search-row { gap:6px; }
+            .search-input { font-size:13px; padding:9px 12px; }
+            .search-btn { padding:9px 14px; font-size:12px; white-space:nowrap; }
+            .scan-row { flex-direction:column; align-items:flex-start; gap:8px; }
+            .scan-row > div:last-child { width:100%; display:flex; justify-content:space-between; }
+            .filter-bar { gap:6px; }
+            .filter-pill { padding:6px 12px; font-size:11px; }
+
+            /* Cards — single column */
+            .ideas-grid { grid-template-columns:1fr; }
+
+            /* Card internals */
+            .dir-toggle-wrap { padding:8px 12px 6px; }
+            .card-head { padding:10px 12px 8px; }
+            .card-ticker { font-size:18px; }
+            .card-summary { padding:0 12px 10px; font-size:12px; }
+            .card-levels { padding:10px 12px; gap:8px; }
+            .card-option { padding:10px 12px; }
+            .card-account { padding:10px 12px; }
+            .card-footer { padding:8px 12px; }
+            .expiry-tabs-wrap { padding:0 12px 10px; }
+            .expiry-tab { font-size:10px; padding:6px 5px; }
+
+            /* News & Flow — stack panels */
+            .two-col { grid-template-columns:1fr; grid-template-rows:auto auto; height:auto; overflow:auto; }
+            .panel { min-height:300px; }
+
+            /* Agent/Trader Activity — single column */
+            .activity-scroll { grid-template-columns:1fr; padding:12px; }
+            .tier-grid { grid-template-columns:1fr; }
+            .verdict-levels { grid-template-columns:1fr; }
+
+            /* Journal */
+            .journal-inner { padding:12px; }
+            .j-top { gap:8px; }
+            .stats { grid-template-columns:1fr 1fr; gap:8px; }
+            .stat-val { font-size:18px; }
+            .tbl-wrap { overflow-x:auto; -webkit-overflow-scrolling:touch; }
+            .tbl { min-width:500px; }
+
+            /* Modal */
+            .modal { padding:16px; width:96vw; }
+            .mgrid { grid-template-columns:1fr; }
+        }
     </style>
 </head>
 <body>
@@ -906,16 +979,26 @@ async function callClaude(prompt){
 }
 
 // ── BUILD CARD ────────────────────────────────────────────────
-function buildCard(idea){
-    const cardId = 'c' + (++_cardIdCounter);
-    window._cardData[cardId] = idea;
+function buildCard(idea, existingCardId=null){
+    const cardId = existingCardId || ('c' + (++_cardIdCounter));
+    const optType=(idea.option_type||'CALL').toUpperCase();
+    const activeDir = optType === 'PUT' ? 'put' : 'call';
+
+    // Initialize or update card data store (preserve other direction if re-using cardId)
+    if (!window._cardData[cardId]) {
+        window._cardData[cardId] = { call:null, put:null, ticker:idea.ticker, current_price:idea.current_price, price_change:idea.price_change };
+    }
+    window._cardData[cardId][activeDir]      = idea;
+    window._cardData[cardId].activeDir       = activeDir;
+    window._cardData[cardId].ticker          = idea.ticker;
+    window._cardData[cardId].current_price   = idea.current_price;
+    window._cardData[cardId].price_change    = idea.price_change;
 
     const dir=(idea.direction||'bullish').toLowerCase();
     const chg=parseFloat(idea.price_change||0);
     const chgHtml=chg>=0?`<div class="card-change up">▲ ${Math.abs(chg).toFixed(2)}%</div>`:`<div class="card-change down">▼ ${Math.abs(chg).toFixed(2)}%</div>`;
     const confCls=idea.confidence==='high'?'ch':idea.confidence==='low'?'cl':'cm';
     const confLbl=idea.confidence==='high'?'🟢 High Confidence':idea.confidence==='low'?'🔴 Low Confidence':'🟡 Medium Confidence';
-    const optType=(idea.option_type||'CALL').toUpperCase();
 
     // Expiry options — use first slot for initial display if available
     const hasExpiry = idea.expiry_options && idea.expiry_options.length >= 2;
@@ -941,6 +1024,14 @@ function buildCard(idea){
     // Category label (for discover cards)
     const catHtml=idea.category?`<div class="card-category">${idea.category}</div>`:'';
 
+    // Direction toggle — lets user flip to the other direction
+    const dirToggleHtml=`<div class="dir-toggle-wrap">
+        <div class="dir-toggle">
+            <div class="dir-tab${activeDir==='call'?' active-call':''}" onclick="switchCardDir('${cardId}','call')">📈 CALL</div>
+            <div class="dir-tab${activeDir==='put'?' active-put':''}" onclick="switchCardDir('${cardId}','put')">📉 PUT</div>
+        </div>
+    </div>`;
+
     // Expiry tabs HTML
     const expiryHtml = hasExpiry ? `<div class="expiry-tabs-wrap">
         <div class="expiry-tabs-lbl">EXPIRATION — tap to compare timeframes</div>
@@ -949,7 +1040,8 @@ function buildCard(idea){
         </div>
     </div>` : '';
 
-    return`<div class="idea-card ${dir}">
+    return`<div id="cwrap-${cardId}"><div class="idea-card ${dir}">
+        ${dirToggleHtml}
         <div class="card-head">
             <div><div class="card-ticker">${idea.ticker}</div><div class="card-company">${idea.company||''}</div></div>
             <div class="card-price-row">
@@ -987,7 +1079,7 @@ function buildCard(idea){
             <div class="conf ${confCls}">${confLbl}</div>
             <div class="rr">R:R ${idea.risk_reward||'—'}</div>
         </div>
-    </div>`;
+    </div></div>`;
 }
 
 // ── EXPIRY DATE HELPER ────────────────────────────────────────
@@ -1198,6 +1290,69 @@ function switchCardExpiry(cardId, idx){
         pb.className='pot-badge '+potCls;
         pb.textContent=potLbl;
     }
+}
+
+// ── CALL/PUT DIRECTION SWITCHER ───────────────────────────────
+async function switchCardDir(cardId, dir){
+    const data = window._cardData[cardId];
+    if (!data || data.activeDir === dir) return;
+
+    if (data[dir]) {
+        // Already cached — just re-render in place
+        const wrap = document.getElementById('cwrap-'+cardId);
+        if (wrap) wrap.outerHTML = buildCard(data[dir], cardId);
+        return;
+    }
+
+    // Not cached — fetch from Claude
+    const wrap = document.getElementById('cwrap-'+cardId);
+    const dirLabel = dir==='call' ? '📈 CALL' : '📉 PUT';
+    if (wrap) wrap.innerHTML = `<div style="background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:28px;text-align:center">
+        <div class="spinner" style="margin:0 auto 12px"></div>
+        <div style="font-size:12px;color:var(--muted)">Analyzing ${dirLabel} for ${data.ticker}...</div>
+    </div>`;
+
+    try {
+        const price = parseFloat(data.current_price||0);
+        const pchg  = parseFloat(data.price_change||0);
+        const raw = await callClaude(singleDirPrompt(data.ticker, price, pchg, dir.toUpperCase()));
+        const idea = JSON.parse(stripJSON(raw));
+        data[dir] = idea;
+        const wrap2 = document.getElementById('cwrap-'+cardId);
+        if (wrap2) wrap2.outerHTML = buildCard(idea, cardId);
+    } catch(e) {
+        const wrap2 = document.getElementById('cwrap-'+cardId);
+        if (wrap2) wrap2.innerHTML = `<div style="background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:16px">
+            <div style="font-size:12px;color:var(--red);margin-bottom:8px">Could not load ${dirLabel}: ${e.message}</div>
+            <button onclick="switchCardDir('${cardId}','${dir}')" style="background:var(--bg3);border:1px solid var(--border);color:var(--text);border-radius:5px;padding:5px 12px;font-size:12px;cursor:pointer">Retry</button>
+        </div>`;
+    }
+}
+
+// ── SINGLE-DIRECTION ANALYSIS PROMPT ─────────────────────────
+function singleDirPrompt(ticker, price, priceChange, optType){
+    const isPut = optType === 'PUT';
+    const exp = getExpiryContext();
+    const priceStr = (typeof price === 'number' ? price.toFixed(2) : parseFloat(price||0).toFixed(2));
+    const chgStr   = (priceChange>=0?'+':'')+parseFloat(priceChange||0).toFixed(2)+'%';
+    return `You are a trading analyst helping a beginner options trader with a $500 account. Max loss per trade: $75 (15% rule). Today: ${exp.today}.
+
+Live data for ${ticker}: $${priceStr} (${chgStr} today)
+
+Analyze this as a ${isPut?'PUT (bearish — expecting price to fall)':'CALL (bullish — expecting price to rise)'} options trade.
+${isPut?'Identify downside catalysts, weak technicals, and reasons to expect a drop.':'Identify upside catalysts, strong technicals, and reasons to expect a rise.'}
+
+Return ONLY a raw JSON object. No markdown. No code fences.
+
+Required keys:
+ticker, company, current_price (number), price_change (number), direction ("${isPut?'bearish':'bullish'}"), summary (1-2 plain English sentences — why this ${isPut?'PUT':'CALL'} setup makes sense), pros (array of 2 strings), cons (array of 1 string — the main risk), potential ("high"/"moderate"/"avoid"), entry_low (number), entry_high (number), stop_loss (number), target (number), option_type ("${optType}"), option_detail (same as expiry_options[0].option_detail for compat), account_sizing (same as expiry_options[0].account_sizing), confidence ("high"/"medium"/"low"), risk_reward (string e.g. "1:2"),
+expiry_options (array of EXACTLY 3 objects — each with its own strikes, expiry date, and price levels):
+  [0] {"label":"1 Mo · Aggressive",   "entry_low":number, "entry_high":number, "stop_loss":number, "target":number, "option_detail":"$X ${optType} · Expires [options Friday around ${exp.aggressive}] · Est. $X.XX/contract",  "account_sizing":"1 sentence: how many contracts, total cost, fits $75 max risk", "potential":"high"/"moderate"/"avoid"}
+  [1] {"label":"3 Mo · Moderate",     "entry_low":number, "entry_high":number, "stop_loss":number, "target":number, "option_detail":"$X ${optType} · Expires [options Friday around ${exp.conservative}] · Est. $X.XX/contract", "account_sizing":"1 sentence: how many contracts, total cost, fits $75 max risk", "potential":"high"/"moderate"/"avoid"}
+  [2] {"label":"6 Mo · Conservative", "entry_low":number, "entry_high":number, "stop_loss":number, "target":number, "option_detail":"$X ${optType} · Expires [options Friday around ${exp.sixMonth}] · Est. $X.XX/contract",     "account_sizing":"1 sentence: how many contracts, total cost, fits $75 max risk", "potential":"high"/"moderate"/"avoid"}
+Use DIFFERENT strikes and expiry Fridays for each. 1-month: tighter stop, closer target. 6-month: wider stop, larger target.
+
+Raw JSON only. Nothing else.`;
 }
 
 // ── FILTER FUNCTIONS ──────────────────────────────────────────
@@ -1417,22 +1572,38 @@ async function analyzeSingle(){
     btn.disabled=true; btn.textContent='Analyzing...';
     const out=document.getElementById('singleResult');
     out.style.display='block';
-    out.innerHTML=`<div class="loading-state"><div class="spinner"></div><div class="loading-text">Pulling data for ${ticker}...</div></div>`;
+    out.innerHTML=`<div class="loading-state"><div class="spinner"></div><div class="loading-text">Fetching CALL & PUT analysis for ${ticker}...</div></div>`;
     try{
         const q=await fetchQuote(ticker);
         if(!q)throw new Error(`Couldn't find data for "${ticker}" — double-check the ticker symbol.`);
-        const prompt=`You are a trading analyst helping a beginner with a $500 account who trades 1-3 month options. Her rule: never lose more than 15% of her account ($75 max) per trade.
 
-Live data for ${ticker}: $${q.price.toFixed(2)} (${q.chg>=0?'+':''}${q.chg.toFixed(2)}% today), recent closes: ${q.closes.slice(-5).map(p=>p?'$'+p.toFixed(0):'—').join(', ')}
+        // Fetch both CALL and PUT in parallel with expiry tabs
+        const [callRaw, putRaw] = await Promise.all([
+            callClaude(singleDirPrompt(ticker, q.price, q.chg, 'CALL')),
+            callClaude(singleDirPrompt(ticker, q.price, q.chg, 'PUT'))
+        ]);
 
-Return ONLY a raw JSON object with these exact keys: ticker, company, current_price, price_change, direction, summary, pros (array of 2-3 strings — reasons this trade looks good), cons (array of 2 strings — honest risks), potential ("high"/"moderate"/"avoid"), entry_low, entry_high, stop_loss (set so max loss ≤15% from entry), target, option_type, option_detail, account_sizing (keep risk under $75), confidence, risk_reward.
+        let callIdea=null, putIdea=null;
+        try{ callIdea=JSON.parse(stripJSON(callRaw)); }catch(e){}
+        try{ putIdea =JSON.parse(stripJSON(putRaw));  }catch(e){}
 
-Raw JSON only. No markdown. No code fences.`;
-        const raw=await callClaude(prompt);
-        let idea;
-        try{idea=JSON.parse(stripJSON(raw));}
-        catch(e){throw new Error('Could not parse analysis — try again.');}
-        out.innerHTML=`<div style="margin-bottom:8px;font-size:12px;color:var(--muted)">Analysis for <strong style="color:var(--text)">${ticker}</strong>:</div><div class="ideas-grid">${buildCard(idea)}</div>`;
+        if(!callIdea && !putIdea) throw new Error('Could not parse analysis — try again.');
+
+        // Pre-create cardId and populate both directions before rendering
+        const cardId = 'c' + (++_cardIdCounter);
+        window._cardData[cardId] = {
+            call: callIdea,
+            put:  putIdea,
+            ticker,
+            current_price: q.price,
+            price_change:  q.chg,
+            activeDir: 'call'
+        };
+
+        // Render starting with CALL (or PUT if call failed)
+        const displayIdea = callIdea || putIdea;
+        out.innerHTML=`<div style="margin-bottom:8px;font-size:12px;color:var(--muted)">Analysis for <strong style="color:var(--text)">${ticker}</strong> — both CALL & PUT ready, use toggle to switch:</div><div class="ideas-grid">${buildCard(displayIdea, cardId)}</div>`;
+
         const now=new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'});
         document.getElementById('lastUpdated').textContent=`Updated ${now}`;
     }catch(e){
