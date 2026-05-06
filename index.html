@@ -385,7 +385,7 @@
                     <div class="discover-header">
                         <div>
                             <div class="discover-title">🔍 Beyond Your Watchlist</div>
-                            <div class="discover-sub">Cheap gems, momentum movers, and what people are buying — outside your usual picks</div>
+                            <div class="discover-sub">Call plays, put plays, and everything in between — outside your usual picks</div>
                         </div>
                     </div>
                     <div id="discoverOutput">
@@ -744,54 +744,78 @@ function resetWatchlist(){
 }
 
 // ── SCAN WATCHLIST ────────────────────────────────────────────
-async function scanWatchlist(){
-    const btn=document.getElementById('scanBtn');
-    btn.disabled=true; btn.innerHTML='<span>⏳</span><span>Scanning...</span>';
-    document.getElementById('ideasOutput').innerHTML=`<div class="loading-state"><div class="spinner"></div><div class="loading-text">Pulling live prices and finding your best setups...</div></div>`;
-    try{
-        const rawQuotes=await Promise.all(WATCHLIST.map(fetchQuote));
-        const quotes=rawQuotes.filter(Boolean);
-        const hasPrices=quotes.length>0;
-        const priceData=hasPrices
-            ?quotes.map(q=>`${q.ticker}: $${q.price.toFixed(2)} (${q.chg>=0?'+':''}${q.chg.toFixed(2)}% today)`).join('\n')
-            :WATCHLIST.join(', ')+' — use your latest knowledge of these stocks';
-        const prompt=`You are a trading analyst helping a beginner options trader with a $500 account who trades 1-3 month options on tech stocks. Her rule: never lose more than 15% of her account ($75 max) per trade.
+// Shared prompt builder for watchlist scan — pass "CALL" or "PUT"
+function watchlistScanPrompt(priceData, optionType){
+    const isPut = optionType === 'PUT';
+    return `You are a trading analyst helping a beginner options trader with a $500 account who trades 1-3 month options on tech stocks. Her rule: never lose more than 15% of her account ($75 max) per trade.
 
 Live price data:
 ${priceData}
 
-Find the TOP 3 best trade setups right now from this watchlist. Return ONLY a raw JSON array — no markdown, no code fences, just the array.
+Find the TOP 3 best ${isPut ? 'PUT (bearish/short) trade setups' : 'CALL (bullish) trade setups'} right now from this watchlist.
+${isPut ? 'Look for: stocks that are overextended, showing weakness, breaking down, bad news, sector headwinds, or strong downside momentum.' : 'Look for: stocks with bullish momentum, strong technicals, positive catalysts, or clear upside setups.'}
 
-Each object needs these exact keys:
-- ticker (string)
-- company (string, full name)
-- current_price (number)
-- price_change (number, today's % change)
-- direction ("bullish" or "bearish")
-- summary (string, 1-2 sentences plain English — no jargon, like explaining to someone who just started trading)
-- pros (array of 2-3 strings — specific reasons this trade looks good right now)
-- cons (array of 2 strings — honest risks or reasons to be careful)
-- potential ("high", "moderate", or "avoid")
-- entry_low (number)
-- entry_high (number)
-- stop_loss (number — set so max loss stays within 15% of entry)
-- target (number)
-- option_type ("CALL" or "PUT")
-- option_detail (string, e.g. "$125 Call · Expires ~Jul 18 · Est. $1.00–$2.00/contract")
-- account_sizing (string, specific advice for a $500 account — keep risk under $75)
-- confidence ("high", "medium", or "low")
-- risk_reward (string, e.g. "1:2.5")
+Return ONLY a raw JSON array of exactly 3 objects. No markdown. No code fences. No explanation.
 
-Return raw JSON array only. No markdown. No code fences.`;
-        const raw=await callClaude(prompt);
-        let ideas;
-        try{ideas=JSON.parse(stripJSON(raw));}
-        catch(e){throw new Error('Could not read trade ideas — try scanning again.');}
-        document.getElementById('ideasOutput').innerHTML=`<div class="ideas-grid">${ideas.map(buildCard).join('')}</div>`;
+Each object must have these exact keys:
+ticker, company, current_price (number), price_change (number), direction ("${isPut?'bearish':'bullish'}"), summary (1-2 plain English sentences — why this ${isPut?'PUT':'CALL'} setup makes sense right now, no jargon), pros (array of exactly 2 strings — reasons this trade looks good), cons (array of exactly 1 string — the main risk), potential ("high" or "moderate" or "avoid"), entry_low (number), entry_high (number), stop_loss (number — for puts, stop if stock bounces above this price), target (number — for puts, your downside price target), option_type ("${optionType}"), option_detail (short string e.g. "$120 Put · Expires ~Aug 15 · Est. $1.50/contract"), account_sizing (one sentence for a $500 account, keep risk under $75), confidence ("high" or "medium" or "low"), risk_reward (string e.g. "1:2")
+
+Raw JSON array only. Nothing else.`;
+}
+
+async function scanWatchlist(){
+    const btn=document.getElementById('scanBtn');
+    btn.disabled=true; btn.innerHTML='<span>⏳</span><span>Scanning...</span>';
+    // Show loading placeholders for both sections immediately
+    document.getElementById('ideasOutput').innerHTML=`
+        <div id="calls-section">
+            <div class="d-cat-label" style="margin-bottom:12px">📈 CALL IDEAS — Bullish Setups</div>
+            <div class="loading-state"><div class="spinner"></div><div class="loading-text">Finding bullish setups...</div></div>
+        </div>
+        <div id="puts-section" style="margin-top:28px">
+            <div class="d-cat-label" style="margin-bottom:12px">📉 PUT IDEAS — Bearish Setups</div>
+            <div class="loading-state"><div class="spinner"></div><div class="loading-text">Finding bearish setups...</div></div>
+        </div>`;
+    try{
+        const rawQuotes=await Promise.all(WATCHLIST.map(fetchQuote));
+        const quotes=rawQuotes.filter(Boolean);
+        const priceData=quotes.length>0
+            ?quotes.map(q=>`${q.ticker}: $${q.price.toFixed(2)} (${q.chg>=0?'+':''}${q.chg.toFixed(2)}% today)`).join('\n')
+            :WATCHLIST.join(', ')+' — use your latest knowledge of these stocks';
+
+        // Run calls and puts in parallel
+        const [callsRaw, putsRaw] = await Promise.all([
+            callClaude(watchlistScanPrompt(priceData,'CALL')),
+            callClaude(watchlistScanPrompt(priceData,'PUT'))
+        ]);
+
+        // Render calls
+        try{
+            const calls=JSON.parse(stripJSON(callsRaw));
+            document.getElementById('calls-section').innerHTML=`
+                <div class="d-cat-label" style="margin-bottom:12px">📈 CALL IDEAS — Bullish Setups</div>
+                <div class="ideas-grid">${calls.map(buildCard).join('')}</div>`;
+        }catch(e){
+            document.getElementById('calls-section').innerHTML=`
+                <div class="d-cat-label" style="margin-bottom:12px">📈 CALL IDEAS — Bullish Setups</div>
+                <div class="empty-sub" style="color:var(--muted);font-size:12px">Could not load — try scanning again.</div>`;
+        }
+
+        // Render puts
+        try{
+            const puts=JSON.parse(stripJSON(putsRaw));
+            document.getElementById('puts-section').innerHTML=`
+                <div class="d-cat-label" style="margin-bottom:12px">📉 PUT IDEAS — Bearish Setups</div>
+                <div class="ideas-grid">${puts.map(buildCard).join('')}</div>`;
+        }catch(e){
+            document.getElementById('puts-section').innerHTML=`
+                <div class="d-cat-label" style="margin-bottom:12px">📉 PUT IDEAS — Bearish Setups</div>
+                <div class="empty-sub" style="color:var(--muted);font-size:12px">Could not load — try scanning again.</div>`;
+        }
+
         const now=new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'});
         document.getElementById('lastScan').textContent=`Last scanned at ${now}`;
         document.getElementById('lastUpdated').textContent=`Updated ${now}`;
-        // Also kick off discover section
         scanDiscover();
     }catch(e){
         document.getElementById('ideasOutput').innerHTML=`<div class="empty-state"><div class="empty-icon">⚠️</div><div class="empty-title">Something went wrong</div><div class="empty-sub">${e.message}</div></div>`;
@@ -820,9 +844,10 @@ async function scanDiscover(){
     document.getElementById('discoverSection').style.display='block';
     // Show 3 loading placeholders immediately
     const cats=[
-        {key:'gems',      label:'💎 Cheap Gems — Solid Companies at Good Prices',       desc:'cheap stocks under $60/share that are historically strong companies currently undervalued or recovering'},
-        {key:'momentum',  label:'🚀 Momentum Movers — High Upside Right Now',            desc:'stocks showing strong recent price movement, high upside potential, and a clear trend in either direction'},
-        {key:'community', label:'🔥 Community Favorites — What People Are Buying',       desc:'stocks that retail traders and investing communities are actively buying and discussing right now'},
+        {key:'gems',      label:'💎 Cheap Gems — Solid Companies at Good Prices',       desc:'cheap stocks under $60/share that are historically strong companies currently undervalued or recovering. Return option_type as CALL and direction as bullish'},
+        {key:'momentum',  label:'🚀 Momentum Movers — High Upside Right Now',            desc:'stocks showing strong bullish momentum, high upside potential, and a clear upward trend. Return option_type as CALL and direction as bullish'},
+        {key:'community', label:'🔥 Community Favorites — What People Are Buying',       desc:'stocks that retail traders and investing communities are actively buying and discussing right now. Return option_type as CALL and direction as bullish'},
+        {key:'puts',      label:'📉 Put Plays — Companies Showing Weakness',             desc:'stocks that are showing significant weakness, breaking down technically, facing bad news or headwinds, or are overextended and due for a drop. These are PUT trade setups — looking for stocks to go DOWN. Return option_type as PUT and direction as bearish. For entry_low/entry_high put the stock price zone to enter the put. For stop set the price if stock bounces above. For target set the downside price target.'},
     ];
     document.getElementById('discoverOutput').innerHTML=cats.map(c=>`
         <div class="discover-category" id="dcat-${c.key}">
