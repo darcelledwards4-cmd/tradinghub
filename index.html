@@ -321,6 +321,7 @@
         <div class="last-updated" id="lastUpdated">Not yet updated</div>
         <div class="market-pill market-closed" id="marketPill">Checking...</div>
         <div class="clock" id="clock">--:--:-- --</div>
+        <button onclick="openSettings()" id="settingsBtn" style="background:var(--bg3);border:1px solid var(--border);color:var(--muted);border-radius:6px;padding:5px 11px;font-size:12px;cursor:pointer;transition:all .15s" title="API Key Settings">⚙️</button>
     </div>
 </div>
 
@@ -553,7 +554,32 @@
 
 <div class="disclaimer">⚠️ For educational purposes only — not financial advice. Always do your own research before trading options.</div>
 
-<!-- Modal -->
+<!-- Settings Modal -->
+<div class="overlay" id="settingsModal">
+    <div class="modal" style="width:480px">
+        <div class="modal-title">⚙️ API Key Settings</div>
+        <p style="font-size:12px;color:var(--muted);margin-bottom:16px;line-height:1.6">Your keys are saved only in <strong style="color:var(--text)">this browser</strong> — never uploaded anywhere. You only need to do this once per device.</p>
+        <div style="display:flex;flex-direction:column;gap:12px">
+            <div class="fg">
+                <label>Claude API Key</label>
+                <input type="password" id="s-claude" placeholder="sk-ant-api03-..." style="font-family:monospace;font-size:12px" />
+                <span style="font-size:10px;color:var(--muted);margin-top:3px">Get yours at <a href="https://console.anthropic.com" target="_blank" style="color:var(--blue)">console.anthropic.com</a></span>
+            </div>
+            <div class="fg">
+                <label>Finnhub API Key <span style="font-weight:400;text-transform:none;letter-spacing:0">(for live prices)</span></label>
+                <input type="password" id="s-finnhub" placeholder="your-finnhub-key" style="font-family:monospace;font-size:12px" />
+                <span style="font-size:10px;color:var(--muted);margin-top:3px">Get yours free at <a href="https://finnhub.io" target="_blank" style="color:var(--blue)">finnhub.io</a></span>
+            </div>
+        </div>
+        <div id="s-status" style="margin-top:12px;font-size:12px;display:none"></div>
+        <div class="mactions">
+            <button class="btn-cancel" onclick="closeSettings()">Cancel</button>
+            <button class="btn-save" onclick="saveSettings()">Save Keys</button>
+        </div>
+    </div>
+</div>
+
+<!-- Trade Journal Modal -->
 <div class="overlay" id="modal">
     <div class="modal">
         <div class="modal-title">Log a Trade</div>
@@ -600,12 +626,81 @@ function updateClock(){
 }
 setInterval(updateClock,1000); updateClock();
 
+// ── DEPLOYMENT MODE ───────────────────────────────────────────
+// When running on Vercel (https), API calls go through our serverless proxies.
+// Keys live in Vercel env vars — never in the browser.
+// When running locally (file:// or localhost), falls back to localStorage/config.js keys.
+const ON_VERCEL = window.location.protocol === 'https:' && window.location.hostname !== '';
+
+// Local-only key helpers (used only when running locally)
+function getClaudeKey(){
+    return localStorage.getItem('th_claude_key') ||
+        (typeof CLAUDE_API_KEY!=='undefined'&&CLAUDE_API_KEY&&!CLAUDE_API_KEY.includes('paste')?CLAUDE_API_KEY:null);
+}
+function getFinnhubKey(){
+    return localStorage.getItem('th_finnhub_key') ||
+        (typeof FINNHUB_API_KEY!=='undefined'&&FINNHUB_API_KEY&&!FINNHUB_API_KEY.includes('paste')?FINNHUB_API_KEY:null);
+}
+
+// ── SETTINGS MODAL ────────────────────────────────────────────
+function openSettings(){
+    const st=document.getElementById('s-status');
+    if(ON_VERCEL){
+        // On Vercel, keys are already embedded — just show confirmation
+        document.getElementById('s-claude').value='';
+        document.getElementById('s-claude').placeholder='Keys are stored securely on Vercel ✅';
+        document.getElementById('s-claude').disabled=true;
+        document.getElementById('s-finnhub').value='';
+        document.getElementById('s-finnhub').placeholder='Keys are stored securely on Vercel ✅';
+        document.getElementById('s-finnhub').disabled=true;
+        st.style.display='block'; st.style.color='var(--green)';
+        st.textContent='✅ Running on Vercel — API keys are embedded server-side. No action needed.';
+    } else {
+        document.getElementById('s-claude').disabled=false;
+        document.getElementById('s-finnhub').disabled=false;
+        document.getElementById('s-claude').placeholder='sk-ant-api03-...';
+        document.getElementById('s-finnhub').placeholder='your-finnhub-key';
+        document.getElementById('s-claude').value=localStorage.getItem('th_claude_key')||'';
+        document.getElementById('s-finnhub').value=localStorage.getItem('th_finnhub_key')||'';
+        st.style.display='none';
+    }
+    document.getElementById('settingsModal').classList.add('open');
+}
+function closeSettings(){ document.getElementById('settingsModal').classList.remove('open'); }
+function saveSettings(){
+    if(ON_VERCEL){ closeSettings(); return; } // Keys are server-side, nothing to save
+    const ck=document.getElementById('s-claude').value.trim();
+    const fk=document.getElementById('s-finnhub').value.trim();
+    if(!ck){alert('Claude API key is required for AI features to work.');return;}
+    localStorage.setItem('th_claude_key',ck);
+    if(fk) localStorage.setItem('th_finnhub_key',fk);
+    const st=document.getElementById('s-status');
+    st.style.display='block'; st.style.color='var(--green)';
+    st.textContent='✅ Keys saved! AI features are now active.';
+    updateSettingsBtn();
+    setTimeout(closeSettings,1500);
+}
+function updateSettingsBtn(){
+    const btn=document.getElementById('settingsBtn');
+    if(!btn) return;
+    const ok = ON_VERCEL || !!getClaudeKey();
+    btn.style.color=ok?'var(--green)':'var(--red)';
+    btn.style.borderColor=ok?'rgba(63,185,80,.3)':'rgba(248,81,73,.3)';
+    btn.title=ok?'API Keys configured ✅':'⚠️ Click to set up API keys';
+}
+document.getElementById('settingsModal').addEventListener('click',e=>{if(e.target.id==='settingsModal')closeSettings();});
+
 // ── FETCH STOCK DATA ──────────────────────────────────────────
 async function fetchQuote(ticker){
     try{
-        const key=(typeof FINNHUB_API_KEY!=='undefined'&&FINNHUB_API_KEY!=='paste-finnhub-key-here')?FINNHUB_API_KEY:null;
-        if(!key)return null;
-        const r=await fetch(`https://finnhub.io/api/v1/quote?symbol=${ticker}&token=${key}`);
+        let r;
+        if(ON_VERCEL){
+            r=await fetch(`/api/finnhub?endpoint=quote&symbol=${ticker}`);
+        } else {
+            const key=getFinnhubKey();
+            if(!key)return null;
+            r=await fetch(`https://finnhub.io/api/v1/quote?symbol=${ticker}&token=${key}`);
+        }
         const d=await r.json();
         if(!d.c||d.c===0)return null;
         return{ticker,price:d.c,chg:d.dp||0,closes:[d.pc,d.c],high52:d.h,low52:d.l,vol:0};
@@ -613,26 +708,34 @@ async function fetchQuote(ticker){
 }
 
 // ── STRIP JSON FROM CLAUDE RESPONSES ─────────────────────────
-// Claude sometimes wraps JSON in ```json ... ``` — strip all of that
 function stripJSON(raw){
-    // Remove any markdown code fences (```json, ```JSON, ```, etc.)
-    let s = raw.replace(/```[^\n]*\n?/g, '').replace(/```/g, '').trim();
-    // Find the outermost { } or [ ] and extract just that
-    const obj = s.match(/\{[\s\S]*\}/);
-    const arr = s.match(/\[[\s\S]*\]/);
-    if(obj && arr) return obj.index < arr.index ? obj[0] : arr[0];
+    let s=raw.replace(/```[^\n]*\n?/g,'').replace(/```/g,'').trim();
+    const obj=s.match(/\{[\s\S]*\}/);
+    const arr=s.match(/\[[\s\S]*\]/);
+    if(obj&&arr) return obj.index<arr.index?obj[0]:arr[0];
     return (obj||arr||[s])[0];
 }
 
 // ── CLAUDE ────────────────────────────────────────────────────
 async function callClaude(prompt){
-    const key=(typeof CLAUDE_API_KEY!=='undefined'&&CLAUDE_API_KEY!=='paste-your-key-here')?CLAUDE_API_KEY:null;
-    if(!key)throw new Error('API key not set — open config.js and paste your Claude API key.');
-    const r=await fetch('https://api.anthropic.com/v1/messages',{
-        method:'POST',
-        headers:{'Content-Type':'application/json','x-api-key':key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
-        body:JSON.stringify({model:'claude-opus-4-6',max_tokens:2048,messages:[{role:'user',content:prompt}]})
-    });
+    let r;
+    if(ON_VERCEL){
+        // Use Vercel proxy — key is server-side
+        r=await fetch('/api/claude',{
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({model:'claude-opus-4-6',max_tokens:2048,messages:[{role:'user',content:prompt}]})
+        });
+    } else {
+        // Local dev — use key from localStorage/config.js with browser direct access
+        const key=getClaudeKey();
+        if(!key)throw new Error('No Claude API key. Click ⚙️ in the top right to add your key.');
+        r=await fetch('https://api.anthropic.com/v1/messages',{
+            method:'POST',
+            headers:{'Content-Type':'application/json','x-api-key':key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
+            body:JSON.stringify({model:'claude-opus-4-6',max_tokens:2048,messages:[{role:'user',content:prompt}]})
+        });
+    }
     const d=await r.json();
     if(!d.content?.[0]?.text)throw new Error(d.error?.message||'Claude error');
     return d.content[0].text;
@@ -941,11 +1044,13 @@ function fmt_agent(text){
 // Fetch recent news articles from Finnhub
 async function fetchNewsArticles(ticker){
     try{
-        const key=(typeof FINNHUB_API_KEY!=='undefined'&&FINNHUB_API_KEY!=='paste-finnhub-key-here')?FINNHUB_API_KEY:null;
-        if(!key)return[];
+        if(!ON_VERCEL&&!getFinnhubKey())return[];
         const to=new Date().toISOString().split('T')[0];
         const from=new Date(Date.now()-10*24*60*60*1000).toISOString().split('T')[0];
-        const r=await fetch(`https://finnhub.io/api/v1/company-news?symbol=${ticker}&from=${from}&to=${to}&token=${key}`);
+        const url=ON_VERCEL
+            ?`/api/finnhub?endpoint=company-news&symbol=${ticker}&from=${from}&to=${to}`
+            :`https://finnhub.io/api/v1/company-news?symbol=${ticker}&from=${from}&to=${to}&token=${getFinnhubKey()}`;
+        const r=await fetch(url);
         const d=await r.json();
         return Array.isArray(d)?d.slice(0,5):[];
     }catch(e){return[];}
@@ -1218,7 +1323,19 @@ function setStats(total,open,pnl,wr){
     const we=document.getElementById('s-wr');we.textContent=wr!==null?wr+'%':'—';if(wr!==null)we.className='stat-val '+(wr>=50?'pos':'neg');
 }
 document.getElementById('modal').addEventListener('click',e=>{if(e.target.id==='modal')closeModal();});
-window.addEventListener('load',()=>{loadTape();loadChart(curTicker);renderJournal();});
+window.addEventListener('load',()=>{
+    loadTape(); loadChart(curTicker); renderJournal();
+    updateSettingsBtn();
+    // If no Claude key found at all, prompt setup after a short delay
+    if(!getClaudeKey()){
+        setTimeout(()=>{
+            openSettings();
+            const st=document.getElementById('s-status');
+            st.style.display='block'; st.style.color='var(--orange)';
+            st.textContent='👋 Welcome! Paste your API keys below to activate the AI features.';
+        },900);
+    }
+});
 </script>
 </body>
 </html>
