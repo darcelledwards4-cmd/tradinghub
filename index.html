@@ -310,6 +310,21 @@
         .fear-signals { display:flex; flex-direction:column; gap:5px; }
         .fear-signal-item { font-size:12px; display:flex; gap:8px; align-items:flex-start; line-height:1.5; }
         .fear-signal-icon { flex-shrink:0; }
+
+        /* ── FILTER BAR ── */
+        .filter-bar { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:20px; align-items:center; }
+        .filter-pill { padding:8px 16px; border-radius:20px; border:1px solid var(--border); background:var(--bg2); color:var(--muted); font-size:12px; font-weight:700; cursor:pointer; transition:all .15s; white-space:nowrap; user-select:none; }
+        .filter-pill:hover { border-color:var(--blue); color:var(--text); }
+        .filter-pill.active { background:var(--blue); color:#000; border-color:var(--blue); }
+
+        /* ── EXPIRY TABS ── */
+        .expiry-tabs-wrap { padding:0 16px 12px; border-bottom:1px solid var(--border); }
+        .expiry-tabs-lbl { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.4px; color:var(--muted); margin-bottom:6px; }
+        .expiry-tabs { display:flex; border:1px solid var(--border); border-radius:7px; overflow:hidden; }
+        .expiry-tab { flex:1; padding:7px 8px; font-size:11px; font-weight:700; text-align:center; cursor:pointer; border:none; background:var(--bg3); color:var(--muted); transition:all .15s; border-right:1px solid var(--border); line-height:1.3; }
+        .expiry-tab:last-child { border-right:none; }
+        .expiry-tab:hover { background:var(--bg2); color:var(--text); }
+        .expiry-tab.active { background:var(--blue); color:#000; }
     </style>
 </head>
 <body>
@@ -348,17 +363,25 @@
                     <button class="search-btn" onclick="analyzeSingle()" id="searchBtn">Analyze This Stock →</button>
                 </div>
                 <div id="singleResult" style="margin-bottom:20px;display:none;"></div>
-                <div class="scan-row">
+                <div class="scan-row" style="margin-bottom:14px">
                     <div>
-                        <div class="scan-title">Today's Watchlist Ideas</div>
-                        <div class="last-scan" id="lastScan">Hit "Scan" to generate today's trade ideas</div>
+                        <div class="scan-title">Today's Trade Ideas</div>
+                        <div class="last-scan" id="lastScan">Choose a category below, then hit Scan</div>
                     </div>
                     <div style="display:flex;gap:8px;align-items:center">
-                        <button class="edit-wl-btn" onclick="toggleWLPanel()" id="editWLBtn">✏️ Edit Watchlist</button>
-                        <button class="scan-btn" onclick="scanWatchlist()" id="scanBtn">
-                            <span>⚡</span><span>Scan My Watchlist</span>
+                        <button class="edit-wl-btn" onclick="toggleWLPanel()" id="editWLBtn">✏️ Watchlist</button>
+                        <button class="scan-btn" onclick="runActiveFilter()" id="scanBtn">
+                            <span>⚡</span><span id="scanBtnLabel">Scan Calls</span>
                         </button>
                     </div>
+                </div>
+                <div class="filter-bar">
+                    <button class="filter-pill active" id="fp-calls"     onclick="selectFilter('calls')">📈 Calls</button>
+                    <button class="filter-pill"        id="fp-puts"      onclick="selectFilter('puts')">📉 Puts</button>
+                    <button class="filter-pill"        id="fp-gems"      onclick="selectFilter('gems')">💎 Cheap Gems</button>
+                    <button class="filter-pill"        id="fp-momentum"  onclick="selectFilter('momentum')">🚀 Momentum</button>
+                    <button class="filter-pill"        id="fp-community" onclick="selectFilter('community')">🔥 Community</button>
+                    <button class="filter-pill"        id="fp-putplays"  onclick="selectFilter('putplays')">📉 Put Plays</button>
                 </div>
 
                 <!-- WATCHLIST EDITOR -->
@@ -383,18 +406,6 @@
                     </div>
                 </div>
 
-                <!-- BEYOND YOUR WATCHLIST -->
-                <div class="discover-wrap" id="discoverSection" style="display:none">
-                    <div class="discover-header">
-                        <div>
-                            <div class="discover-title">🔍 Beyond Your Watchlist</div>
-                            <div class="discover-sub">Call plays, put plays, and everything in between — outside your usual picks</div>
-                        </div>
-                    </div>
-                    <div id="discoverOutput">
-                        <div class="loading-state"><div class="spinner"></div><div class="loading-text">Finding opportunities outside your watchlist...</div></div>
-                    </div>
-                </div>
             </div>
         </div>
     </div>
@@ -645,6 +656,28 @@
 </div>
 
 <script>
+// ── FILTER SYSTEM STATE ───────────────────────────────────────
+let activeFilter = 'calls';
+const filterCache = {};
+window._cardData = {};
+let _cardIdCounter = 0;
+
+const FILTER_META = {
+    calls:     { scanLabel:'Scan Calls',      type:'watchlist', optType:'CALL',  sectionLabel:'📈 CALL IDEAS — Bullish Setups' },
+    puts:      { scanLabel:'Scan Puts',       type:'watchlist', optType:'PUT',   sectionLabel:'📉 PUT IDEAS — Bearish Setups' },
+    gems:      { scanLabel:'Scan Gems',       type:'discover',  key:'gems',      sectionLabel:'💎 Cheap Gems — Solid Companies at Good Prices' },
+    momentum:  { scanLabel:'Scan Momentum',   type:'discover',  key:'momentum',  sectionLabel:'🚀 Momentum Movers — High Upside Right Now' },
+    community: { scanLabel:'Scan Community',  type:'discover',  key:'community', sectionLabel:'🔥 Community Favorites — What People Are Buying' },
+    putplays:  { scanLabel:'Scan Put Plays',  type:'discover',  key:'putplays',  sectionLabel:'📉 Put Plays — Companies Showing Weakness' },
+};
+
+const DISCOVER_CATS = [
+    {key:'gems',      label:'💎 Cheap Gems — Solid Companies at Good Prices',     desc:'cheap stocks under $60/share that are historically strong companies currently undervalued or recovering. Return option_type as CALL and direction as bullish'},
+    {key:'momentum',  label:'🚀 Momentum Movers — High Upside Right Now',          desc:'stocks showing strong bullish momentum, high upside potential, and a clear upward trend. Return option_type as CALL and direction as bullish'},
+    {key:'community', label:'🔥 Community Favorites — What People Are Buying',     desc:'stocks that retail traders and investing communities are actively buying and discussing right now. Return option_type as CALL and direction as bullish'},
+    {key:'putplays',  label:'📉 Put Plays — Companies Showing Weakness',           desc:'stocks showing significant weakness, breaking down technically, facing bad news or headwinds, or overextended and due for a drop. PUT setups — stocks to go DOWN. Return option_type as PUT and direction as bearish. For entry_low/entry_high use the stock price zone to enter the put. For stop set the price if stock bounces above. For target set the downside price target.'},
+];
+
 // ── TABS ──────────────────────────────────────────────────────
 const TABS=['ideas','watchlist','charts','news','activity','agents','journal'];
 function showTab(t){
@@ -787,28 +820,49 @@ async function callClaude(prompt){
 
 // ── BUILD CARD ────────────────────────────────────────────────
 function buildCard(idea){
+    const cardId = 'c' + (++_cardIdCounter);
+    window._cardData[cardId] = idea;
+
     const dir=(idea.direction||'bullish').toLowerCase();
     const chg=parseFloat(idea.price_change||0);
     const chgHtml=chg>=0?`<div class="card-change up">▲ ${Math.abs(chg).toFixed(2)}%</div>`:`<div class="card-change down">▼ ${Math.abs(chg).toFixed(2)}%</div>`;
     const confCls=idea.confidence==='high'?'ch':idea.confidence==='low'?'cl':'cm';
     const confLbl=idea.confidence==='high'?'🟢 High Confidence':idea.confidence==='low'?'🔴 Low Confidence':'🟡 Medium Confidence';
     const optType=(idea.option_type||'CALL').toUpperCase();
-    // Potential rating
-    const pot=idea.potential||'moderate';
+
+    // Expiry options — use first slot for initial display if available
+    const hasExpiry = idea.expiry_options && idea.expiry_options.length >= 2;
+    const initPot = hasExpiry ? (idea.expiry_options[0].potential || idea.potential || 'moderate') : (idea.potential || 'moderate');
+    const initOptDetail = hasExpiry ? (idea.expiry_options[0].option_detail || idea.option_detail || '') : (idea.option_detail || '');
+    const initAcct = hasExpiry ? (idea.expiry_options[0].account_sizing || idea.account_sizing || '') : (idea.account_sizing || 'Keep it to 1 contract max');
+
+    // Potential rating (starts from initial slot)
+    const pot = initPot;
     const potCls=pot==='high'?'pot-high':pot==='avoid'?'pot-avoid':'pot-mod';
     const potLbl=pot==='high'?'🟢 High Potential':pot==='avoid'?'🔴 High Risk':'🟡 Moderate';
+
     // Pros / cons
     const prosHtml=(idea.pros||[]).map(p=>`<div class="cpc-item"><span style="flex-shrink:0">✅</span><span class="cpc-pro">${p}</span></div>`).join('');
     const consHtml=(idea.cons||[]).map(c=>`<div class="cpc-item"><span style="flex-shrink:0">❌</span><span class="cpc-con">${c}</span></div>`).join('');
     const pcSection=(prosHtml||consHtml)?`<div class="card-pros-cons">${prosHtml}${consHtml}</div>`:'';
+
     // Category label (for discover cards)
     const catHtml=idea.category?`<div class="card-category">${idea.category}</div>`:'';
+
+    // Expiry tabs HTML
+    const expiryHtml = hasExpiry ? `<div class="expiry-tabs-wrap">
+        <div class="expiry-tabs-lbl">EXPIRATION — tap to compare timeframes</div>
+        <div class="expiry-tabs" id="etabs-${cardId}">
+            ${idea.expiry_options.map((opt,i)=>`<div class="expiry-tab${i===0?' active':''}" onclick="switchCardExpiry('${cardId}',${i})">${opt.label||'Option '+(i+1)}</div>`).join('')}
+        </div>
+    </div>` : '';
+
     return`<div class="idea-card ${dir}">
         <div class="card-head">
             <div><div class="card-ticker">${idea.ticker}</div><div class="card-company">${idea.company||''}</div></div>
             <div class="card-price-row">
                 <div class="card-price">$${parseFloat(idea.current_price||0).toFixed(2)}</div>${chgHtml}
-                <div style="margin-top:5px"><span class="pot-badge ${potCls}">${potLbl}</span></div>
+                <div style="margin-top:5px"><span class="pot-badge ${potCls}" id="pb-${cardId}">${potLbl}</span></div>
             </div>
         </div>
         ${catHtml}
@@ -828,13 +882,14 @@ function buildCard(idea){
                 <div class="level-val tv">$${idea.target}</div>
             </div>
         </div>
+        ${expiryHtml}
         <div class="card-option">
             <span class="opt-badge ${optType==='CALL'?'opt-call':'opt-put'}">${optType}</span>
-            <span class="opt-detail">${idea.option_detail||''}</span>
+            <span class="opt-detail" id="od-${cardId}">${initOptDetail}</span>
         </div>
         <div class="card-account">
             <div class="acct-lbl">💰 With your $500 account:</div>
-            <div class="acct-detail">${idea.account_sizing||'Keep it to 1 contract max'}</div>
+            <div class="acct-detail" id="ac-${cardId}">${initAcct}</div>
         </div>
         <div class="card-footer">
             <div class="conf ${confCls}">${confLbl}</div>
@@ -854,9 +909,10 @@ function getExpiryContext(){
     }
     return {
         today: now.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}),
-        aggressive:  `${targetDate(21)}–${targetDate(35)}`,   // 3–5 weeks out
-        moderate:    `${targetDate(42)}–${targetDate(60)}`,   // 6–8 weeks out
-        conservative:`${targetDate(70)}–${targetDate(90)}`,   // 10–13 weeks out
+        aggressive:   `${targetDate(21)}–${targetDate(35)}`,   // ~1 month out
+        moderate:     `${targetDate(42)}–${targetDate(60)}`,   // ~6 weeks out
+        conservative: `${targetDate(70)}–${targetDate(90)}`,   // ~3 months out
+        sixMonth:     `${targetDate(160)}–${targetDate(185)}`, // ~6 months out
     };
 }
 
@@ -1010,6 +1066,93 @@ function addSuggestionToWatchlist(ticker, btn){
     btn.style.color='var(--muted)';
 }
 
+// ── EXPIRY SWITCHER ───────────────────────────────────────────
+function switchCardExpiry(cardId, idx){
+    const idea=window._cardData[cardId];
+    if(!idea||!idea.expiry_options) return;
+    const opt=idea.expiry_options[idx];
+    if(!opt) return;
+    // Update tab active state
+    const tabs=document.querySelectorAll(`#etabs-${cardId} .expiry-tab`);
+    tabs.forEach((t,i)=>t.classList.toggle('active',i===idx));
+    // Update option detail text
+    const od=document.getElementById('od-'+cardId);
+    if(od) od.textContent=opt.option_detail||'';
+    // Update account sizing text
+    const ac=document.getElementById('ac-'+cardId);
+    if(ac) ac.textContent=opt.account_sizing||idea.account_sizing||'';
+    // Update potential badge
+    const pb=document.getElementById('pb-'+cardId);
+    if(pb){
+        const pot=opt.potential||'moderate';
+        const potCls=pot==='high'?'pot-high':pot==='avoid'?'pot-avoid':'pot-mod';
+        const potLbl=pot==='high'?'🟢 High Potential':pot==='avoid'?'🔴 High Risk':'🟡 Moderate';
+        pb.className='pot-badge '+potCls;
+        pb.textContent=potLbl;
+    }
+}
+
+// ── FILTER FUNCTIONS ──────────────────────────────────────────
+function selectFilter(key){
+    activeFilter=key;
+    document.querySelectorAll('.filter-pill').forEach(p=>p.classList.remove('active'));
+    const pill=document.getElementById('fp-'+key);
+    if(pill) pill.classList.add('active');
+    const meta=FILTER_META[key];
+    const lbl=document.getElementById('scanBtnLabel');
+    if(lbl) lbl.textContent=meta.scanLabel;
+    if(filterCache[key]){
+        renderFilterResult(key, filterCache[key]);
+    } else {
+        const icons={calls:'📈',puts:'📉',gems:'💎',momentum:'🚀',community:'🔥',putplays:'📉'};
+        document.getElementById('ideasOutput').innerHTML=`<div class="empty-state">
+            <div class="empty-icon">${icons[key]||'📡'}</div>
+            <div class="empty-title">${meta.sectionLabel}</div>
+            <div class="empty-sub">Click "⚡ ${meta.scanLabel}" to generate ideas for this category.</div>
+        </div>`;
+    }
+}
+
+function renderFilterResult(key, cards){
+    const meta=FILTER_META[key];
+    document.getElementById('ideasOutput').innerHTML=`
+        <div class="d-cat-label" style="margin-bottom:12px">${meta.sectionLabel}</div>
+        <div class="ideas-grid">${cards.map(buildCard).join('')}</div>`;
+}
+
+async function runActiveFilter(){
+    const key=activeFilter;
+    const meta=FILTER_META[key];
+    const btn=document.getElementById('scanBtn');
+    btn.disabled=true; btn.innerHTML=`<span>⏳</span><span>Scanning...</span>`;
+    document.getElementById('ideasOutput').innerHTML=`<div class="loading-state"><div class="spinner"></div><div class="loading-text">Finding ${meta.sectionLabel.replace(/[^\w\s—·]/g,'')} ideas...</div></div>`;
+    try{
+        let cards;
+        if(meta.type==='watchlist'){
+            const rawQuotes=await Promise.all(WATCHLIST.map(fetchQuote));
+            const quotes=rawQuotes.filter(Boolean);
+            const priceData=quotes.length>0
+                ?quotes.map(q=>`${q.ticker}: $${q.price.toFixed(2)} (${q.chg>=0?'+':''}${q.chg.toFixed(2)}% today)`).join('\n')
+                :WATCHLIST.join(', ')+' — use your latest knowledge';
+            const raw=await callClaude(watchlistScanPrompt(priceData, meta.optType));
+            cards=JSON.parse(stripJSON(raw));
+        } else {
+            const cat=DISCOVER_CATS.find(c=>c.key===key);
+            const raw=await callClaude(discoverPrompt(cat.desc));
+            cards=JSON.parse(stripJSON(raw));
+            cards=cards.map(s=>({...s, category:cat.label}));
+        }
+        filterCache[key]=cards;
+        renderFilterResult(key, cards);
+        const now=new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'});
+        document.getElementById('lastScan').textContent=`Last scanned at ${now} — ${meta.sectionLabel}`;
+        document.getElementById('lastUpdated').textContent=`Updated ${now}`;
+    }catch(e){
+        document.getElementById('ideasOutput').innerHTML=`<div class="empty-state"><div class="empty-icon">⚠️</div><div class="empty-title">Error</div><div class="empty-sub">${e.message}</div></div>`;
+    }
+    btn.disabled=false; btn.innerHTML=`<span>⚡</span><span id="scanBtnLabel">${meta.scanLabel}</span>`;
+}
+
 // ── SCAN WATCHLIST ────────────────────────────────────────────
 // Shared prompt builder for watchlist scan — pass "CALL" or "PUT"
 function watchlistScanPrompt(priceData, optionType){
@@ -1033,7 +1176,12 @@ ${isPut ? 'Look for: stocks that are overextended, showing weakness, breaking do
 Return ONLY a raw JSON array of exactly 3 objects. No markdown. No code fences. No explanation.
 
 Each object must have these exact keys:
-ticker, company, current_price (number), price_change (number), direction ("${isPut?'bearish':'bullish'}"), summary (1-2 plain English sentences — why this ${isPut?'PUT':'CALL'} setup makes sense right now, no jargon), pros (array of exactly 2 strings), cons (array of exactly 1 string — the main risk), potential ("high" or "moderate" or "avoid"), entry_low (number), entry_high (number), stop_loss (number), target (number), option_type ("${optionType}"), option_detail (string — include the specific strike, a realistic expiry date from the windows above, and estimated cost e.g. "$120 Put · Expires Jun 20, 2026 · Est. $1.50/contract"), account_sizing (one sentence for $500 account, risk under $75), confidence ("high" or "medium" or "low"), risk_reward (string e.g. "1:2")
+ticker, company, current_price (number), price_change (number), direction ("${isPut?'bearish':'bullish'}"), summary (1-2 plain English sentences — why this ${isPut?'PUT':'CALL'} setup makes sense right now, no jargon), pros (array of exactly 2 strings), cons (array of exactly 1 string — the main risk), potential ("high" or "moderate" or "avoid"), entry_low (number), entry_high (number), stop_loss (number), target (number), option_type ("${optionType}"), option_detail (string — same as expiry_options[0].option_detail for backward compat), account_sizing (same as expiry_options[0].account_sizing), confidence ("high" or "medium" or "low"), risk_reward (string e.g. "1:2"),
+expiry_options (array of EXACTLY 3 objects — pre-compute all 3 so the user can tap between them):
+  [0] {"label":"1 Mo · Aggressive",   "option_detail":"$X ${optionType} · Expires [realistic options Friday around ${exp.aggressive}] · Est. $X.XX/contract",  "account_sizing":"1 sentence for $500 account keeping risk under $75", "potential":"high" or "moderate" or "avoid"}
+  [1] {"label":"3 Mo · Moderate",     "option_detail":"$X ${optionType} · Expires [realistic options Friday around ${exp.conservative}] · Est. $X.XX/contract", "account_sizing":"1 sentence for $500 account keeping risk under $75", "potential":"high" or "moderate" or "avoid"}
+  [2] {"label":"6 Mo · Conservative", "option_detail":"$X ${optionType} · Expires [realistic options Friday around ${exp.sixMonth}] · Est. $X.XX/contract",     "account_sizing":"1 sentence for $500 account keeping risk under $75", "potential":"high" or "moderate" or "avoid"}
+Use DIFFERENT strikes and expiry dates for each option. Shorter expirations = cheaper premium but more risk. Longer = more expensive but safer.
 
 Raw JSON array only. Nothing else.`;
 }
@@ -1112,7 +1260,12 @@ Do NOT include any of these tickers she already watches: ${excluded}
 Return ONLY a raw JSON array of exactly 3 objects. No markdown. No code fences. No explanation.
 
 Each object must have these keys:
-ticker, company, current_price (number), price_change (number), direction ("bullish" or "bearish"), summary (1 plain English sentence — why this is interesting right now), pros (array of exactly 2 short strings), cons (array of exactly 1 short string), potential ("high" or "moderate" or "avoid"), entry_low (number), entry_high (number), stop_loss (number), target (number), option_type ("CALL" or "PUT"), option_detail (string — use a realistic expiry date between ${exp.aggressive} and ${exp.conservative} depending on risk, NOT a fixed date like Aug 15. Format: "$25 Call · Expires Jun 20, 2026 · Est. $0.80/contract"), account_sizing (one sentence for a $500 account keeping risk under $75), confidence ("high" or "medium" or "low"), risk_reward (string e.g. "1:2.5")
+ticker, company, current_price (number), price_change (number), direction ("bullish" or "bearish"), summary (1 plain English sentence — why this is interesting right now), pros (array of exactly 2 short strings), cons (array of exactly 1 short string), potential ("high" or "moderate" or "avoid"), entry_low (number), entry_high (number), stop_loss (number), target (number), option_type ("CALL" or "PUT"), option_detail (same as expiry_options[0].option_detail for compat), account_sizing (same as expiry_options[0].account_sizing), confidence ("high" or "medium" or "low"), risk_reward (string e.g. "1:2.5"),
+expiry_options (array of EXACTLY 3 objects):
+  [0] {"label":"1 Mo · Aggressive",   "option_detail":"$X Call/Put · Expires [options Friday around ${exp.aggressive}] · Est. $X.XX/contract",  "account_sizing":"1 sentence for $500 account risk under $75", "potential":"high" or "moderate" or "avoid"}
+  [1] {"label":"3 Mo · Moderate",     "option_detail":"$X Call/Put · Expires [options Friday around ${exp.conservative}] · Est. $X.XX/contract", "account_sizing":"1 sentence for $500 account risk under $75", "potential":"high" or "moderate" or "avoid"}
+  [2] {"label":"6 Mo · Conservative", "option_detail":"$X Call/Put · Expires [options Friday around ${exp.sixMonth}] · Est. $X.XX/contract",     "account_sizing":"1 sentence for $500 account risk under $75", "potential":"high" or "moderate" or "avoid"}
+Use DIFFERENT strikes and real options-expiry Fridays for each. Do NOT use Aug 15 or any fixed date.
 
 Raw JSON array only. Nothing else.`;
 }

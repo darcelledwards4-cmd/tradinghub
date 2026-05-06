@@ -1,6 +1,4 @@
-// Vercel serverless function — proxies Finnhub API calls
-// Your Finnhub key lives here on Vercel's servers, never in the browser
-export default async function handler(req, res) {
+module.exports = async function handler(req, res) {
     const { endpoint, ...params } = req.query;
     if (!endpoint) {
         return res.status(400).json({ error: 'endpoint query param required' });
@@ -16,4 +14,4 @@ export default async function handler(req, res) {
     } catch (err) {
         return res.status(500).json({ error: err.message });
     }
-}
+};
