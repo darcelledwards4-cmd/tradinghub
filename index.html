@@ -1326,15 +1326,6 @@ document.getElementById('modal').addEventListener('click',e=>{if(e.target.id==='
 window.addEventListener('load',()=>{
     loadTape(); loadChart(curTicker); renderJournal();
     updateSettingsBtn();
-    // If no Claude key found at all, prompt setup after a short delay
-    if(!getClaudeKey()){
-        setTimeout(()=>{
-            openSettings();
-            const st=document.getElementById('s-status');
-            st.style.display='block'; st.style.color='var(--orange)';
-            st.textContent='👋 Welcome! Paste your API keys below to activate the AI features.';
-        },900);
-    }
 });
 </script>
 </body>
