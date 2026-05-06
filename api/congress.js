@@ -2,14 +2,20 @@ module.exports = async function handler(req, res) {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Cache-Control', 's-maxage=3600, stale-while-revalidate=7200');
 
-    const TIMEOUT_MS = 8000;
+    const BROWSER_HEADERS = {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'application/json, text/plain, */*',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Referer': 'https://housestockwatcher.com/',
+        'Origin': 'https://housestockwatcher.com'
+    };
 
-    async function fetchWithTimeout(url) {
+    async function tryFetch(url) {
         const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+        const timer = setTimeout(() => controller.abort(), 8000);
         try {
-            const r = await fetch(url, { signal: controller.signal });
-            if (!r.ok) throw new Error(`HTTP ${r.status}`);
+            const r = await fetch(url, { headers: BROWSER_HEADERS, signal: controller.signal });
+            if (!r.ok) throw new Error(`HTTP ${r.status} from ${url}`);
             return await r.json();
         } finally {
             clearTimeout(timer);
@@ -19,68 +25,76 @@ module.exports = async function handler(req, res) {
     const cutoff = new Date();
     cutoff.setDate(cutoff.getDate() - 90);
 
-    let houseTrades = [];
-    let senateTrades = [];
-    const errors = [];
+    // Try multiple URL variants for each chamber
+    const HOUSE_URLS = [
+        'https://house-stock-watcher-data.s3-us-west-2.amazonaws.com/data/all_transactions.json',
+        'https://house-stock-watcher-data.s3.amazonaws.com/data/all_transactions.json',
+    ];
+    const SENATE_URLS = [
+        'https://senate-stock-watcher-data.s3-us-west-2.amazonaws.com/aggregate/all_transactions.json',
+        'https://senate-stock-watcher-data.s3.amazonaws.com/aggregate/all_transactions.json',
+    ];
 
-    // --- HOUSE ---
-    try {
-        const raw = await fetchWithTimeout(
-            'https://house-stock-watcher-data.s3-us-west-2.amazonaws.com/data/all_transactions.json'
-        );
-        houseTrades = (Array.isArray(raw) ? raw : [])
-            .filter(t =>
-                t.ticker && t.ticker !== '--' && t.ticker.length <= 6 &&
-                t.transaction_date && new Date(t.transaction_date) >= cutoff
-            )
-            .slice(0, 80)
-            .map(t => ({
-                chamber: 'House',
-                member: t.representative || 'Unknown',
-                party: t.party || '',
-                ticker: (t.ticker || '').toUpperCase().trim(),
-                asset: (t.asset_description || '').slice(0, 80),
-                type: t.type || '',
-                amount: t.amount || '',
-                trade_date: t.transaction_date,
-                disclosure_date: t.disclosure_date || '',
-                district: t.district || ''
-            }));
-    } catch (e) {
-        errors.push('House data: ' + e.message);
+    async function tryMultiple(urls) {
+        for (const url of urls) {
+            try { return await tryFetch(url); } catch (e) { /* try next */ }
+        }
+        throw new Error('All URLs failed for this chamber');
     }
 
-    // --- SENATE ---
-    try {
-        const raw = await fetchWithTimeout(
-            'https://senate-stock-watcher-data.s3-us-west-2.amazonaws.com/aggregate/all_transactions.json'
-        );
-        senateTrades = (Array.isArray(raw) ? raw : [])
-            .filter(t =>
-                t.ticker && t.ticker !== '--' && t.ticker.length <= 6 &&
-                t.transaction_date && new Date(t.transaction_date) >= cutoff
-            )
-            .slice(0, 80)
-            .map(t => ({
-                chamber: 'Senate',
-                member: t.senator || 'Unknown',
-                party: t.party || '',
-                ticker: (t.ticker || '').toUpperCase().trim(),
-                asset: (t.asset_description || t.asset_name || '').slice(0, 80),
-                type: t.type || '',
-                amount: t.amount || '',
-                trade_date: t.transaction_date,
-                disclosure_date: t.disclosure_date || '',
-                district: t.state || ''
-            }));
-    } catch (e) {
-        errors.push('Senate data: ' + e.message);
-    }
+    const [houseResult, senateResult] = await Promise.allSettled([
+        tryMultiple(HOUSE_URLS),
+        tryMultiple(SENATE_URLS)
+    ]);
+
+    const mapHouse = t => ({
+        chamber: 'House',
+        member: t.representative || 'Unknown',
+        party: t.party || '',
+        ticker: (t.ticker || '').toUpperCase().trim(),
+        asset: (t.asset_description || '').slice(0, 80),
+        type: t.type || '',
+        amount: t.amount || '',
+        trade_date: t.transaction_date,
+        disclosure_date: t.disclosure_date || '',
+        district: t.district || ''
+    });
+
+    const mapSenate = t => ({
+        chamber: 'Senate',
+        member: t.senator || 'Unknown',
+        party: t.party || '',
+        ticker: (t.ticker || '').toUpperCase().trim(),
+        asset: (t.asset_description || t.asset_name || '').slice(0, 80),
+        type: t.type || '',
+        amount: t.amount || '',
+        trade_date: t.transaction_date,
+        disclosure_date: t.disclosure_date || '',
+        district: t.state || ''
+    });
+
+    const filter = t =>
+        t.ticker && t.ticker !== '--' && t.ticker.length <= 6 &&
+        t.trade_date && new Date(t.trade_date) >= cutoff;
+
+    const houseTrades = houseResult.status === 'fulfilled'
+        ? (Array.isArray(houseResult.value) ? houseResult.value : []).filter(filter).slice(0, 80).map(mapHouse)
+        : [];
+
+    const senateTrades = senateResult.status === 'fulfilled'
+        ? (Array.isArray(senateResult.value) ? senateResult.value : []).filter(filter).slice(0, 80).map(mapSenate)
+        : [];
+
+    const errors = [
+        houseResult.status === 'rejected' ? 'House: ' + houseResult.reason?.message : null,
+        senateResult.status === 'rejected' ? 'Senate: ' + senateResult.reason?.message : null
+    ].filter(Boolean);
 
     if (!houseTrades.length && !senateTrades.length) {
         return res.status(502).json({
-            error: 'Could not load trade data. ' + errors.join(' | '),
-            trades: []
+            error: 'Data sources unavailable: ' + errors.join(' | '),
+            trades: [],
+            debug: { houseError: houseResult.reason?.message, senateError: senateResult.reason?.message }
         });
     }
 

@@ -1706,35 +1706,13 @@ async function loadCongressTrades(){
     btn.disabled=true; btn.innerHTML='<span>⏳</span><span>Loading...</span>';
     out.innerHTML=`<div class="loading-state" style="padding:30px 10px"><div class="spinner"></div><div class="loading-text">Pulling House & Senate disclosures...</div></div>`;
     try{
-        const cutoff=new Date(); cutoff.setDate(cutoff.getDate()-90);
-        const HOUSE_URL='https://house-stock-watcher-data.s3-us-west-2.amazonaws.com/data/all_transactions.json';
-        const SENATE_URL='https://senate-stock-watcher-data.s3-us-west-2.amazonaws.com/aggregate/all_transactions.json';
-
-        const [houseRes, senateRes] = await Promise.allSettled([
-            fetch(HOUSE_URL).then(r=>r.json()),
-            fetch(SENATE_URL).then(r=>r.json())
-        ]);
-
-        const houseTrades = houseRes.status==='fulfilled'
-            ? (Array.isArray(houseRes.value)?houseRes.value:[])
-                .filter(t=>t.ticker&&t.ticker!=='--'&&t.ticker.length<=6&&t.transaction_date&&new Date(t.transaction_date)>=cutoff)
-                .slice(0,80)
-                .map(t=>({chamber:'House',member:t.representative||'Unknown',party:t.party||'',ticker:(t.ticker||'').toUpperCase().trim(),asset:(t.asset_description||'').slice(0,80),type:t.type||'',amount:t.amount||'',trade_date:t.transaction_date,disclosure_date:t.disclosure_date||'',district:t.district||''}))
-            : [];
-
-        const senateTrades = senateRes.status==='fulfilled'
-            ? (Array.isArray(senateRes.value)?senateRes.value:[])
-                .filter(t=>t.ticker&&t.ticker!=='--'&&t.ticker.length<=6&&t.transaction_date&&new Date(t.transaction_date)>=cutoff)
-                .slice(0,80)
-                .map(t=>({chamber:'Senate',member:t.senator||'Unknown',party:t.party||'',ticker:(t.ticker||'').toUpperCase().trim(),asset:(t.asset_description||t.asset_name||'').slice(0,80),type:t.type||'',amount:t.amount||'',trade_date:t.transaction_date,disclosure_date:t.disclosure_date||'',district:t.state||''}))
-            : [];
-
-        if(!houseTrades.length&&!senateTrades.length)
-            throw new Error('Could not load either data source. Try again in a moment.');
-
-        const trades=[...houseTrades,...senateTrades]
-            .sort((a,b)=>new Date(b.trade_date)-new Date(a.trade_date))
-            .slice(0,60);
+        const r=await fetch('/api/congress');
+        const text=await r.text();
+        let data;
+        try{ data=JSON.parse(text); }
+        catch(e){ throw new Error('Congress API unavailable — check Vercel deployment.'); }
+        if(!data.trades?.length) throw new Error(data.error||'No trade data returned.');
+        const trades=data.trades;
         if(!trades.length){ out.innerHTML=`<div class="empty-state" style="padding:20px"><div class="empty-sub">No recent trades found.</div></div>`; return; }
 
         // Render trade cards
