@@ -1707,8 +1707,11 @@ async function loadCongressTrades(){
     out.innerHTML=`<div class="loading-state" style="padding:30px 10px"><div class="spinner"></div><div class="loading-text">Pulling House & Senate disclosures...</div></div>`;
     try{
         const r=await fetch('/api/congress');
-        const data=await r.json();
-        if(data.error) throw new Error(data.error);
+        const text=await r.text();
+        let data;
+        try{ data=JSON.parse(text); }
+        catch(e){ throw new Error('Congress API returned an unexpected response. Check Vercel function logs.'); }
+        if(data.error && !data.trades?.length) throw new Error(data.error);
         const trades=data.trades||[];
         if(!trades.length){ out.innerHTML=`<div class="empty-state" style="padding:20px"><div class="empty-sub">No recent trades found.</div></div>`; return; }
 
