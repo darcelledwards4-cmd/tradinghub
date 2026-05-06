@@ -23,7 +23,8 @@
 
         /* ── HEADER ── */
         .header { background:var(--bg2); border-bottom:1px solid var(--border); padding:0 16px; height:54px; display:flex; align-items:center; gap:12px; flex-shrink:0; }
-        .logo { font-weight:800; font-size:15px; color:var(--blue); white-space:nowrap; }
+        .logo { font-weight:800; font-size:15px; color:var(--blue); white-space:nowrap; cursor:pointer; transition:opacity .15s; }
+        .logo:hover { opacity:.8; }
         .tape { flex:1; overflow:hidden; height:38px; }
         .header-right { display:flex; align-items:center; gap:14px; flex-shrink:0; }
         .clock { font-size:13px; font-weight:600; color:var(--text); font-variant-numeric:tabular-nums; }
@@ -315,7 +316,7 @@
 
 <!-- HEADER -->
 <div class="header">
-    <div class="logo">⚡ Trading Hub</div>
+    <div class="logo" onclick="showTab('ideas')" title="Home">⚡ Trading Hub</div>
     <div class="tape" id="tape"></div>
     <div class="header-right">
         <div class="last-updated" id="lastUpdated">Not yet updated</div>
@@ -328,6 +329,7 @@
 <!-- NAV -->
 <div class="nav">
     <div class="tab-btn active" onclick="showTab('ideas')">📊 Today's Ideas</div>
+    <div class="tab-btn" onclick="showTab('watchlist')">⭐ My Watchlist</div>
     <div class="tab-btn" onclick="showTab('charts')">📈 Charts</div>
     <div class="tab-btn" onclick="showTab('news')">📰 News &amp; Flow</div>
     <div class="tab-btn" onclick="showTab('activity')">👥 Trader Activity</div>
@@ -393,6 +395,47 @@
                         <div class="loading-state"><div class="spinner"></div><div class="loading-text">Finding opportunities outside your watchlist...</div></div>
                     </div>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- MY WATCHLIST -->
+    <div class="tab" id="tab-watchlist">
+        <div class="scroll">
+            <div style="max-width:1100px;margin:0 auto;padding:20px">
+
+                <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:24px">
+                    <div>
+                        <div style="font-size:17px;font-weight:700;margin-bottom:4px">⭐ My Watchlist</div>
+                        <div style="font-size:12px;color:var(--muted)">Manage the stocks you follow and discover new ones worth adding.</div>
+                    </div>
+                    <div style="display:flex;gap:8px">
+                        <button class="search-btn" onclick="loadWatchlistSuggestions()" id="suggestBtn" style="background:var(--bg3);color:var(--text);border:1px solid var(--border)">✨ Suggest Companies</button>
+                    </div>
+                </div>
+
+                <!-- Current Watchlist -->
+                <div style="margin-bottom:28px">
+                    <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-bottom:12px">Your Current Watchlist</div>
+                    <div id="wlCardsGrid" style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:16px"></div>
+                    <div style="display:flex;gap:8px;align-items:center">
+                        <input class="wl-add-input" id="wlTabInput" placeholder="Add ticker..." maxlength="6"
+                            onkeydown="if(event.key==='Enter')addTickerFromTab()"
+                            oninput="this.value=this.value.toUpperCase().replace(/[^A-Z]/g,'')" />
+                        <button class="wl-add-btn" onclick="addTickerFromTab()">+ Add</button>
+                        <button class="wl-reset" onclick="resetWatchlist()" style="margin-left:8px">Reset to defaults</button>
+                    </div>
+                </div>
+
+                <!-- Suggestions -->
+                <div id="wlSuggestSection" style="display:none">
+                    <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-bottom:12px;display:flex;align-items:center;gap:8px">
+                        ✨ AI Suggestions — Companies Worth Adding
+                        <span style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--muted);font-size:11px">Based on current market conditions</span>
+                    </div>
+                    <div id="wlSuggestOutput"></div>
+                </div>
+
             </div>
         </div>
     </div>
@@ -603,7 +646,7 @@
 
 <script>
 // ── TABS ──────────────────────────────────────────────────────
-const TABS=['ideas','charts','news','activity','agents','journal'];
+const TABS=['ideas','watchlist','charts','news','activity','agents','journal'];
 function showTab(t){
     TABS.forEach((id,i)=>{
         document.getElementById('tab-'+id).classList.toggle('active',id===t);
@@ -611,6 +654,7 @@ function showTab(t){
     });
     if(t==='charts') loadChart(curTicker);
     if(t==='news'&&!document.getElementById('newsWidget').children.length) loadNews('newsWidget');
+    if(t==='watchlist') renderWLTabCards();
 }
 
 // ── CLOCK ─────────────────────────────────────────────────────
@@ -799,6 +843,23 @@ function buildCard(idea){
     </div>`;
 }
 
+// ── EXPIRY DATE HELPER ────────────────────────────────────────
+// Returns realistic options expiry dates varied by risk level
+function getExpiryContext(){
+    const now = new Date();
+    function targetDate(daysOut){
+        const d = new Date(now);
+        d.setDate(d.getDate() + daysOut);
+        return d.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
+    }
+    return {
+        today: now.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}),
+        aggressive:  `${targetDate(21)}–${targetDate(35)}`,   // 3–5 weeks out
+        moderate:    `${targetDate(42)}–${targetDate(60)}`,   // 6–8 weeks out
+        conservative:`${targetDate(70)}–${targetDate(90)}`,   // 10–13 weeks out
+    };
+}
+
 // ── WATCHLIST MANAGEMENT ──────────────────────────────────────
 const DEFAULT_WATCHLIST=['NVDA','SPY','QQQ','AAPL','MSFT','META','AMD','GOOGL','ARM','PLTR'];
 let WATCHLIST=JSON.parse(localStorage.getItem('darcell_watchlist')||'null')||[...DEFAULT_WATCHLIST];
@@ -844,24 +905,135 @@ function resetWatchlist(){
     WATCHLIST=[...DEFAULT_WATCHLIST];
     saveWatchlist();
     renderWLChips();
+    renderWLTabCards();
+}
+
+// ── WATCHLIST TAB ─────────────────────────────────────────────
+function renderWLTabCards(){
+    const grid=document.getElementById('wlCardsGrid');
+    if(!grid)return;
+    grid.innerHTML=WATCHLIST.map(t=>`
+        <div style="background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:10px 14px;display:flex;align-items:center;gap:10px;min-width:110px">
+            <span style="font-size:14px;font-weight:800">${t}</span>
+            <button onclick="removeAndRefreshTab('${t}')" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:16px;padding:0;margin-left:auto;transition:color .15s" onmouseover="this.style.color='var(--red)'" onmouseout="this.style.color='var(--muted)'">×</button>
+        </div>`).join('');
+}
+
+function removeAndRefreshTab(ticker){
+    removeFromWatchlist(ticker);
+    renderWLTabCards();
+}
+
+function addTickerFromTab(){
+    const inp=document.getElementById('wlTabInput');
+    const t=inp.value.trim().toUpperCase().replace(/[^A-Z]/g,'');
+    if(!t){return;}
+    if(WATCHLIST.includes(t)){alert(`${t} is already on your watchlist.`);inp.value='';return;}
+    if(WATCHLIST.length>=20){alert('Max 20 tickers.');return;}
+    WATCHLIST.push(t);
+    saveWatchlist();
+    renderWLTabCards();
+    renderWLChips();
+    inp.value='';
+    inp.focus();
+}
+
+async function loadWatchlistSuggestions(){
+    const btn=document.getElementById('suggestBtn');
+    btn.disabled=true; btn.textContent='Finding suggestions...';
+    const sec=document.getElementById('wlSuggestSection');
+    const out=document.getElementById('wlSuggestOutput');
+    sec.style.display='block';
+    out.innerHTML=`<div class="loading-state"><div class="spinner"></div><div class="loading-text">Scanning for companies worth adding to your watchlist...</div></div>`;
+    try{
+        const exp=getExpiryContext();
+        const prompt=`You are a stock analyst helping a beginner options trader. Today is ${exp.today}.
+Her current watchlist: ${WATCHLIST.join(', ')}
+
+Suggest exactly 6 companies NOT already on her watchlist that are currently doing well and worth watching.
+Mix of categories: include growth stocks, value plays, and momentum stocks. At least 2 should be under $50/share.
+
+Return ONLY a raw JSON array of exactly 6 objects. No markdown. No code fences.
+
+Each object: ticker, company, current_price (number), price_change (number), direction ("bullish" or "bearish"), summary (1 plain English sentence — why this company is worth watching right now), potential ("high" or "moderate"), reason_to_add (1 sentence — what specifically makes it a good watchlist addition)
+
+Raw JSON array only.`;
+        const raw=await callClaude(prompt);
+        const stocks=JSON.parse(stripJSON(raw));
+        out.innerHTML=`<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px">
+            ${stocks.map(s=>{
+                const potCls=s.potential==='high'?'pot-high':'pot-mod';
+                const potLbl=s.potential==='high'?'🟢 High Potential':'🟡 Moderate';
+                const chg=parseFloat(s.price_change||0);
+                const chgHtml=chg>=0?`<span style="color:var(--green);font-size:12px">▲${Math.abs(chg).toFixed(2)}%</span>`:`<span style="color:var(--red);font-size:12px">▼${Math.abs(chg).toFixed(2)}%</span>`;
+                const alreadyAdded=WATCHLIST.includes(s.ticker);
+                return `<div style="background:var(--bg2);border:1px solid var(--border);border-radius:10px;overflow:hidden">
+                    <div style="padding:14px 16px 10px;display:flex;justify-content:space-between;align-items:flex-start;border-bottom:1px solid var(--border)">
+                        <div>
+                            <div style="font-size:18px;font-weight:800">${s.ticker}</div>
+                            <div style="font-size:11px;color:var(--muted)">${s.company||''}</div>
+                        </div>
+                        <div style="text-align:right">
+                            <div style="font-size:15px;font-weight:700">$${parseFloat(s.current_price||0).toFixed(2)}</div>
+                            ${chgHtml}
+                        </div>
+                    </div>
+                    <div style="padding:12px 16px;border-bottom:1px solid var(--border)">
+                        <div style="font-size:12px;color:var(--text);line-height:1.55;margin-bottom:6px">${s.summary||''}</div>
+                        <div style="font-size:11px;color:var(--blue);background:rgba(88,166,255,.06);border:1px solid rgba(88,166,255,.15);border-radius:5px;padding:5px 8px;line-height:1.5">💡 ${s.reason_to_add||''}</div>
+                    </div>
+                    <div style="padding:10px 16px;display:flex;align-items:center;justify-content:space-between">
+                        <span class="pot-badge ${potCls}">${potLbl}</span>
+                        <button onclick="addSuggestionToWatchlist('${s.ticker}',this)" style="background:${alreadyAdded?'var(--bg3)':'var(--green)'};color:${alreadyAdded?'var(--muted)':'#000'};border:none;border-radius:6px;padding:6px 14px;font-size:12px;font-weight:700;cursor:${alreadyAdded?'default':'pointer'}" ${alreadyAdded?'disabled':''}>
+                            ${alreadyAdded?'✅ Added':'+ Add to Watchlist'}
+                        </button>
+                    </div>
+                </div>`;
+            }).join('')}
+        </div>`;
+    }catch(e){
+        out.innerHTML=`<div style="font-size:12px;color:var(--red);padding:8px">Error: ${e.message}</div>`;
+    }
+    btn.disabled=false; btn.textContent='✨ Suggest Companies';
+}
+
+function addSuggestionToWatchlist(ticker, btn){
+    if(WATCHLIST.includes(ticker)) return;
+    if(WATCHLIST.length>=20){alert('Max 20 tickers.');return;}
+    WATCHLIST.push(ticker);
+    saveWatchlist();
+    renderWLTabCards();
+    renderWLChips();
+    btn.textContent='✅ Added';
+    btn.disabled=true;
+    btn.style.background='var(--bg3)';
+    btn.style.color='var(--muted)';
 }
 
 // ── SCAN WATCHLIST ────────────────────────────────────────────
 // Shared prompt builder for watchlist scan — pass "CALL" or "PUT"
 function watchlistScanPrompt(priceData, optionType){
     const isPut = optionType === 'PUT';
+    const exp = getExpiryContext();
     return `You are a trading analyst helping a beginner options trader with a $500 account who trades 1-3 month options on tech stocks. Her rule: never lose more than 15% of her account ($75 max) per trade.
+
+Today's date: ${exp.today}
+Suggested expiry windows — use DIFFERENT expirations for each of the 3 trades to show varied timeframes:
+  • Aggressive/short-term: target expiry around ${exp.aggressive}
+  • Moderate: target expiry around ${exp.moderate}
+  • Conservative/longer-term: target expiry around ${exp.conservative}
+Pick a realistic options expiration Friday close to each window above. Do NOT use the same expiry date for all 3 trades.
 
 Live price data:
 ${priceData}
 
-Find the TOP 3 best ${isPut ? 'PUT (bearish/short) trade setups' : 'CALL (bullish) trade setups'} right now from this watchlist.
+Find the TOP 3 best ${isPut ? 'PUT (bearish/short) trade setups' : 'CALL (bullish) trade setups'} right now from this watchlist — one aggressive, one moderate, one conservative.
 ${isPut ? 'Look for: stocks that are overextended, showing weakness, breaking down, bad news, sector headwinds, or strong downside momentum.' : 'Look for: stocks with bullish momentum, strong technicals, positive catalysts, or clear upside setups.'}
 
 Return ONLY a raw JSON array of exactly 3 objects. No markdown. No code fences. No explanation.
 
 Each object must have these exact keys:
-ticker, company, current_price (number), price_change (number), direction ("${isPut?'bearish':'bullish'}"), summary (1-2 plain English sentences — why this ${isPut?'PUT':'CALL'} setup makes sense right now, no jargon), pros (array of exactly 2 strings — reasons this trade looks good), cons (array of exactly 1 string — the main risk), potential ("high" or "moderate" or "avoid"), entry_low (number), entry_high (number), stop_loss (number — for puts, stop if stock bounces above this price), target (number — for puts, your downside price target), option_type ("${optionType}"), option_detail (short string e.g. "$120 Put · Expires ~Aug 15 · Est. $1.50/contract"), account_sizing (one sentence for a $500 account, keep risk under $75), confidence ("high" or "medium" or "low"), risk_reward (string e.g. "1:2")
+ticker, company, current_price (number), price_change (number), direction ("${isPut?'bearish':'bullish'}"), summary (1-2 plain English sentences — why this ${isPut?'PUT':'CALL'} setup makes sense right now, no jargon), pros (array of exactly 2 strings), cons (array of exactly 1 string — the main risk), potential ("high" or "moderate" or "avoid"), entry_low (number), entry_high (number), stop_loss (number), target (number), option_type ("${optionType}"), option_detail (string — include the specific strike, a realistic expiry date from the windows above, and estimated cost e.g. "$120 Put · Expires Jun 20, 2026 · Est. $1.50/contract"), account_sizing (one sentence for $500 account, risk under $75), confidence ("high" or "medium" or "low"), risk_reward (string e.g. "1:2")
 
 Raw JSON array only. Nothing else.`;
 }
@@ -930,7 +1102,9 @@ async function scanWatchlist(){
 // Shared prompt for a single discover category — returns a JSON array of 3 stocks
 function discoverPrompt(categoryDesc){
     const excluded=WATCHLIST.join(', ');
+    const exp=getExpiryContext();
     return `You are a stock analyst helping a beginner options trader with a $500 account. Her max loss per trade is $75 (15% rule).
+Today's date: ${exp.today}
 
 Find exactly 3 stocks that fit this description: ${categoryDesc}
 Do NOT include any of these tickers she already watches: ${excluded}
@@ -938,7 +1112,7 @@ Do NOT include any of these tickers she already watches: ${excluded}
 Return ONLY a raw JSON array of exactly 3 objects. No markdown. No code fences. No explanation.
 
 Each object must have these keys:
-ticker, company, current_price (number), price_change (number), direction ("bullish" or "bearish"), summary (1 plain English sentence — why this is interesting right now), pros (array of exactly 2 short strings), cons (array of exactly 1 short string), potential ("high" or "moderate" or "avoid"), entry_low (number), entry_high (number), stop_loss (number), target (number), option_type ("CALL" or "PUT"), option_detail (short string e.g. "$25 Call · Expires ~Aug 15 · Est. $0.80/contract"), account_sizing (one sentence for a $500 account keeping risk under $75), confidence ("high" or "medium" or "low"), risk_reward (string e.g. "1:2.5")
+ticker, company, current_price (number), price_change (number), direction ("bullish" or "bearish"), summary (1 plain English sentence — why this is interesting right now), pros (array of exactly 2 short strings), cons (array of exactly 1 short string), potential ("high" or "moderate" or "avoid"), entry_low (number), entry_high (number), stop_loss (number), target (number), option_type ("CALL" or "PUT"), option_detail (string — use a realistic expiry date between ${exp.aggressive} and ${exp.conservative} depending on risk, NOT a fixed date like Aug 15. Format: "$25 Call · Expires Jun 20, 2026 · Est. $0.80/contract"), account_sizing (one sentence for a $500 account keeping risk under $75), confidence ("high" or "medium" or "low"), risk_reward (string e.g. "1:2.5")
 
 Raw JSON array only. Nothing else.`;
 }
