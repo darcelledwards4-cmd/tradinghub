@@ -787,9 +787,9 @@
                 <span style="font-size:10px;color:var(--muted);margin-top:3px">Get yours at <a href="https://console.anthropic.com" target="_blank" style="color:var(--blue)">console.anthropic.com</a></span>
             </div>
             <div class="fg">
-                <label>Finnhub API Key <span style="font-weight:400;text-transform:none;letter-spacing:0">(for live prices)</span></label>
-                <input type="password" id="s-finnhub" placeholder="your-finnhub-key" style="font-family:monospace;font-size:12px" />
-                <span style="font-size:10px;color:var(--muted);margin-top:3px">Get yours free at <a href="https://finnhub.io" target="_blank" style="color:var(--blue)">finnhub.io</a></span>
+                <label>Twelve Data API Key <span style="font-weight:400;text-transform:none;letter-spacing:0">(for live prices — free)</span></label>
+                <input type="password" id="s-twelvedata" placeholder="your-twelvedata-key" style="font-family:monospace;font-size:12px" />
+                <span style="font-size:10px;color:var(--muted);margin-top:3px">Get yours free at <a href="https://twelvedata.com" target="_blank" style="color:var(--blue)">twelvedata.com</a></span>
             </div>
         </div>
         <div id="s-status" style="margin-top:12px;font-size:12px;display:none"></div>
@@ -885,39 +885,47 @@ function getFinnhubKey(){
     return localStorage.getItem('th_finnhub_key') ||
         (typeof FINNHUB_API_KEY!=='undefined'&&FINNHUB_API_KEY&&!FINNHUB_API_KEY.includes('paste')?FINNHUB_API_KEY:null);
 }
+function getTwelveDataKey(){
+    return localStorage.getItem('th_twelvedata_key') ||
+        (typeof TWELVEDATA_API_KEY!=='undefined'&&TWELVEDATA_API_KEY?TWELVEDATA_API_KEY:null);
+}
 
 // ── SETTINGS MODAL ────────────────────────────────────────────
 function openSettings(){
     const st=document.getElementById('s-status');
+    // Always let user set Twelve Data key (needed for live prices)
+    document.getElementById('s-twelvedata').disabled=false;
+    document.getElementById('s-twelvedata').value=localStorage.getItem('th_twelvedata_key')||'';
     if(ON_VERCEL){
-        // On Vercel, keys are already embedded — just show confirmation
         document.getElementById('s-claude').value='';
-        document.getElementById('s-claude').placeholder='Keys are stored securely on Vercel ✅';
+        document.getElementById('s-claude').placeholder='Claude key stored on Vercel ✅';
         document.getElementById('s-claude').disabled=true;
-        document.getElementById('s-finnhub').value='';
-        document.getElementById('s-finnhub').placeholder='Keys are stored securely on Vercel ✅';
-        document.getElementById('s-finnhub').disabled=true;
-        st.style.display='block'; st.style.color='var(--green)';
-        st.textContent='✅ Running on Vercel — API keys are embedded server-side. No action needed.';
+        const hasTD=!!getTwelveDataKey();
+        st.style.display='block';
+        st.style.color=hasTD?'var(--green)':'var(--yellow)';
+        st.textContent=hasTD
+            ?'✅ Twelve Data key saved — live prices active.'
+            :'⚠️ Enter your Twelve Data key below to enable live prices (free at twelvedata.com)';
     } else {
         document.getElementById('s-claude').disabled=false;
-        document.getElementById('s-finnhub').disabled=false;
         document.getElementById('s-claude').placeholder='sk-ant-api03-...';
-        document.getElementById('s-finnhub').placeholder='your-finnhub-key';
         document.getElementById('s-claude').value=localStorage.getItem('th_claude_key')||'';
-        document.getElementById('s-finnhub').value=localStorage.getItem('th_finnhub_key')||'';
         st.style.display='none';
     }
     document.getElementById('settingsModal').classList.add('open');
 }
 function closeSettings(){ document.getElementById('settingsModal').classList.remove('open'); }
 function saveSettings(){
-    if(ON_VERCEL){ closeSettings(); return; } // Keys are server-side, nothing to save
+    const tdk=document.getElementById('s-twelvedata').value.trim();
+    if(tdk) localStorage.setItem('th_twelvedata_key',tdk);
+    if(ON_VERCEL){
+        closeSettings();
+        scheduleAutoRefresh(); // re-kick with new key
+        return;
+    }
     const ck=document.getElementById('s-claude').value.trim();
-    const fk=document.getElementById('s-finnhub').value.trim();
     if(!ck){alert('Claude API key is required for AI features to work.');return;}
     localStorage.setItem('th_claude_key',ck);
-    if(fk) localStorage.setItem('th_finnhub_key',fk);
     const st=document.getElementById('s-status');
     st.style.display='block'; st.style.color='var(--green)';
     st.textContent='✅ Keys saved! AI features are now active.';
@@ -963,50 +971,70 @@ async function fetchQuotesFinnhub(tickers){
     }catch(e){return{};}
 }
 
-// Batch quotes — Twelve Data primary (reliable, real-time), Finnhub fallback
+// Batch quotes — calls Twelve Data DIRECTLY from the browser (CORS enabled)
+// Falls back to Finnhub if no Twelve Data key, then Yahoo Finance via server
 // Returns { TICKER: { c, pc, dp, h, l }, ... }
 async function fetchQuotes(tickers){
     if(!tickers||!tickers.length) return {};
     const unique=[...new Set(tickers.map(t=>t.toUpperCase().trim()))].filter(Boolean);
 
-    if(!ON_VERCEL){
-        // Local dev: Finnhub with user's key
-        const key=getFinnhubKey();
-        if(!key) return {};
-        const results=await Promise.allSettled(
-            unique.map(t=>fetch(`https://finnhub.io/api/v1/quote?symbol=${t}&token=${key}`).then(r=>r.json()).then(d=>({t,d})).catch(()=>null))
-        );
-        const map={};
-        results.forEach(r=>{
-            if(r.status==='fulfilled'&&r.value?.d?.c){
-                const{t,d}=r.value;
-                map[t]={c:d.c,pc:d.pc||d.c,dp:d.dp||0,h:d.h||d.c,l:d.l||d.c};
+    // ── Try Twelve Data direct (browser CORS call — no Vercel function needed) ──
+    const tdKey = getTwelveDataKey();
+    if(tdKey){
+        try{
+            const controller=new AbortController();
+            setTimeout(()=>controller.abort(),8000);
+            const url=`https://api.twelvedata.com/quote?symbol=${unique.join(',')}&apikey=${tdKey}`;
+            const r=await fetch(url,{signal:controller.signal});
+            if(r.ok){
+                const data=await r.json();
+                // Top-level error = bad key / rate limit
+                if(!data.code && !data.message){
+                    const prices={};
+                    const entries=unique.length===1?[[unique[0],data]]:Object.entries(data);
+                    for(const [ticker,q] of entries){
+                        if(!q||q.code||!q.close) continue;
+                        const price=parseFloat(q.close);
+                        const prev=parseFloat(q.previous_close||q.close);
+                        if(price>0){
+                            prices[ticker.toUpperCase()]={
+                                c:price, pc:prev,
+                                dp:prev?parseFloat(((price-prev)/prev*100).toFixed(2)):parseFloat(q.percent_change||0),
+                                h:parseFloat(q.high||price),
+                                l:parseFloat(q.low||price)
+                            };
+                        }
+                    }
+                    if(Object.keys(prices).length>0) return prices;
+                }
             }
-        });
-        return map;
+        }catch(e){}
     }
 
-    // On Vercel: /api/quotes now tries Twelve Data first, falls back to Yahoo Finance
+    // ── Fallback: Finnhub direct (browser CORS call) ──
+    const fhKey=getFinnhubKey();
+    if(fhKey){
+        try{
+            const results=await Promise.allSettled(
+                unique.map(t=>fetch(`https://finnhub.io/api/v1/quote?symbol=${t}&token=${fhKey}`)
+                    .then(r=>r.json()).then(d=>({t,d})).catch(()=>null))
+            );
+            const map={};
+            results.forEach(r=>{
+                if(r.status==='fulfilled'&&r.value?.d?.c&&r.value.d.c!==0){
+                    const{t,d}=r.value;
+                    map[t]={c:d.c,pc:d.pc||d.c,dp:d.dp||0,h:d.h||d.c,l:d.l||d.c};
+                }
+            });
+            if(Object.keys(map).length>0) return map;
+        }catch(e){}
+    }
+
+    // ── Last resort: server-side proxy (if Vercel functions work) ──
     try{
         const r=await fetch(`/api/quotes?symbols=${unique.join(',')}`);
-        if(r.ok){
-            const data=await r.json();
-            const prices=data.prices||{};
-            if(Object.keys(prices).length>0){
-                // Fill any missing tickers with Finnhub
-                const missing=unique.filter(t=>!prices[t]||!prices[t].c);
-                if(missing.length){
-                    const fb=await fetchQuotesFinnhub(missing);
-                    Object.assign(prices,fb);
-                }
-                return prices;
-            }
-        }
+        if(r.ok){ const data=await r.json(); return data.prices||{}; }
     }catch(e){}
-
-    // Final fallback: Finnhub directly
-    const fbPrices=await fetchQuotesFinnhub(unique);
-    if(Object.keys(fbPrices).length>0) return fbPrices;
 
     return {};
 }
