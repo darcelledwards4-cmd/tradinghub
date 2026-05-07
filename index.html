@@ -986,9 +986,9 @@ async function fetchQuotes(tickers){
         return map;
     }
 
-    // On Vercel: try Twelve Data first (TWELVEDATA_API_KEY in Vercel env)
+    // On Vercel: /api/quotes now tries Twelve Data first, falls back to Yahoo Finance
     try{
-        const r=await fetch(`/api/tdquotes?symbols=${unique.join(',')}`);
+        const r=await fetch(`/api/quotes?symbols=${unique.join(',')}`);
         if(r.ok){
             const data=await r.json();
             const prices=data.prices||{};
@@ -1004,15 +1004,9 @@ async function fetchQuotes(tickers){
         }
     }catch(e){}
 
-    // Fallback: Finnhub (FINNHUB_API_KEY in Vercel env)
+    // Final fallback: Finnhub directly
     const fbPrices=await fetchQuotesFinnhub(unique);
     if(Object.keys(fbPrices).length>0) return fbPrices;
-
-    // Last resort: Yahoo Finance
-    try{
-        const r=await fetch(`/api/quotes?symbols=${unique.join(',')}`);
-        if(r.ok){ const data=await r.json(); return data.prices||{}; }
-    }catch(e){}
 
     return {};
 }
