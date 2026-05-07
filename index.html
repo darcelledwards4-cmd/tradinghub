@@ -4,7 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Trading Hub — Darcell</title>
-    <script src="config.js"></script>
+    <!-- config.js is local-dev only (gitignored). On Vercel all keys are server-side. -->
+    <script>try{var _s=document.createElement('script');_s.src='config.js';document.head.appendChild(_s);}catch(e){}</script>
     <style>
         :root {
             --bg: #0d1117;
@@ -448,6 +449,7 @@
     <div class="tape" id="tape"></div>
     <div class="header-right">
         <div class="last-updated" id="lastUpdated">Not yet updated</div>
+        <button id="refreshPricesBtn" onclick="manualRefreshPrices()" style="background:var(--bg3);border:1px solid var(--border);color:var(--muted);border-radius:6px;padding:5px 10px;font-size:11px;cursor:pointer;transition:all .15s" title="Refresh all prices now">⟳ Prices</button>
         <div class="market-pill market-closed" id="marketPill">Checking...</div>
         <div class="clock" id="clock">--:--:-- --</div>
         <button onclick="openSettings()" id="settingsBtn" style="background:var(--bg3);border:1px solid var(--border);color:var(--muted);border-radius:6px;padding:5px 11px;font-size:12px;cursor:pointer;transition:all .15s" title="API Key Settings">⚙️</button>
@@ -1100,17 +1102,39 @@ async function refreshVisiblePrices(){
 }
 
 // Auto-refresh every 60 seconds when market is open, every 5 min when closed
+// ALWAYS reschedules even if refresh fails — never let one error kill the chain
 function scheduleAutoRefresh(){
     const et=new Date(new Date().toLocaleString('en-US',{timeZone:'America/New_York'}));
     const h=et.getHours(),m=et.getMinutes(),dow=et.getDay();
     const isOpen=dow>0&&dow<6&&(h*100+m)>=930&&(h*100+m)<1600;
     clearTimeout(window._priceRefreshTimer);
     window._priceRefreshTimer=setTimeout(async()=>{
-        await refreshVisiblePrices();
-        scheduleAutoRefresh();
+        try{ await refreshVisiblePrices(); }
+        catch(e){ console.warn('[AutoRefresh] error (will retry):', e.message); }
+        scheduleAutoRefresh(); // always reschedule — even on error
     }, isOpen ? 60000 : 300000);
 }
 scheduleAutoRefresh();
+
+// Manual price refresh — button in header
+async function manualRefreshPrices(){
+    const btn = document.getElementById('refreshPricesBtn');
+    if(btn){ btn.textContent='⟳ ...'; btn.disabled=true; }
+    const lu = document.getElementById('lastUpdated');
+    if(lu) lu.textContent='Refreshing prices...';
+    try{
+        await refreshVisiblePrices();
+        if(lu && lu.textContent==='Refreshing prices...'){
+            // refreshVisiblePrices only updates lastUpdated if it gets prices
+            // If it returned early (no cards or no prices), say so
+            lu.textContent='No cards to refresh';
+        }
+    }catch(e){
+        console.error('[ManualRefresh]', e);
+        if(lu) lu.textContent='Price refresh failed — check console';
+    }
+    if(btn){ btn.textContent='⟳ Prices'; btn.disabled=false; }
+}
 
 // ── STRIP JSON FROM CLAUDE RESPONSES ─────────────────────────
 function stripJSON(raw){
