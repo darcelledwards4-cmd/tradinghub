@@ -1058,32 +1058,74 @@ async function fetchQuotes(tickers){
 // ── LIVE PRICE INJECTION ──────────────────────────────────────
 // After Claude returns cards, overwrite prices with real Finnhub data
 // quotes = array of {ticker, price, chg} from fetchQuote
-// Rescale entry/stop/target levels when Claude's training price differs from live price.
-// This fixes cases like SNAP at $6 where Claude generated levels anchored to $11.
+// Rescale and validate price levels so they make sense vs the live price.
+// Handles: SNAP at $6 with $12 entry (2x off), SOFI at $16 with $14 entry (wrong direction for CALL),
+// and stop/target directional errors (stop above entry on a CALL, etc.)
 function sanitizePriceLevels(idea, livePrice){
     if(!livePrice || livePrice <= 0) return idea;
+    const p = livePrice;
+    const isPut = (idea.option_type||'').toUpperCase()==='PUT' ||
+                  (idea.direction||'').toLowerCase()==='bearish';
+
     const entryLow  = parseFloat(idea.entry_low)  || 0;
     const entryHigh = parseFloat(idea.entry_high) || 0;
+    const stop      = parseFloat(idea.stop_loss)  || 0;
+    const target    = parseFloat(idea.target)     || 0;
     const entryMid  = (entryLow + entryHigh) / 2;
     if(!entryMid || entryMid <= 0) return idea;
-    const ratio = livePrice / entryMid;
-    // Only rescale if levels are more than 15% off from live price
-    if(Math.abs(ratio - 1) < 0.15) return idea;
+
+    const ratio = p / entryMid;
+    const pctOff = Math.abs(ratio - 1);
+
+    // Check directionality problems even when price is close
+    const callStopAboveEntry  = !isPut && stop  >= entryMid * 0.99;
+    const callTargetBelowEntry= !isPut && target <= entryMid * 1.01;
+    const putStopBelowEntry   =  isPut && stop  <= entryMid * 1.01;
+    const putTargetAboveEntry =  isPut && target >= entryMid * 0.99;
+    const directionalError    = callStopAboveEntry || callTargetBelowEntry || putStopBelowEntry || putTargetAboveEntry;
+
+    // Skip if levels are within 8% AND directionally sound
+    if(pctOff < 0.08 && !directionalError) return idea;
+
+    // Scale all levels to live price
     function sc(n){ return n ? parseFloat((parseFloat(n) * ratio).toFixed(2)) : n; }
-    idea = {...idea,
-        entry_low:  sc(idea.entry_low),
-        entry_high: sc(idea.entry_high),
-        stop_loss:  sc(idea.stop_loss),
-        target:     sc(idea.target),
-    };
+
+    let nl = sc(entryLow), nh = sc(entryHigh);
+    let ns = sc(stop), nt = sc(target);
+    const nm = (nl + nh) / 2;
+
+    // Enforce correct stop/target direction after scaling
+    if(!isPut){
+        if(ns >= nm * 0.99) ns = parseFloat((nm * 0.93).toFixed(2)); // stop below entry
+        if(nt <= nm * 1.01) nt = parseFloat((nm * 1.10).toFixed(2)); // target above entry
+    } else {
+        if(ns <= nm * 1.01) ns = parseFloat((nm * 1.07).toFixed(2)); // stop above entry
+        if(nt >= nm * 0.99) nt = parseFloat((nm * 0.90).toFixed(2)); // target below entry
+    }
+
+    idea = {...idea, entry_low:nl, entry_high:nh, stop_loss:ns, target:nt};
+
+    // Scale expiry options with graduated stop/target multipliers per timeframe
     if(idea.expiry_options && Array.isArray(idea.expiry_options)){
-        idea.expiry_options = idea.expiry_options.map(opt=>({
-            ...opt,
-            entry_low:  sc(opt.entry_low),
-            entry_high: sc(opt.entry_high),
-            stop_loss:  sc(opt.stop_loss),
-            target:     sc(opt.target),
-        }));
+        const callStop = [0.95, 0.93, 0.90]; // tighter → wider by timeframe
+        const callTgt  = [1.08, 1.15, 1.25];
+        const putStop  = [1.05, 1.07, 1.10];
+        const putTgt   = [0.92, 0.88, 0.83];
+        idea.expiry_options = idea.expiry_options.map((opt, i)=>{
+            const ol = sc(parseFloat(opt.entry_low)  || entryLow);
+            const oh = sc(parseFloat(opt.entry_high) || entryHigh);
+            const om = (ol + oh) / 2;
+            let os = sc(parseFloat(opt.stop_loss)    || stop);
+            let ot = sc(parseFloat(opt.target)       || target);
+            if(!isPut){
+                if(os >= om * 0.99) os = parseFloat((om * (callStop[i]||0.93)).toFixed(2));
+                if(ot <= om * 1.01) ot = parseFloat((om * (callTgt [i]||1.10)).toFixed(2));
+            } else {
+                if(os <= om * 1.01) os = parseFloat((om * (putStop [i]||1.07)).toFixed(2));
+                if(ot >= om * 0.99) ot = parseFloat((om * (putTgt  [i]||0.90)).toFixed(2));
+            }
+            return {...opt, entry_low:ol, entry_high:oh, stop_loss:os, target:ot};
+        });
     }
     return idea;
 }
