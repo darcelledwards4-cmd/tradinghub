@@ -944,6 +944,91 @@ async function fetchQuote(ticker){
     }catch(e){return null;}
 }
 
+// ── LIVE PRICE INJECTION ──────────────────────────────────────
+// After Claude returns cards, overwrite prices with real Finnhub data
+// quotes = array of {ticker, price, chg} from fetchQuote
+function injectLivePrices(cards, quotes){
+    if(!quotes || !quotes.length) return cards;
+    const map = {};
+    quotes.forEach(q=>{ if(q) map[q.ticker]=q; });
+    return cards.map(card=>{
+        const q = map[card.ticker];
+        if(q){ card.current_price=q.price; card.price_change=q.chg; }
+        return card;
+    });
+}
+
+// Build a ticker→quote map from any currently-rendered cards, then batch-refresh
+// their price/change DOM elements. Called on an interval and after every scan.
+async function refreshVisiblePrices(){
+    // Gather all card IDs currently in the DOM
+    const wraps = document.querySelectorAll('[id^="cwrap-"]');
+    if(!wraps.length) return;
+    const cardIds = [...wraps].map(el=>el.id.replace('cwrap-',''));
+
+    // Collect unique tickers
+    const tickerToCards = {};
+    cardIds.forEach(id=>{
+        const t = window._cardData[id]?.ticker;
+        if(t){ (tickerToCards[t]=tickerToCards[t]||[]).push(id); }
+    });
+    const tickers = Object.keys(tickerToCards);
+    if(!tickers.length) return;
+
+    // Batch fetch (max 15 at once — Finnhub free tier friendly)
+    const batch = tickers.slice(0,15);
+    const quotes = await Promise.all(batch.map(fetchQuote));
+    const qMap = {};
+    quotes.filter(Boolean).forEach(q=>{ qMap[q.ticker]=q; });
+
+    // Update DOM + stored data
+    batch.forEach(ticker=>{
+        const q = qMap[ticker];
+        if(!q) return;
+        (tickerToCards[ticker]||[]).forEach(cardId=>{
+            const data = window._cardData[cardId];
+            if(!data) return;
+
+            // Update stored values
+            data.current_price = q.price;
+            data.price_change  = q.chg;
+            if(data.call){ data.call.current_price=q.price; data.call.price_change=q.chg; }
+            if(data.put) { data.put.current_price =q.price; data.put.price_change =q.chg; }
+
+            // Update live price element
+            const cpEl = document.getElementById('cp-'+cardId);
+            if(cpEl) cpEl.textContent = '$'+q.price.toFixed(2);
+
+            // Update change element
+            const ccEl = document.getElementById('cc-'+cardId);
+            if(ccEl){
+                const chg=parseFloat(q.chg||0);
+                ccEl.className='card-change '+(chg>=0?'up':'down');
+                ccEl.textContent=(chg>=0?'▲ ':'▼ ')+Math.abs(chg).toFixed(2)+'%';
+            }
+        });
+    });
+
+    // Update last-updated timestamp
+    const now=new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+    const lu=document.getElementById('lastUpdated');
+    if(lu && document.querySelectorAll('[id^="cwrap-"]').length)
+        lu.textContent=`Prices updated ${now}`;
+}
+
+// Auto-refresh every 60 seconds when market is open, every 5 min when closed
+function scheduleAutoRefresh(){
+    const et=new Date(new Date().toLocaleString('en-US',{timeZone:'America/New_York'}));
+    const h=et.getHours(),m=et.getMinutes(),dow=et.getDay();
+    const isOpen=dow>0&&dow<6&&(h*100+m)>=930&&(h*100+m)<1600;
+    clearTimeout(window._priceRefreshTimer);
+    window._priceRefreshTimer=setTimeout(async()=>{
+        await refreshVisiblePrices();
+        scheduleAutoRefresh();
+    }, isOpen ? 60000 : 300000);
+}
+scheduleAutoRefresh();
+
 // ── STRIP JSON FROM CLAUDE RESPONSES ─────────────────────────
 function stripJSON(raw){
     let s=raw.replace(/```[^\n]*\n?/g,'').replace(/```/g,'').trim();
@@ -1045,7 +1130,8 @@ function buildCard(idea, existingCardId=null){
         <div class="card-head">
             <div><div class="card-ticker">${idea.ticker}</div><div class="card-company">${idea.company||''}</div></div>
             <div class="card-price-row">
-                <div class="card-price">$${parseFloat(idea.current_price||0).toFixed(2)}</div>${chgHtml}
+                <div class="card-price" id="cp-${cardId}">$${parseFloat(idea.current_price||0).toFixed(2)}</div>
+                <div class="card-change${chg>=0?' up':' down'}" id="cc-${cardId}">${chg>=0?'▲':'▼'} ${Math.abs(chg).toFixed(2)}%</div>
                 <div style="margin-top:5px"><span class="pot-badge ${potCls}" id="pb-${cardId}">${potLbl}</span></div>
             </div>
         </div>
@@ -1313,10 +1399,17 @@ async function switchCardDir(cardId, dir){
     </div>`;
 
     try {
-        const price = parseFloat(data.current_price||0);
-        const pchg  = parseFloat(data.price_change||0);
+        // Always refresh price before fetching the new direction
+        const freshQ = await fetchQuote(data.ticker);
+        const price = freshQ ? freshQ.price : parseFloat(data.current_price||0);
+        const pchg  = freshQ ? freshQ.chg   : parseFloat(data.price_change||0);
+        if(freshQ){ data.current_price=freshQ.price; data.price_change=freshQ.chg; }
+
         const raw = await callClaude(singleDirPrompt(data.ticker, price, pchg, dir.toUpperCase()));
         const idea = JSON.parse(stripJSON(raw));
+        // ✅ Force real price onto the Claude-returned card
+        idea.current_price = price;
+        idea.price_change  = pchg;
         data[dir] = idea;
         const wrap2 = document.getElementById('cwrap-'+cardId);
         if (wrap2) wrap2.outerHTML = buildCard(idea, cardId);
@@ -1399,6 +1492,8 @@ async function runActiveFilter(){
                 :WATCHLIST.join(', ')+' — use your latest knowledge';
             const raw=await callClaude(watchlistScanPrompt(priceData, meta.optType));
             cards=JSON.parse(stripJSON(raw));
+            // ✅ Override Claude's guessed prices with the real Finnhub data
+            cards=injectLivePrices(cards, quotes);
         } else {
             const cat=DISCOVER_CATS.find(c=>c.key===key);
             const raw=await callClaude(discoverPrompt(cat.desc));
@@ -1409,7 +1504,9 @@ async function runActiveFilter(){
         renderFilterResult(key, cards);
         const now=new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'});
         document.getElementById('lastScan').textContent=`Last scanned at ${now} — ${meta.sectionLabel}`;
-        document.getElementById('lastUpdated').textContent=`Updated ${now}`;
+        document.getElementById('lastUpdated').textContent=`Prices live · ${now}`;
+        // For discover cards, fetch real prices after rendering
+        if(meta.type!=='watchlist') refreshVisiblePrices();
     }catch(e){
         document.getElementById('ideasOutput').innerHTML=`<div class="empty-state"><div class="empty-icon">⚠️</div><div class="empty-title">Error</div><div class="empty-sub">${e.message}</div></div>`;
     }
@@ -1475,9 +1572,9 @@ async function scanWatchlist(){
             callClaude(watchlistScanPrompt(priceData,'PUT'))
         ]);
 
-        // Render calls
+        // Render calls — inject live prices before building cards
         try{
-            const calls=JSON.parse(stripJSON(callsRaw));
+            const calls=injectLivePrices(JSON.parse(stripJSON(callsRaw)), quotes);
             document.getElementById('calls-section').innerHTML=`
                 <div class="d-cat-label" style="margin-bottom:12px">📈 CALL IDEAS — Bullish Setups</div>
                 <div class="ideas-grid">${calls.map(buildCard).join('')}</div>`;
@@ -1487,9 +1584,9 @@ async function scanWatchlist(){
                 <div class="empty-sub" style="color:var(--muted);font-size:12px">Could not load — try scanning again.</div>`;
         }
 
-        // Render puts
+        // Render puts — inject live prices before building cards
         try{
-            const puts=JSON.parse(stripJSON(putsRaw));
+            const puts=injectLivePrices(JSON.parse(stripJSON(putsRaw)), quotes);
             document.getElementById('puts-section').innerHTML=`
                 <div class="d-cat-label" style="margin-bottom:12px">📉 PUT IDEAS — Bearish Setups</div>
                 <div class="ideas-grid">${puts.map(buildCard).join('')}</div>`;
@@ -1501,7 +1598,7 @@ async function scanWatchlist(){
 
         const now=new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'});
         document.getElementById('lastScan').textContent=`Last scanned at ${now}`;
-        document.getElementById('lastUpdated').textContent=`Updated ${now}`;
+        document.getElementById('lastUpdated').textContent=`Prices live · ${now}`;
         scanDiscover();
     }catch(e){
         document.getElementById('ideasOutput').innerHTML=`<div class="empty-state"><div class="empty-icon">⚠️</div><div class="empty-title">Something went wrong</div><div class="empty-sub">${e.message}</div></div>`;
@@ -1548,15 +1645,21 @@ async function scanDiscover(){
             <div class="loading-state" style="padding:20px"><div class="spinner"></div><div class="loading-text">Loading...</div></div>
         </div>`).join('');
 
-    // Fire all 3 calls in parallel
+    // Fire all category calls in parallel; after each renders, hit Finnhub for live prices
     await Promise.all(cats.map(async cat=>{
         const el=document.getElementById('dcat-'+cat.key);
         try{
             const raw=await callClaude(discoverPrompt(cat.desc));
-            const stocks=JSON.parse(stripJSON(raw));
+            let stocks=JSON.parse(stripJSON(raw));
             if(!Array.isArray(stocks)||!stocks.length) throw new Error('Empty response');
+            stocks=stocks.map(s=>({...s,category:cat.label}));
             el.innerHTML=`<div class="d-cat-label">${cat.label}</div>
-                <div class="ideas-grid">${stocks.map(s=>buildCard({...s,category:cat.label})).join('')}</div>`;
+                <div class="ideas-grid">${stocks.map(buildCard).join('')}</div>`;
+            // Fetch live prices for these tickers and inject immediately
+            const tickers=stocks.map(s=>s.ticker);
+            const liveQuotes=await Promise.all(tickers.map(fetchQuote));
+            injectLivePrices(stocks, liveQuotes.filter(Boolean)); // update stored data
+            refreshVisiblePrices(); // push to DOM
         }catch(e){
             el.innerHTML=`<div class="d-cat-label">${cat.label}</div>
                 <div style="font-size:12px;color:var(--muted);padding:8px 0">Could not load — try scanning again.</div>`;
@@ -1588,6 +1691,10 @@ async function analyzeSingle(){
         try{ putIdea =JSON.parse(stripJSON(putRaw));  }catch(e){}
 
         if(!callIdea && !putIdea) throw new Error('Could not parse analysis — try again.');
+
+        // ✅ Force real Finnhub price onto both directions — Claude's prices are stale
+        if(callIdea){ callIdea.current_price=q.price; callIdea.price_change=q.chg; }
+        if(putIdea) { putIdea.current_price =q.price; putIdea.price_change =q.chg; }
 
         // Pre-create cardId and populate both directions before rendering
         const cardId = 'c' + (++_cardIdCounter);
