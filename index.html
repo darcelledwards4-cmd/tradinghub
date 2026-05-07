@@ -1467,7 +1467,10 @@ function addSuggestionToWatchlist(ticker, btn){
 
 // ── EXPIRY SWITCHER ───────────────────────────────────────────
 function switchCardExpiry(cardId, idx){
-    const idea=window._cardData[cardId];
+    const cardData=window._cardData[cardId];
+    if(!cardData) return;
+    // expiry_options live on the idea object (call or put), not on cardData directly
+    const idea=cardData[cardData.activeDir||'call']||cardData.call||cardData.put;
     if(!idea||!idea.expiry_options) return;
     const opt=idea.expiry_options[idx];
     if(!opt) return;
