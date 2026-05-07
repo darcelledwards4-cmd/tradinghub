@@ -1284,7 +1284,7 @@ async function callClaude(prompt){
         r=await fetch('/api/claude',{
             method:'POST',
             headers:{'Content-Type':'application/json'},
-            body:JSON.stringify({model:'claude-opus-4-6',max_tokens:6000,messages:[{role:'user',content:prompt}]})
+            body:JSON.stringify({model:'claude-opus-4-6',max_tokens:8000,messages:[{role:'user',content:prompt}]})
         });
     } else {
         // Local dev — use key from localStorage/config.js with browser direct access
@@ -1293,7 +1293,7 @@ async function callClaude(prompt){
         r=await fetch('https://api.anthropic.com/v1/messages',{
             method:'POST',
             headers:{'Content-Type':'application/json','x-api-key':key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
-            body:JSON.stringify({model:'claude-opus-4-6',max_tokens:6000,messages:[{role:'user',content:prompt}]})
+            body:JSON.stringify({model:'claude-opus-4-6',max_tokens:8000,messages:[{role:'user',content:prompt}]})
         });
     }
     const d=await r.json();
@@ -1841,13 +1841,7 @@ async function scanWatchlist(){
             ?quotes.map(q=>`${q.ticker}: $${q.price.toFixed(2)} (${q.chg>=0?'+':''}${q.chg.toFixed(2)}% today)`).join('\n')
             :WATCHLIST.join(', ')+' — use your latest knowledge of these stocks';
 
-        // Run calls and puts in parallel — with live news injected
-        const [callsRaw, putsRaw] = await Promise.all([
-            callClaude(watchlistScanPrompt(priceData,'CALL', newsMap)),
-            callClaude(watchlistScanPrompt(priceData,'PUT', newsMap))
-        ]);
-
-        // Attach news items to each card based on ticker
+        // Attach news helper
         function attachNews(cards){
             return cards.map(s=>{
                 const n=newsMap[(s.ticker||'').toUpperCase()];
@@ -1856,8 +1850,9 @@ async function scanWatchlist(){
             });
         }
 
-        // Render calls — inject live prices + news before building cards
+        // Run calls FIRST, render, then run puts — sequential to avoid rate-limit collisions
         try{
+            const callsRaw=await callClaude(watchlistScanPrompt(priceData,'CALL', newsMap));
             const calls=attachNews(injectLivePrices(JSON.parse(stripJSON(callsRaw)), quotes));
             document.getElementById('calls-section').innerHTML=`
                 <div class="d-cat-label" style="margin-bottom:12px">📈 CALL IDEAS — Bullish Setups</div>
@@ -1865,11 +1860,11 @@ async function scanWatchlist(){
         }catch(e){
             document.getElementById('calls-section').innerHTML=`
                 <div class="d-cat-label" style="margin-bottom:12px">📈 CALL IDEAS — Bullish Setups</div>
-                <div class="empty-sub" style="color:var(--muted);font-size:12px">Could not load — try scanning again.</div>`;
+                <div class="empty-sub" style="color:var(--red);font-size:12px;padding:8px 0">⚠️ ${e.message}</div>`;
         }
 
-        // Render puts — inject live prices + news before building cards
         try{
+            const putsRaw=await callClaude(watchlistScanPrompt(priceData,'PUT', newsMap));
             const puts=attachNews(injectLivePrices(JSON.parse(stripJSON(putsRaw)), quotes));
             document.getElementById('puts-section').innerHTML=`
                 <div class="d-cat-label" style="margin-bottom:12px">📉 PUT IDEAS — Bearish Setups</div>
@@ -1877,7 +1872,7 @@ async function scanWatchlist(){
         }catch(e){
             document.getElementById('puts-section').innerHTML=`
                 <div class="d-cat-label" style="margin-bottom:12px">📉 PUT IDEAS — Bearish Setups</div>
-                <div class="empty-sub" style="color:var(--muted);font-size:12px">Could not load — try scanning again.</div>`;
+                <div class="empty-sub" style="color:var(--red);font-size:12px;padding:8px 0">⚠️ ${e.message}</div>`;
         }
 
         const now=new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'});
@@ -1958,17 +1953,8 @@ async function scanDiscover(){
     console.log('[Discover] priceMap returned', liveCount, 'tickers:', Object.keys(priceMap));
     if(!liveCount) console.warn('[Discover] ⚠️ All price APIs failed — cards will show Claude estimated prices');
 
-    // Step 4: apply live prices, attach news, update summary with live context, then render
-    // Build a prompt to regenerate just the summary for a discover card with live price + news
-    function discoverSummaryPrompt(s, livePrice, newsText){
-        const isPut=(s.option_type||'').toUpperCase()==='PUT';
-        return `${s.ticker} (${s.company}) is currently trading at $${livePrice.toFixed(2)}.
-${newsText?'Recent news: '+newsText:''}
-Write ONE concise sentence (max 20 words) explaining why ${isPut?'a put (bearish)':'a call (bullish)'} trade on ${s.ticker} makes sense RIGHT NOW at $${livePrice.toFixed(2)}.${newsText?' If referencing news, end with (Source: pub, date).':''}
-Reply with ONLY the sentence. No extra text.`;
-    }
-
-    cats.forEach(async (cat, i) => {
+    // Step 4: apply live prices, attach news, render
+    cats.forEach((cat, i) => {
         const el = document.getElementById('dcat-'+cat.key);
         let stocks = catStocks[i];
         if(!stocks || !stocks.length){
@@ -1976,7 +1962,6 @@ Reply with ONLY the sentence. No extra text.`;
                 <div style="font-size:12px;color:var(--muted);padding:8px 0">Could not load — try scanning again.</div>`;
             return;
         }
-        // Overwrite Claude's stale prices and attach news items
         stocks = stocks.map(s=>{
             const key = (s.ticker||'').toUpperCase();
             const q = priceMap[key];
@@ -1988,42 +1973,12 @@ Reply with ONLY the sentence. No extra text.`;
             } else {
                 s._priceIsLive = false;
             }
-            const newsEntry = discoverNewsMap[(s.ticker||'').toUpperCase()];
+            const newsEntry = discoverNewsMap[key];
             if(newsEntry && newsEntry.items && newsEntry.items.length) s._newsItems=newsEntry.items.slice(0,2);
             return s;
         });
-
-        // Render immediately with sanitized prices
         el.innerHTML=`<div class="d-cat-label">${cat.label}</div>
             <div class="ideas-grid">${stocks.map(s=>buildCard(s)).join('')}</div>`;
-
-        // Then update summaries in background with live price + news context
-        stocks.forEach(async s=>{
-            const cardEls=document.querySelectorAll(`[id^="cwrap-"]`);
-            // Find this card's cardId by ticker
-            let cardId=null;
-            for(const [id,d] of Object.entries(window._cardData)){
-                if(d.ticker===s.ticker && (d.call||d.put)){
-                    const idea=d.call||d.put;
-                    if(Math.abs((idea.current_price||0)-s.current_price)<0.01){ cardId=id; break; }
-                }
-            }
-            if(!cardId) return;
-            const livePrice=s.current_price;
-            if(!livePrice||livePrice<=0) return;
-            const newsEntry=discoverNewsMap[(s.ticker||'').toUpperCase()];
-            const newsText=(newsEntry&&newsEntry.text)?newsEntry.text:'';
-            try{
-                const newSummary=await callClaude(discoverSummaryPrompt(s, livePrice, newsText));
-                const clean=newSummary.trim().replace(/^["']|["']$/g,'');
-                // Update the summary in DOM
-                const summaryEl=document.querySelector(`#cwrap-${cardId} .card-summary`);
-                if(summaryEl) summaryEl.textContent=clean;
-                // Update stored idea
-                const storedIdea=window._cardData[cardId]?.call||window._cardData[cardId]?.put;
-                if(storedIdea) storedIdea.summary=clean;
-            }catch(e){ /* keep original summary on error */ }
-        });
     });
 }
 
