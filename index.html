@@ -885,7 +885,8 @@ setInterval(updateClock,1000); updateClock();
 // When running on Vercel (https), API calls go through our serverless proxies.
 // Keys live in Vercel env vars — never in the browser.
 // When running locally (file:// or localhost), falls back to localStorage/config.js keys.
-const ON_VERCEL = window.location.protocol === 'https:' && window.location.hostname !== '';
+// Vercel serverless proxy routes are broken — always use direct browser API calls.
+const ON_VERCEL = false;
 
 // Local-only key helpers (used only when running locally)
 function getClaudeKey(){
@@ -909,23 +910,13 @@ function openSettings(){
     document.getElementById('s-twelvedata').value=localStorage.getItem('th_twelvedata_key')||'';
     document.getElementById('s-finnhub').disabled=false;
     document.getElementById('s-finnhub').value=localStorage.getItem('th_finnhub_key')||'';
-    if(ON_VERCEL){
-        document.getElementById('s-claude').value='';
-        document.getElementById('s-claude').placeholder='Claude key stored on Vercel ✅';
-        document.getElementById('s-claude').disabled=true;
-        const hasTD=!!getTwelveDataKey();
-        const hasFH=!!getFinnhubKey();
-        st.style.display='block';
-        st.style.color=(hasTD&&hasFH)?'var(--green)':'var(--orange)';
-        st.textContent=(hasTD&&hasFH)
-            ?'✅ Live prices + news active.'
-            :'⚠️ Add your API keys below for live prices and news.';
-    } else {
-        document.getElementById('s-claude').disabled=false;
-        document.getElementById('s-claude').placeholder='sk-ant-api03-...';
-        document.getElementById('s-claude').value=localStorage.getItem('th_claude_key')||'';
-        st.style.display='none';
-    }
+    document.getElementById('s-claude').disabled=false;
+    document.getElementById('s-claude').placeholder='sk-ant-api03-...';
+    document.getElementById('s-claude').value=localStorage.getItem('th_claude_key')||'';
+    const hasCK=!!getClaudeKey();
+    st.style.display='block';
+    st.style.color=hasCK?'var(--green)':'var(--orange)';
+    st.textContent=hasCK?'✅ Keys saved — AI features active.':'⚠️ Enter your Claude API key to enable AI features.';
     document.getElementById('settingsModal').classList.add('open');
 }
 function closeSettings(){ document.getElementById('settingsModal').classList.remove('open'); }
@@ -934,11 +925,6 @@ function saveSettings(){
     if(tdk) localStorage.setItem('th_twelvedata_key',tdk);
     const fhk=document.getElementById('s-finnhub').value.trim();
     if(fhk) localStorage.setItem('th_finnhub_key',fhk);
-    if(ON_VERCEL){
-        closeSettings();
-        scheduleAutoRefresh(); // re-kick with new key
-        return;
-    }
     const ck=document.getElementById('s-claude').value.trim();
     if(!ck){alert('Claude API key is required for AI features to work.');return;}
     localStorage.setItem('th_claude_key',ck);
