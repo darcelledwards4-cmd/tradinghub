@@ -1208,10 +1208,30 @@ async function manualRefreshPrices(){
 // ── STRIP JSON FROM CLAUDE RESPONSES ─────────────────────────
 function stripJSON(raw){
     let s=raw.replace(/```[^\n]*\n?/g,'').replace(/```/g,'').trim();
+    // Try full match first
     const obj=s.match(/\{[\s\S]*\}/);
     const arr=s.match(/\[[\s\S]*\]/);
-    if(obj&&arr) return obj.index<arr.index?obj[0]:arr[0];
-    return (obj||arr||[s])[0];
+    let candidate;
+    if(obj&&arr) candidate=obj.index<arr.index?obj[0]:arr[0];
+    else candidate=(obj||arr||[s])[0];
+    // Validate — if it parses, great
+    try{ JSON.parse(candidate); return candidate; }catch(e){}
+    // Truncated array: extract complete objects from a partial array
+    if(candidate&&candidate.trim().startsWith('[')){
+        const objects=[];
+        let depth=0, start=-1, inStr=false, esc=false;
+        for(let i=0;i<candidate.length;i++){
+            const c=candidate[i];
+            if(esc){esc=false;continue;}
+            if(c==='\\'&&inStr){esc=true;continue;}
+            if(c==='"'){inStr=!inStr;continue;}
+            if(inStr) continue;
+            if(c==='{'){if(depth===0)start=i;depth++;}
+            else if(c==='}'){depth--;if(depth===0&&start>=0){objects.push(candidate.slice(start,i+1));start=-1;}}
+        }
+        if(objects.length>0) return '['+objects.join(',')+']';
+    }
+    return candidate;
 }
 
 // ── CLAUDE ────────────────────────────────────────────────────
@@ -1222,7 +1242,7 @@ async function callClaude(prompt){
         r=await fetch('/api/claude',{
             method:'POST',
             headers:{'Content-Type':'application/json'},
-            body:JSON.stringify({model:'claude-opus-4-6',max_tokens:2048,messages:[{role:'user',content:prompt}]})
+            body:JSON.stringify({model:'claude-opus-4-6',max_tokens:4096,messages:[{role:'user',content:prompt}]})
         });
     } else {
         // Local dev — use key from localStorage/config.js with browser direct access
@@ -1231,7 +1251,7 @@ async function callClaude(prompt){
         r=await fetch('https://api.anthropic.com/v1/messages',{
             method:'POST',
             headers:{'Content-Type':'application/json','x-api-key':key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
-            body:JSON.stringify({model:'claude-opus-4-6',max_tokens:2048,messages:[{role:'user',content:prompt}]})
+            body:JSON.stringify({model:'claude-opus-4-6',max_tokens:4096,messages:[{role:'user',content:prompt}]})
         });
     }
     const d=await r.json();
