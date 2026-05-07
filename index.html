@@ -797,6 +797,11 @@
                 <input type="password" id="s-twelvedata" placeholder="your-twelvedata-key" style="font-family:monospace;font-size:12px" />
                 <span style="font-size:10px;color:var(--muted);margin-top:3px">Get yours free at <a href="https://twelvedata.com" target="_blank" style="color:var(--blue)">twelvedata.com</a></span>
             </div>
+            <div class="fg">
+                <label>Finnhub API Key <span style="font-weight:400;text-transform:none;letter-spacing:0">(for live news on cards — free)</span></label>
+                <input type="password" id="s-finnhub" placeholder="your-finnhub-key" style="font-family:monospace;font-size:12px" />
+                <span style="font-size:10px;color:var(--muted);margin-top:3px">Get yours free at <a href="https://finnhub.io" target="_blank" style="color:var(--blue)">finnhub.io</a></span>
+            </div>
         </div>
         <div id="s-status" style="margin-top:12px;font-size:12px;display:none"></div>
         <div class="mactions">
@@ -899,19 +904,22 @@ function getTwelveDataKey(){
 // ── SETTINGS MODAL ────────────────────────────────────────────
 function openSettings(){
     const st=document.getElementById('s-status');
-    // Always let user set Twelve Data key (needed for live prices)
+    // Always let user set Twelve Data + Finnhub keys
     document.getElementById('s-twelvedata').disabled=false;
     document.getElementById('s-twelvedata').value=localStorage.getItem('th_twelvedata_key')||'';
+    document.getElementById('s-finnhub').disabled=false;
+    document.getElementById('s-finnhub').value=localStorage.getItem('th_finnhub_key')||'';
     if(ON_VERCEL){
         document.getElementById('s-claude').value='';
         document.getElementById('s-claude').placeholder='Claude key stored on Vercel ✅';
         document.getElementById('s-claude').disabled=true;
         const hasTD=!!getTwelveDataKey();
+        const hasFH=!!getFinnhubKey();
         st.style.display='block';
-        st.style.color=hasTD?'var(--green)':'var(--yellow)';
-        st.textContent=hasTD
-            ?'✅ Twelve Data key saved — live prices active.'
-            :'⚠️ Enter your Twelve Data key below to enable live prices (free at twelvedata.com)';
+        st.style.color=(hasTD&&hasFH)?'var(--green)':'var(--orange)';
+        st.textContent=(hasTD&&hasFH)
+            ?'✅ Live prices + news active.'
+            :'⚠️ Add your API keys below for live prices and news.';
     } else {
         document.getElementById('s-claude').disabled=false;
         document.getElementById('s-claude').placeholder='sk-ant-api03-...';
@@ -924,6 +932,8 @@ function closeSettings(){ document.getElementById('settingsModal').classList.rem
 function saveSettings(){
     const tdk=document.getElementById('s-twelvedata').value.trim();
     if(tdk) localStorage.setItem('th_twelvedata_key',tdk);
+    const fhk=document.getElementById('s-finnhub').value.trim();
+    if(fhk) localStorage.setItem('th_finnhub_key',fhk);
     if(ON_VERCEL){
         closeSettings();
         scheduleAutoRefresh(); // re-kick with new key
@@ -1048,6 +1058,36 @@ async function fetchQuotes(tickers){
 // ── LIVE PRICE INJECTION ──────────────────────────────────────
 // After Claude returns cards, overwrite prices with real Finnhub data
 // quotes = array of {ticker, price, chg} from fetchQuote
+// Rescale entry/stop/target levels when Claude's training price differs from live price.
+// This fixes cases like SNAP at $6 where Claude generated levels anchored to $11.
+function sanitizePriceLevels(idea, livePrice){
+    if(!livePrice || livePrice <= 0) return idea;
+    const entryLow  = parseFloat(idea.entry_low)  || 0;
+    const entryHigh = parseFloat(idea.entry_high) || 0;
+    const entryMid  = (entryLow + entryHigh) / 2;
+    if(!entryMid || entryMid <= 0) return idea;
+    const ratio = livePrice / entryMid;
+    // Only rescale if levels are more than 15% off from live price
+    if(Math.abs(ratio - 1) < 0.15) return idea;
+    function sc(n){ return n ? parseFloat((parseFloat(n) * ratio).toFixed(2)) : n; }
+    idea = {...idea,
+        entry_low:  sc(idea.entry_low),
+        entry_high: sc(idea.entry_high),
+        stop_loss:  sc(idea.stop_loss),
+        target:     sc(idea.target),
+    };
+    if(idea.expiry_options && Array.isArray(idea.expiry_options)){
+        idea.expiry_options = idea.expiry_options.map(opt=>({
+            ...opt,
+            entry_low:  sc(opt.entry_low),
+            entry_high: sc(opt.entry_high),
+            stop_loss:  sc(opt.stop_loss),
+            target:     sc(opt.target),
+        }));
+    }
+    return idea;
+}
+
 function injectLivePrices(cards, quotes){
     if(!quotes || !quotes.length) return cards;
     // Build case-insensitive map
@@ -1059,6 +1099,7 @@ function injectLivePrices(cards, quotes){
             card.current_price = q.price;
             card.price_change  = q.chg;
             card._priceIsLive  = true;
+            card = sanitizePriceLevels(card, q.price);
         } else {
             card._priceIsLive = false;
         }
@@ -1583,9 +1624,10 @@ function singleDirPrompt(ticker, price, priceChange, optType, newsContext=''){
     const chgStr   = (priceChange>=0?'+':'')+parseFloat(priceChange||0).toFixed(2)+'%';
     return `You are a trading analyst helping a beginner options trader with a $500 account. Max loss per trade: $75 (15% rule). Today: ${exp.today}.
 
-Live data for ${ticker}: $${priceStr} (${chgStr} today)
+Live data for ${ticker}: $${priceStr} (${chgStr} today) — USE THIS EXACT PRICE to anchor all levels.
 ${newsContext}
 Analyze this as a ${isPut?'PUT (bearish — expecting price to fall)':'CALL (bullish — expecting price to rise)'} options trade.
+IMPORTANT: entry_low, entry_high, stop_loss, and target MUST be based on the current price of $${priceStr}. Do not use your training data's outdated price.
 ${isPut?'Identify downside catalysts, weak technicals, and reasons to expect a drop.':'Identify upside catalysts, strong technicals, and reasons to expect a rise.'}
 
 Return ONLY a raw JSON object. No markdown. No code fences.
@@ -1626,7 +1668,7 @@ function renderFilterResult(key, cards){
     const meta=FILTER_META[key];
     document.getElementById('ideasOutput').innerHTML=`
         <div class="d-cat-label" style="margin-bottom:12px">${meta.sectionLabel}</div>
-        <div class="ideas-grid">${cards.map(buildCard).join('')}</div>`;
+        <div class="ideas-grid">${cards.map(s=>buildCard(s)).join('')}</div>`;
 }
 
 async function runActiveFilter(){
@@ -1689,9 +1731,11 @@ Suggested expiry windows — use DIFFERENT expirations for each of the 3 trades 
   • Conservative/longer-term: target expiry around ${exp.conservative}
 Pick a realistic options expiration Friday close to each window above. Do NOT use the same expiry date for all 3 trades.
 
-Live price data:
+Live price data (use these EXACT prices for all levels — do NOT substitute your training data prices):
 ${priceData}
 ${newsEntries?'\n'+newsEntries:''}
+IMPORTANT: entry_low, entry_high, stop_loss, and target must all be anchored to the live prices above. A stock trading at $8 should have entry near $8, not $15.
+
 Find the TOP 3 best ${isPut ? 'PUT (bearish/short) trade setups' : 'CALL (bullish) trade setups'} right now from this watchlist — one aggressive, one moderate, one conservative.
 ${isPut ? 'Look for: stocks that are overextended, showing weakness, breaking down, bad news, sector headwinds, or strong downside momentum.' : 'Look for: stocks with bullish momentum, strong technicals, positive catalysts, or clear upside setups.'}
 
@@ -1752,7 +1796,7 @@ async function scanWatchlist(){
             const calls=attachNews(injectLivePrices(JSON.parse(stripJSON(callsRaw)), quotes));
             document.getElementById('calls-section').innerHTML=`
                 <div class="d-cat-label" style="margin-bottom:12px">📈 CALL IDEAS — Bullish Setups</div>
-                <div class="ideas-grid">${calls.map(buildCard).join('')}</div>`;
+                <div class="ideas-grid">${calls.map(s=>buildCard(s)).join('')}</div>`;
         }catch(e){
             document.getElementById('calls-section').innerHTML=`
                 <div class="d-cat-label" style="margin-bottom:12px">📈 CALL IDEAS — Bullish Setups</div>
@@ -1764,7 +1808,7 @@ async function scanWatchlist(){
             const puts=attachNews(injectLivePrices(JSON.parse(stripJSON(putsRaw)), quotes));
             document.getElementById('puts-section').innerHTML=`
                 <div class="d-cat-label" style="margin-bottom:12px">📉 PUT IDEAS — Bearish Setups</div>
-                <div class="ideas-grid">${puts.map(buildCard).join('')}</div>`;
+                <div class="ideas-grid">${puts.map(s=>buildCard(s)).join('')}</div>`;
         }catch(e){
             document.getElementById('puts-section').innerHTML=`
                 <div class="d-cat-label" style="margin-bottom:12px">📉 PUT IDEAS — Bearish Setups</div>
@@ -1791,6 +1835,8 @@ Today's date: ${exp.today}
 
 Find exactly 3 stocks that fit this description: ${categoryDesc}
 Do NOT include any of these tickers she already watches: ${excluded}
+
+CRITICAL: Set current_price to the ACTUAL stock price as of today (${exp.today}). All price levels — entry_low, entry_high, stop_loss, target — MUST be anchored to that real current price. Do not use prices from months ago.
 
 Return ONLY a raw JSON array of exactly 3 objects. No markdown. No code fences. No explanation.
 
@@ -1861,6 +1907,7 @@ async function scanDiscover(){
             const key = (s.ticker||'').toUpperCase();
             const q = priceMap[key];
             if(q && q.c){
+                s = sanitizePriceLevels(s, q.c);  // rescale levels BEFORE overwriting price
                 s.current_price = q.c;
                 s.price_change  = q.dp || 0;
                 s._priceIsLive  = true;
@@ -1877,7 +1924,7 @@ async function scanDiscover(){
             return s;
         });
         el.innerHTML=`<div class="d-cat-label">${cat.label}</div>
-            <div class="ideas-grid">${stocks.map(buildCard).join('')}</div>`;
+            <div class="ideas-grid">${stocks.map(s=>buildCard(s)).join('')}</div>`;
     });
 }
 
