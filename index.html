@@ -956,14 +956,15 @@ async function fetchQuotesFinnhub(tickers){
     }catch(e){return{};}
 }
 
-// Batch quotes — tries Yahoo Finance first (real-time), falls back to Finnhub
+// Batch quotes — uses Finnhub on Vercel (reliable, real-time US stocks)
+// Yahoo Finance blocks Vercel server IPs intermittently — Finnhub is more stable
 // Returns { TICKER: { c, pc, dp, h, l }, ... }
 async function fetchQuotes(tickers){
     if(!tickers||!tickers.length) return {};
     const unique=[...new Set(tickers.map(t=>t.toUpperCase().trim()))].filter(Boolean);
 
     if(!ON_VERCEL){
-        // Local dev: use Finnhub directly
+        // Local dev: use Finnhub directly with user's key
         const key=getFinnhubKey();
         if(!key) return {};
         const results=await Promise.allSettled(
@@ -979,21 +980,19 @@ async function fetchQuotes(tickers){
         return map;
     }
 
-    // On Vercel: try Yahoo Finance batch first
-    let prices={};
-    try{
-        const r=await fetch(`/api/quotes?symbols=${unique.join(',')}`);
-        if(r.ok){
-            const data=await r.json();
-            prices=data.prices||{};
-        }
-    }catch(e){}
+    // On Vercel: use Finnhub via server-side proxy (FINNHUB_API_KEY in env)
+    // Finnhub provides real-time US stock quotes on the free plan
+    const prices = await fetchQuotesFinnhub(unique);
 
-    // Fill in any missing tickers with Finnhub (always works, just slightly delayed)
-    const missing=unique.filter(t=>!prices[t]||!prices[t].c);
-    if(missing.length){
-        const fallback=await fetchQuotesFinnhub(missing);
-        Object.assign(prices, fallback);
+    // If Finnhub completely fails, try Yahoo Finance as last resort
+    if(!Object.keys(prices).length){
+        try{
+            const r=await fetch(`/api/quotes?symbols=${unique.join(',')}`);
+            if(r.ok){
+                const data=await r.json();
+                return data.prices||{};
+            }
+        }catch(e){}
     }
 
     return prices;
@@ -1031,7 +1030,7 @@ async function refreshVisiblePrices(){
 
     // ONE batch call — all symbols, single round trip to Vercel
     const qMap = await fetchQuotes(tickers);
-    if(!Object.keys(qMap).length) return; // API failed — keep existing prices
+    if(!Object.keys(qMap).length) return;
 
     // Push live prices into every matching card
     tickers.forEach(ticker=>{
@@ -1697,7 +1696,7 @@ async function scanDiscover(){
             <div class="loading-state" style="padding:20px"><div class="spinner"></div><div class="loading-text">Loading...</div></div>
         </div>`).join('');
 
-    // Fire all category calls in parallel; after each renders, hit Finnhub for live prices
+    // Fire all category calls in parallel
     await Promise.all(cats.map(async cat=>{
         const el=document.getElementById('dcat-'+cat.key);
         try{
@@ -1705,14 +1704,20 @@ async function scanDiscover(){
             let stocks=JSON.parse(stripJSON(raw));
             if(!Array.isArray(stocks)||!stocks.length) throw new Error('Empty response');
             stocks=stocks.map(s=>({...s,category:cat.label}));
-            el.innerHTML=`<div class="d-cat-label">${cat.label}</div>
-                <div class="ideas-grid">${stocks.map(buildCard).join('')}</div>`;
-            // Batch-fetch live prices for all tickers in one call, then push to DOM
+
+            // Fetch live prices BEFORE building cards so they render correctly on first paint
             const tickers=stocks.map(s=>s.ticker);
             const liveQMap=await fetchQuotes(tickers);
-            const liveQuotes=Object.entries(liveQMap).map(([ticker,q])=>({ticker,price:q.c,chg:q.dp||0}));
-            injectLivePrices(stocks, liveQuotes); // update stored data
-            refreshVisiblePrices(); // push to DOM
+            if(Object.keys(liveQMap).length){
+                stocks=stocks.map(s=>{
+                    const q=liveQMap[s.ticker];
+                    if(q&&q.c){ s.current_price=q.c; s.price_change=q.dp||0; }
+                    return s;
+                });
+            }
+
+            el.innerHTML=`<div class="d-cat-label">${cat.label}</div>
+                <div class="ideas-grid">${stocks.map(buildCard).join('')}</div>`;
         }catch(e){
             el.innerHTML=`<div class="d-cat-label">${cat.label}</div>
                 <div style="font-size:12px;color:var(--muted);padding:8px 0">Could not load — try scanning again.</div>`;
