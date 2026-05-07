@@ -956,15 +956,14 @@ async function fetchQuotesFinnhub(tickers){
     }catch(e){return{};}
 }
 
-// Batch quotes — uses Finnhub on Vercel (reliable, real-time US stocks)
-// Yahoo Finance blocks Vercel server IPs intermittently — Finnhub is more stable
+// Batch quotes — Twelve Data primary (reliable, real-time), Finnhub fallback
 // Returns { TICKER: { c, pc, dp, h, l }, ... }
 async function fetchQuotes(tickers){
     if(!tickers||!tickers.length) return {};
     const unique=[...new Set(tickers.map(t=>t.toUpperCase().trim()))].filter(Boolean);
 
     if(!ON_VERCEL){
-        // Local dev: use Finnhub directly with user's key
+        // Local dev: Finnhub with user's key
         const key=getFinnhubKey();
         if(!key) return {};
         const results=await Promise.allSettled(
@@ -980,22 +979,35 @@ async function fetchQuotes(tickers){
         return map;
     }
 
-    // On Vercel: use Finnhub via server-side proxy (FINNHUB_API_KEY in env)
-    // Finnhub provides real-time US stock quotes on the free plan
-    const prices = await fetchQuotesFinnhub(unique);
-
-    // If Finnhub completely fails, try Yahoo Finance as last resort
-    if(!Object.keys(prices).length){
-        try{
-            const r=await fetch(`/api/quotes?symbols=${unique.join(',')}`);
-            if(r.ok){
-                const data=await r.json();
-                return data.prices||{};
+    // On Vercel: try Twelve Data first (TWELVEDATA_API_KEY in Vercel env)
+    try{
+        const r=await fetch(`/api/tdquotes?symbols=${unique.join(',')}`);
+        if(r.ok){
+            const data=await r.json();
+            const prices=data.prices||{};
+            if(Object.keys(prices).length>0){
+                // Fill any missing tickers with Finnhub
+                const missing=unique.filter(t=>!prices[t]||!prices[t].c);
+                if(missing.length){
+                    const fb=await fetchQuotesFinnhub(missing);
+                    Object.assign(prices,fb);
+                }
+                return prices;
             }
-        }catch(e){}
-    }
+        }
+    }catch(e){}
 
-    return prices;
+    // Fallback: Finnhub (FINNHUB_API_KEY in Vercel env)
+    const fbPrices=await fetchQuotesFinnhub(unique);
+    if(Object.keys(fbPrices).length>0) return fbPrices;
+
+    // Last resort: Yahoo Finance
+    try{
+        const r=await fetch(`/api/quotes?symbols=${unique.join(',')}`);
+        if(r.ok){ const data=await r.json(); return data.prices||{}; }
+    }catch(e){}
+
+    return {};
 }
 
 // ── LIVE PRICE INJECTION ──────────────────────────────────────
