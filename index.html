@@ -98,6 +98,11 @@
         .card-price-row { text-align:right; }
         .card-price { font-size:16px; font-weight:700; }
         .card-change { font-size:12px; font-weight:600; margin-top:2px; }
+        .price-src-badge { font-size:9px; font-weight:700; margin-left:6px; padding:2px 5px; border-radius:4px; vertical-align:middle; letter-spacing:.3px; }
+        [data-live="1"] .price-src-badge, .price-src-badge:has(+ *) { background:rgba(63,185,80,.15); color:var(--green); }
+        [data-live="0"] .price-src-badge { background:rgba(248,81,73,.12); color:#f8a; }
+        .card-price[data-live="1"] .price-src-badge { background:rgba(63,185,80,.15); color:var(--green); }
+        .card-price[data-live="0"] .price-src-badge { background:rgba(248,166,73,.18); color:#f0b04a; }
         .up { color:var(--green); } .down { color:var(--red); }
         .card-summary { padding:0 16px 12px; font-size:13px; color:var(--muted); line-height:1.6; border-bottom:1px solid var(--border); }
         .card-levels { padding:14px 16px; display:flex; flex-direction:column; gap:10px; border-bottom:1px solid var(--border); }
@@ -1015,11 +1020,18 @@ async function fetchQuotes(tickers){
 // quotes = array of {ticker, price, chg} from fetchQuote
 function injectLivePrices(cards, quotes){
     if(!quotes || !quotes.length) return cards;
+    // Build case-insensitive map
     const map = {};
-    quotes.forEach(q=>{ if(q) map[q.ticker]=q; });
+    quotes.forEach(q=>{ if(q) map[(q.ticker||'').toUpperCase()]=q; });
     return cards.map(card=>{
-        const q = map[card.ticker];
-        if(q){ card.current_price=q.price; card.price_change=q.chg; }
+        const q = map[(card.ticker||'').toUpperCase()];
+        if(q && q.price){
+            card.current_price = q.price;
+            card.price_change  = q.chg;
+            card._priceIsLive  = true;
+        } else {
+            card._priceIsLive = false;
+        }
         return card;
     });
 }
@@ -1060,9 +1072,17 @@ async function refreshVisiblePrices(){
             if(data.call){ data.call.current_price=price; data.call.price_change=chg; }
             if(data.put) { data.put.current_price =price; data.put.price_change =chg; }
 
-            // Update price DOM
+            // Update price DOM + flip badge to Live
             const cpEl = document.getElementById('cp-'+cardId);
-            if(cpEl) cpEl.textContent = '$'+price.toFixed(2);
+            if(cpEl){
+                cpEl.dataset.live = '1';
+                const badge = cpEl.querySelector('.price-src-badge');
+                if(badge){ badge.textContent='● Live'; badge.title='Live market price'; }
+                // Replace text node (price) without touching the badge span
+                const textNode = [...cpEl.childNodes].find(n=>n.nodeType===3);
+                if(textNode) textNode.textContent = '$'+price.toFixed(2);
+                else cpEl.insertBefore(document.createTextNode('$'+price.toFixed(2)), cpEl.firstChild);
+            }
 
             // Update change DOM
             const ccEl = document.getElementById('cc-'+cardId);
@@ -1193,7 +1213,7 @@ function buildCard(idea, existingCardId=null){
         <div class="card-head">
             <div><div class="card-ticker">${idea.ticker}</div><div class="card-company">${idea.company||''}</div></div>
             <div class="card-price-row">
-                <div class="card-price" id="cp-${cardId}">$${parseFloat(idea.current_price||0).toFixed(2)}</div>
+                <div class="card-price" id="cp-${cardId}" data-live="${idea._priceIsLive?'1':'0'}">$${parseFloat(idea.current_price||0).toFixed(2)}<span class="price-src-badge" id="psrc-${cardId}" title="${idea._priceIsLive?'Live market price':'Estimated — tap ⟳ to refresh'}">${idea._priceIsLive?'● Live':'⚠ Est'}</span></div>
                 <div class="card-change${chg>=0?' up':' down'}" id="cc-${cardId}">${chg>=0?'▲':'▼'} ${Math.abs(chg).toFixed(2)}%</div>
                 <div style="margin-top:5px"><span class="pot-badge ${potCls}" id="pb-${cardId}">${potLbl}</span></div>
             </div>
@@ -1725,8 +1745,12 @@ async function scanDiscover(){
     });
 
     // Step 3: ONE batch price call for ALL tickers across all categories
-    const allTickers = [...new Set(catStocks.flat().map(s=>s.ticker).filter(Boolean))];
+    const allTickers = [...new Set(catStocks.flat().map(s=>(s.ticker||'').toUpperCase()).filter(Boolean))];
+    console.log('[Discover] Fetching live prices for:', allTickers);
     const priceMap = allTickers.length ? await fetchQuotes(allTickers) : {};
+    const liveCount = Object.keys(priceMap).length;
+    console.log('[Discover] priceMap returned', liveCount, 'tickers:', Object.keys(priceMap));
+    if(!liveCount) console.warn('[Discover] ⚠️ All price APIs failed — cards will show Claude estimated prices');
 
     // Step 4: apply live prices and render each category
     cats.forEach((cat, i) => {
@@ -1737,14 +1761,21 @@ async function scanDiscover(){
                 <div style="font-size:12px;color:var(--muted);padding:8px 0">Could not load — try scanning again.</div>`;
             return;
         }
-        // Overwrite Claude's stale prices with live prices
-        if(Object.keys(priceMap).length){
-            stocks = stocks.map(s=>{
-                const q = priceMap[s.ticker];
-                if(q && q.c){ s.current_price=q.c; s.price_change=q.dp||0; }
-                return s;
-            });
-        }
+        // Overwrite Claude's stale prices — case-insensitive ticker lookup
+        stocks = stocks.map(s=>{
+            const key = (s.ticker||'').toUpperCase();
+            const q = priceMap[key];
+            if(q && q.c){
+                s.current_price = q.c;
+                s.price_change  = q.dp || 0;
+                s._priceIsLive  = true;
+                console.log(`[Discover] ${key}: $${q.c} (${q.dp>=0?'+':''}${q.dp}%)`);
+            } else {
+                s._priceIsLive = false;
+                console.warn(`[Discover] ${key}: no live price — showing Claude estimate $${s.current_price}`);
+            }
+            return s;
+        });
         el.innerHTML=`<div class="d-cat-label">${cat.label}</div>
             <div class="ideas-grid">${stocks.map(buildCard).join('')}</div>`;
     });
@@ -1775,9 +1806,9 @@ async function analyzeSingle(){
 
         if(!callIdea && !putIdea) throw new Error('Could not parse analysis — try again.');
 
-        // ✅ Force real Finnhub price onto both directions — Claude's prices are stale
-        if(callIdea){ callIdea.current_price=q.price; callIdea.price_change=q.chg; }
-        if(putIdea) { putIdea.current_price =q.price; putIdea.price_change =q.chg; }
+        // ✅ Force real live price onto both directions — Claude's prices are stale
+        if(callIdea){ callIdea.current_price=q.price; callIdea.price_change=q.chg; callIdea._priceIsLive=true; }
+        if(putIdea) { putIdea.current_price =q.price; putIdea.price_change =q.chg; putIdea._priceIsLive=true; }
 
         // Pre-create cardId and populate both directions before rendering
         const cardId = 'c' + (++_cardIdCounter);
