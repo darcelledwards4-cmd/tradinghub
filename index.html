@@ -928,40 +928,42 @@ function updateSettingsBtn(){
 document.getElementById('settingsModal').addEventListener('click',e=>{if(e.target.id==='settingsModal')closeSettings();});
 
 // ── FETCH STOCK DATA ──────────────────────────────────────────
-// Uses Yahoo Finance for real-time prices (no API key, no delay).
-// Finnhub free tier is 15-min delayed — we keep it only for news/company data.
+// Single quote — wraps the batch endpoint for convenience
 async function fetchQuote(ticker){
+    const map = await fetchQuotes([ticker]);
+    const q = map[ticker];
+    if(!q) return null;
+    return { ticker, price:q.c, chg:q.dp||0, closes:[q.pc,q.c], high52:q.h||q.c, low52:q.l||q.c, vol:0 };
+}
+
+// Batch quotes — ONE server call for any number of tickers
+// Returns { TICKER: { c, pc, dp, h, l }, ... } — missing tickers simply absent
+async function fetchQuotes(tickers){
+    if(!tickers || !tickers.length) return {};
+    const unique = [...new Set(tickers.map(t=>t.toUpperCase().trim()))].filter(Boolean);
     try{
-        let r;
         if(ON_VERCEL){
-            // Yahoo Finance proxy — real-time, no key required
-            r = await fetch(`/api/quote?symbol=${encodeURIComponent(ticker)}`);
+            const r = await fetch(`/api/quotes?symbols=${unique.join(',')}`);
+            if(!r.ok) return {};
+            const data = await r.json();
+            return data.prices || {};
         } else {
-            // Local dev: try Yahoo Finance directly (may hit CORS), fall back to Finnhub
-            try {
-                r = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1m&range=1d`, {
-                    headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json' }
-                });
-                if(r.ok){
-                    const data = await r.json();
-                    const meta = data?.chart?.result?.[0]?.meta;
-                    if(meta && meta.regularMarketPrice){
-                        const price = meta.regularMarketPrice;
-                        const prev  = meta.previousClose || price;
-                        const chg   = prev ? parseFloat(((price-prev)/prev*100).toFixed(2)) : 0;
-                        return { ticker, price, chg, closes:[prev,price], high52:meta.regularMarketDayHigh||price, low52:meta.regularMarketDayLow||price, vol:0 };
-                    }
-                }
-            } catch(corsErr){ /* CORS blocked locally — fall through to Finnhub */ }
-            // Finnhub fallback for local dev
+            // Local dev — fetch each via Finnhub (delayed but OK for dev)
             const key = getFinnhubKey();
-            if(!key) return null;
-            r = await fetch(`https://finnhub.io/api/v1/quote?symbol=${ticker}&token=${key}`);
+            if(!key) return {};
+            const results = await Promise.allSettled(
+                unique.map(t => fetch(`https://finnhub.io/api/v1/quote?symbol=${t}&token=${key}`).then(r=>r.json()).then(d=>({t,d})).catch(()=>null))
+            );
+            const map = {};
+            results.forEach(r=>{
+                if(r.status==='fulfilled'&&r.value?.d?.c){
+                    const {t,d}=r.value;
+                    map[t]={c:d.c,pc:d.pc,dp:d.dp||0,h:d.h||d.c,l:d.l||d.c};
+                }
+            });
+            return map;
         }
-        const d = await r.json();
-        if(!d.c || d.c === 0) return null;
-        return { ticker, price:d.c, chg:d.dp||0, closes:[d.pc,d.c], high52:d.h||d.c, low52:d.l||d.c, vol:0 };
-    }catch(e){ return null; }
+    }catch(e){ return {}; }
 }
 
 // ── LIVE PRICE INJECTION ──────────────────────────────────────
@@ -978,62 +980,59 @@ function injectLivePrices(cards, quotes){
     });
 }
 
-// Build a ticker→quote map from any currently-rendered cards, then batch-refresh
-// their price/change DOM elements. Called on an interval and after every scan.
+// Refresh all visible card prices in ONE batch API call
 async function refreshVisiblePrices(){
-    // Gather all card IDs currently in the DOM
+    // Gather all card IDs in the DOM
     const wraps = document.querySelectorAll('[id^="cwrap-"]');
     if(!wraps.length) return;
     const cardIds = [...wraps].map(el=>el.id.replace('cwrap-',''));
 
-    // Collect unique tickers
+    // Map ticker → list of cardIds that show that ticker
     const tickerToCards = {};
     cardIds.forEach(id=>{
         const t = window._cardData[id]?.ticker;
-        if(t){ (tickerToCards[t]=tickerToCards[t]||[]).push(id); }
+        if(t){ (tickerToCards[t] = tickerToCards[t]||[]).push(id); }
     });
     const tickers = Object.keys(tickerToCards);
     if(!tickers.length) return;
 
-    // Batch fetch (max 15 at once — Finnhub free tier friendly)
-    const batch = tickers.slice(0,15);
-    const quotes = await Promise.all(batch.map(fetchQuote));
-    const qMap = {};
-    quotes.filter(Boolean).forEach(q=>{ qMap[q.ticker]=q; });
+    // ONE batch call — all symbols, single round trip to Vercel
+    const qMap = await fetchQuotes(tickers);
+    if(!Object.keys(qMap).length) return; // API failed — keep existing prices
 
-    // Update DOM + stored data
-    batch.forEach(ticker=>{
+    // Push live prices into every matching card
+    tickers.forEach(ticker=>{
         const q = qMap[ticker];
         if(!q) return;
+        const price = q.c, chg = q.dp||0;
+
         (tickerToCards[ticker]||[]).forEach(cardId=>{
             const data = window._cardData[cardId];
             if(!data) return;
 
-            // Update stored values
-            data.current_price = q.price;
-            data.price_change  = q.chg;
-            if(data.call){ data.call.current_price=q.price; data.call.price_change=q.chg; }
-            if(data.put) { data.put.current_price =q.price; data.put.price_change =q.chg; }
+            // Update stored values so direction-switches use fresh price
+            data.current_price = price;
+            data.price_change  = chg;
+            if(data.call){ data.call.current_price=price; data.call.price_change=chg; }
+            if(data.put) { data.put.current_price =price; data.put.price_change =chg; }
 
-            // Update live price element
+            // Update price DOM
             const cpEl = document.getElementById('cp-'+cardId);
-            if(cpEl) cpEl.textContent = '$'+q.price.toFixed(2);
+            if(cpEl) cpEl.textContent = '$'+price.toFixed(2);
 
-            // Update change element
+            // Update change DOM
             const ccEl = document.getElementById('cc-'+cardId);
             if(ccEl){
-                const chg=parseFloat(q.chg||0);
-                ccEl.className='card-change '+(chg>=0?'up':'down');
-                ccEl.textContent=(chg>=0?'▲ ':'▼ ')+Math.abs(chg).toFixed(2)+'%';
+                ccEl.className = 'card-change '+(chg>=0?'up':'down');
+                ccEl.textContent = (chg>=0?'▲ ':'▼ ')+Math.abs(chg).toFixed(2)+'%';
             }
         });
     });
 
-    // Update last-updated timestamp
-    const now=new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
-    const lu=document.getElementById('lastUpdated');
-    if(lu && document.querySelectorAll('[id^="cwrap-"]').length)
-        lu.textContent=`Prices updated ${now}`;
+    // Show live timestamp
+    const now = new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+    const lu = document.getElementById('lastUpdated');
+    if(lu) lu.textContent = `Prices live · ${now}`;
 }
 
 // Auto-refresh every 60 seconds when market is open, every 5 min when closed
@@ -1505,8 +1504,8 @@ async function runActiveFilter(){
     try{
         let cards;
         if(meta.type==='watchlist'){
-            const rawQuotes=await Promise.all(WATCHLIST.map(fetchQuote));
-            const quotes=rawQuotes.filter(Boolean);
+            const qMap=await fetchQuotes(WATCHLIST);
+            const quotes=Object.entries(qMap).map(([ticker,q])=>({ticker,price:q.c,chg:q.dp||0,closes:[q.pc,q.c],high52:q.h||q.c,low52:q.l||q.c,vol:0})).filter(q=>q.price>0);
             const priceData=quotes.length>0
                 ?quotes.map(q=>`${q.ticker}: $${q.price.toFixed(2)} (${q.chg>=0?'+':''}${q.chg.toFixed(2)}% today)`).join('\n')
                 :WATCHLIST.join(', ')+' — use your latest knowledge';
@@ -1580,8 +1579,8 @@ async function scanWatchlist(){
             <div class="loading-state"><div class="spinner"></div><div class="loading-text">Finding bearish setups...</div></div>
         </div>`;
     try{
-        const rawQuotes=await Promise.all(WATCHLIST.map(fetchQuote));
-        const quotes=rawQuotes.filter(Boolean);
+        const qMap=await fetchQuotes(WATCHLIST);
+        const quotes=Object.entries(qMap).map(([ticker,q])=>({ticker,price:q.c,chg:q.dp||0,closes:[q.pc,q.c],high52:q.h||q.c,low52:q.l||q.c,vol:0})).filter(q=>q.price>0);
         const priceData=quotes.length>0
             ?quotes.map(q=>`${q.ticker}: $${q.price.toFixed(2)} (${q.chg>=0?'+':''}${q.chg.toFixed(2)}% today)`).join('\n')
             :WATCHLIST.join(', ')+' — use your latest knowledge of these stocks';
@@ -1675,10 +1674,11 @@ async function scanDiscover(){
             stocks=stocks.map(s=>({...s,category:cat.label}));
             el.innerHTML=`<div class="d-cat-label">${cat.label}</div>
                 <div class="ideas-grid">${stocks.map(buildCard).join('')}</div>`;
-            // Fetch live prices for these tickers and inject immediately
+            // Batch-fetch live prices for all tickers in one call, then push to DOM
             const tickers=stocks.map(s=>s.ticker);
-            const liveQuotes=await Promise.all(tickers.map(fetchQuote));
-            injectLivePrices(stocks, liveQuotes.filter(Boolean)); // update stored data
+            const liveQMap=await fetchQuotes(tickers);
+            const liveQuotes=Object.entries(liveQMap).map(([ticker,q])=>({ticker,price:q.c,chg:q.dp||0}));
+            injectLivePrices(stocks, liveQuotes); // update stored data
             refreshVisiblePrices(); // push to DOM
         }catch(e){
             el.innerHTML=`<div class="d-cat-label">${cat.label}</div>
