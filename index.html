@@ -928,7 +928,7 @@ function updateSettingsBtn(){
 document.getElementById('settingsModal').addEventListener('click',e=>{if(e.target.id==='settingsModal')closeSettings();});
 
 // ── FETCH STOCK DATA ──────────────────────────────────────────
-// Single quote — wraps the batch endpoint for convenience
+// Single quote — wraps batch for convenience
 async function fetchQuote(ticker){
     const map = await fetchQuotes([ticker]);
     const q = map[ticker];
@@ -936,34 +936,67 @@ async function fetchQuote(ticker){
     return { ticker, price:q.c, chg:q.dp||0, closes:[q.pc,q.c], high52:q.h||q.c, low52:q.l||q.c, vol:0 };
 }
 
-// Batch quotes — ONE server call for any number of tickers
-// Returns { TICKER: { c, pc, dp, h, l }, ... } — missing tickers simply absent
-async function fetchQuotes(tickers){
-    if(!tickers || !tickers.length) return {};
-    const unique = [...new Set(tickers.map(t=>t.toUpperCase().trim()))].filter(Boolean);
+// Fetch prices via Finnhub — guaranteed to work (key already set in Vercel)
+async function fetchQuotesFinnhub(tickers){
     try{
-        if(ON_VERCEL){
-            const r = await fetch(`/api/quotes?symbols=${unique.join(',')}`);
-            if(!r.ok) return {};
-            const data = await r.json();
-            return data.prices || {};
-        } else {
-            // Local dev — fetch each via Finnhub (delayed but OK for dev)
-            const key = getFinnhubKey();
-            if(!key) return {};
-            const results = await Promise.allSettled(
-                unique.map(t => fetch(`https://finnhub.io/api/v1/quote?symbol=${t}&token=${key}`).then(r=>r.json()).then(d=>({t,d})).catch(()=>null))
-            );
-            const map = {};
-            results.forEach(r=>{
-                if(r.status==='fulfilled'&&r.value?.d?.c){
-                    const {t,d}=r.value;
-                    map[t]={c:d.c,pc:d.pc,dp:d.dp||0,h:d.h||d.c,l:d.l||d.c};
-                }
-            });
-            return map;
+        const results = await Promise.allSettled(
+            tickers.map(t =>
+                fetch(`/api/finnhub?endpoint=quote&symbol=${encodeURIComponent(t)}`)
+                    .then(r=>r.json()).then(d=>({t,d})).catch(()=>null)
+            )
+        );
+        const map={};
+        results.forEach(r=>{
+            if(r.status==='fulfilled'&&r.value?.d?.c&&r.value.d.c!==0){
+                const{t,d}=r.value;
+                map[t]={c:d.c,pc:d.pc||d.c,dp:d.dp||0,h:d.h||d.c,l:d.l||d.c};
+            }
+        });
+        return map;
+    }catch(e){return{};}
+}
+
+// Batch quotes — tries Yahoo Finance first (real-time), falls back to Finnhub
+// Returns { TICKER: { c, pc, dp, h, l }, ... }
+async function fetchQuotes(tickers){
+    if(!tickers||!tickers.length) return {};
+    const unique=[...new Set(tickers.map(t=>t.toUpperCase().trim()))].filter(Boolean);
+
+    if(!ON_VERCEL){
+        // Local dev: use Finnhub directly
+        const key=getFinnhubKey();
+        if(!key) return {};
+        const results=await Promise.allSettled(
+            unique.map(t=>fetch(`https://finnhub.io/api/v1/quote?symbol=${t}&token=${key}`).then(r=>r.json()).then(d=>({t,d})).catch(()=>null))
+        );
+        const map={};
+        results.forEach(r=>{
+            if(r.status==='fulfilled'&&r.value?.d?.c){
+                const{t,d}=r.value;
+                map[t]={c:d.c,pc:d.pc||d.c,dp:d.dp||0,h:d.h||d.c,l:d.l||d.c};
+            }
+        });
+        return map;
+    }
+
+    // On Vercel: try Yahoo Finance batch first
+    let prices={};
+    try{
+        const r=await fetch(`/api/quotes?symbols=${unique.join(',')}`);
+        if(r.ok){
+            const data=await r.json();
+            prices=data.prices||{};
         }
-    }catch(e){ return {}; }
+    }catch(e){}
+
+    // Fill in any missing tickers with Finnhub (always works, just slightly delayed)
+    const missing=unique.filter(t=>!prices[t]||!prices[t].c);
+    if(missing.length){
+        const fallback=await fetchQuotesFinnhub(missing);
+        Object.assign(prices, fallback);
+    }
+
+    return prices;
 }
 
 // ── LIVE PRICE INJECTION ──────────────────────────────────────
