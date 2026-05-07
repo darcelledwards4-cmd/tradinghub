@@ -106,6 +106,12 @@
         .card-price[data-live="0"] .price-src-badge { background:rgba(248,166,73,.18); color:#f0b04a; }
         .up { color:var(--green); } .down { color:var(--red); }
         .card-summary { padding:0 16px 12px; font-size:13px; color:var(--muted); line-height:1.6; border-bottom:1px solid var(--border); }
+        .card-summary.has-news { border-bottom:none; padding-bottom:4px; }
+        .card-news-cite { padding:0 16px 12px; border-bottom:1px solid var(--border); }
+        .news-cite-item { display:flex; align-items:flex-start; gap:6px; font-size:11px; color:var(--muted); line-height:1.45; padding:3px 0; }
+        .news-cite-item a { color:var(--blue); text-decoration:none; font-weight:600; white-space:nowrap; flex-shrink:0; }
+        .news-cite-item a:hover { text-decoration:underline; }
+        .news-cite-hed { overflow:hidden; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; }
         .card-levels { padding:14px 16px; display:flex; flex-direction:column; gap:10px; border-bottom:1px solid var(--border); }
         .level-row { display:flex; align-items:center; justify-content:space-between; }
         .level-left { display:flex; align-items:center; gap:8px; }
@@ -1265,7 +1271,18 @@ function buildCard(idea, existingCardId=null){
             </div>
         </div>
         ${catHtml}
-        <div class="card-summary">${idea.summary||''}</div>
+        <div class="card-summary${(idea._newsItems||[]).length?' has-news':''}">${idea.summary||''}</div>
+        ${(()=>{
+            const items=(idea._newsItems||[]);
+            if(!items.length) return '';
+            const rows=items.slice(0,2).map(a=>{
+                const src=a.source||'News';
+                const date=a.datetime?new Date(a.datetime*1000).toLocaleDateString('en-US',{month:'short',day:'numeric'}):'';
+                const label=src+(date?', '+date:'');
+                return `<div class="news-cite-item">📰 <span class="news-cite-hed">${a.headline||''}</span>&nbsp;<a href="${a.url||'#'}" target="_blank" rel="noopener">${label} ↗</a></div>`;
+            }).join('');
+            return `<div class="card-news-cite"><div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--muted);margin-bottom:3px">📰 Live News Used</div>${rows}</div>`;
+        })()}
         ${pcSection}
         <div class="card-levels">
             <div class="level-row">
@@ -1537,11 +1554,15 @@ async function switchCardDir(cardId, dir){
         const pchg  = freshQ ? freshQ.chg   : parseFloat(data.price_change||0);
         if(freshQ){ data.current_price=freshQ.price; data.price_change=freshQ.chg; }
 
-        const raw = await callClaude(singleDirPrompt(data.ticker, price, pchg, dir.toUpperCase()));
+        // Fetch news alongside this direction
+        const newsResult = await fetchNewsForPrompt(data.ticker).catch(()=>({text:'',items:[]}));
+        const raw = await callClaude(singleDirPrompt(data.ticker, price, pchg, dir.toUpperCase(), newsResult.text||''));
         const idea = JSON.parse(stripJSON(raw));
-        // ✅ Force real price onto the Claude-returned card
+        // ✅ Force real price + news onto the Claude-returned card
         idea.current_price = price;
         idea.price_change  = pchg;
+        idea._priceIsLive  = !!freshQ;
+        if(newsResult.items&&newsResult.items.length) idea._newsItems=newsResult.items.slice(0,2);
         data[dir] = idea;
         const wrap2 = document.getElementById('cwrap-'+cardId);
         if (wrap2) wrap2.outerHTML = buildCard(idea, cardId);
@@ -1555,7 +1576,7 @@ async function switchCardDir(cardId, dir){
 }
 
 // ── SINGLE-DIRECTION ANALYSIS PROMPT ─────────────────────────
-function singleDirPrompt(ticker, price, priceChange, optType){
+function singleDirPrompt(ticker, price, priceChange, optType, newsContext=''){
     const isPut = optType === 'PUT';
     const exp = getExpiryContext();
     const priceStr = (typeof price === 'number' ? price.toFixed(2) : parseFloat(price||0).toFixed(2));
@@ -1563,14 +1584,14 @@ function singleDirPrompt(ticker, price, priceChange, optType){
     return `You are a trading analyst helping a beginner options trader with a $500 account. Max loss per trade: $75 (15% rule). Today: ${exp.today}.
 
 Live data for ${ticker}: $${priceStr} (${chgStr} today)
-
+${newsContext}
 Analyze this as a ${isPut?'PUT (bearish — expecting price to fall)':'CALL (bullish — expecting price to rise)'} options trade.
 ${isPut?'Identify downside catalysts, weak technicals, and reasons to expect a drop.':'Identify upside catalysts, strong technicals, and reasons to expect a rise.'}
 
 Return ONLY a raw JSON object. No markdown. No code fences.
 
 Required keys:
-ticker, company, current_price (number), price_change (number), direction ("${isPut?'bearish':'bullish'}"), summary (1-2 plain English sentences — why this ${isPut?'PUT':'CALL'} setup makes sense), pros (array of 2 strings), cons (array of 1 string — the main risk), potential ("high"/"moderate"/"avoid"), entry_low (number), entry_high (number), stop_loss (number), target (number), option_type ("${optType}"), option_detail (same as expiry_options[0].option_detail for compat), account_sizing (same as expiry_options[0].account_sizing), confidence ("high"/"medium"/"low"), risk_reward (string e.g. "1:2"),
+ticker, company, current_price (number), price_change (number), direction ("${isPut?'bearish':'bullish'}"), summary (1-2 plain English sentences — why this ${isPut?'PUT':'CALL'} setup makes sense; if referencing a news headline, end with (Source: [publication, date])), pros (array of 2 strings), cons (array of 1 string — the main risk), potential ("high"/"moderate"/"avoid"), entry_low (number), entry_high (number), stop_loss (number), target (number), option_type ("${optType}"), option_detail (same as expiry_options[0].option_detail for compat), account_sizing (same as expiry_options[0].account_sizing), confidence ("high"/"medium"/"low"), risk_reward (string e.g. "1:2"),
 expiry_options (array of EXACTLY 3 objects — each with its own strikes, expiry date, and price levels):
   [0] {"label":"1 Mo · Aggressive",   "entry_low":number, "entry_high":number, "stop_loss":number, "target":number, "option_detail":"$X ${optType} · Expires [options Friday around ${exp.aggressive}] · Est. $X.XX/contract",  "account_sizing":"1 sentence: how many contracts, total cost, fits $75 max risk", "potential":"high"/"moderate"/"avoid"}
   [1] {"label":"3 Mo · Moderate",     "entry_low":number, "entry_high":number, "stop_loss":number, "target":number, "option_detail":"$X ${optType} · Expires [options Friday around ${exp.conservative}] · Est. $X.XX/contract", "account_sizing":"1 sentence: how many contracts, total cost, fits $75 max risk", "potential":"high"/"moderate"/"avoid"}
@@ -1617,15 +1638,22 @@ async function runActiveFilter(){
     try{
         let cards;
         if(meta.type==='watchlist'){
-            const qMap=await fetchQuotes(WATCHLIST);
+            const [qMap, newsMap] = await Promise.all([
+                fetchQuotes(WATCHLIST),
+                fetchNewsForPromptBatch(WATCHLIST)
+            ]);
             const quotes=Object.entries(qMap).map(([ticker,q])=>({ticker,price:q.c,chg:q.dp||0,closes:[q.pc,q.c],high52:q.h||q.c,low52:q.l||q.c,vol:0})).filter(q=>q.price>0);
             const priceData=quotes.length>0
                 ?quotes.map(q=>`${q.ticker}: $${q.price.toFixed(2)} (${q.chg>=0?'+':''}${q.chg.toFixed(2)}% today)`).join('\n')
                 :WATCHLIST.join(', ')+' — use your latest knowledge';
-            const raw=await callClaude(watchlistScanPrompt(priceData, meta.optType));
+            const raw=await callClaude(watchlistScanPrompt(priceData, meta.optType, newsMap));
             cards=JSON.parse(stripJSON(raw));
-            // ✅ Override Claude's guessed prices with the real Finnhub data
-            cards=injectLivePrices(cards, quotes);
+            // ✅ Override Claude's guessed prices and attach news
+            cards=injectLivePrices(cards, quotes).map(s=>{
+                const n=newsMap[(s.ticker||'').toUpperCase()];
+                if(n&&n.items&&n.items.length) s._newsItems=n.items.slice(0,2);
+                return s;
+            });
         } else {
             const cat=DISCOVER_CATS.find(c=>c.key===key);
             const raw=await callClaude(discoverPrompt(cat.desc));
@@ -1647,9 +1675,11 @@ async function runActiveFilter(){
 
 // ── SCAN WATCHLIST ────────────────────────────────────────────
 // Shared prompt builder for watchlist scan — pass "CALL" or "PUT"
-function watchlistScanPrompt(priceData, optionType){
+function watchlistScanPrompt(priceData, optionType, newsMap={}){
     const isPut = optionType === 'PUT';
     const exp = getExpiryContext();
+    // Build a news block from all tickers that have headlines
+    const newsEntries = Object.entries(newsMap).filter(([,n])=>n&&n.text).map(([,n])=>n.text).join('\n');
     return `You are a trading analyst helping a beginner options trader with a $500 account who trades 1-3 month options on tech stocks. Her rule: never lose more than 15% of her account ($75 max) per trade.
 
 Today's date: ${exp.today}
@@ -1661,14 +1691,14 @@ Pick a realistic options expiration Friday close to each window above. Do NOT us
 
 Live price data:
 ${priceData}
-
+${newsEntries?'\n'+newsEntries:''}
 Find the TOP 3 best ${isPut ? 'PUT (bearish/short) trade setups' : 'CALL (bullish) trade setups'} right now from this watchlist — one aggressive, one moderate, one conservative.
 ${isPut ? 'Look for: stocks that are overextended, showing weakness, breaking down, bad news, sector headwinds, or strong downside momentum.' : 'Look for: stocks with bullish momentum, strong technicals, positive catalysts, or clear upside setups.'}
 
 Return ONLY a raw JSON array of exactly 3 objects. No markdown. No code fences. No explanation.
 
 Each object must have these exact keys:
-ticker, company, current_price (number), price_change (number), direction ("${isPut?'bearish':'bullish'}"), summary (1-2 plain English sentences — why this ${isPut?'PUT':'CALL'} setup makes sense right now, no jargon), pros (array of exactly 2 strings), cons (array of exactly 1 string — the main risk), potential ("high" or "moderate" or "avoid"), entry_low (number), entry_high (number), stop_loss (number), target (number), option_type ("${optionType}"), option_detail (string — same as expiry_options[0].option_detail for backward compat), account_sizing (same as expiry_options[0].account_sizing), confidence ("high" or "medium" or "low"), risk_reward (string e.g. "1:2"),
+ticker, company, current_price (number), price_change (number), direction ("${isPut?'bearish':'bullish'}"), summary (1-2 plain English sentences — why this ${isPut?'PUT':'CALL'} setup makes sense right now, no jargon; if referencing a news headline, end with (Source: [publication, date])), pros (array of exactly 2 strings), cons (array of exactly 1 string — the main risk), potential ("high" or "moderate" or "avoid"), entry_low (number), entry_high (number), stop_loss (number), target (number), option_type ("${optionType}"), option_detail (string — same as expiry_options[0].option_detail for backward compat), account_sizing (same as expiry_options[0].account_sizing), confidence ("high" or "medium" or "low"), risk_reward (string e.g. "1:2"),
 expiry_options (array of EXACTLY 3 objects — pre-compute all 3 so the user can tap between them. Each timeframe should have its own adjusted entry zone, stop, and target since shorter = tighter levels, longer = wider room):
   [0] {"label":"1 Mo · Aggressive",   "entry_low":number, "entry_high":number, "stop_loss":number, "target":number, "option_detail":"$X ${optionType} · Expires [options Friday around ${exp.aggressive}] · Est. $X.XX/contract",  "account_sizing":"1 sentence for $500 account risk under $75", "potential":"high" or "moderate" or "avoid"}
   [1] {"label":"3 Mo · Moderate",     "entry_low":number, "entry_high":number, "stop_loss":number, "target":number, "option_detail":"$X ${optionType} · Expires [options Friday around ${exp.conservative}] · Est. $X.XX/contract", "account_sizing":"1 sentence for $500 account risk under $75", "potential":"high" or "moderate" or "avoid"}
@@ -1692,21 +1722,34 @@ async function scanWatchlist(){
             <div class="loading-state"><div class="spinner"></div><div class="loading-text">Finding bearish setups...</div></div>
         </div>`;
     try{
-        const qMap=await fetchQuotes(WATCHLIST);
+        // Fetch live prices + news headlines for all watchlist tickers in parallel
+        const [qMap, newsMap] = await Promise.all([
+            fetchQuotes(WATCHLIST),
+            fetchNewsForPromptBatch(WATCHLIST)
+        ]);
         const quotes=Object.entries(qMap).map(([ticker,q])=>({ticker,price:q.c,chg:q.dp||0,closes:[q.pc,q.c],high52:q.h||q.c,low52:q.l||q.c,vol:0})).filter(q=>q.price>0);
         const priceData=quotes.length>0
             ?quotes.map(q=>`${q.ticker}: $${q.price.toFixed(2)} (${q.chg>=0?'+':''}${q.chg.toFixed(2)}% today)`).join('\n')
             :WATCHLIST.join(', ')+' — use your latest knowledge of these stocks';
 
-        // Run calls and puts in parallel
+        // Run calls and puts in parallel — with live news injected
         const [callsRaw, putsRaw] = await Promise.all([
-            callClaude(watchlistScanPrompt(priceData,'CALL')),
-            callClaude(watchlistScanPrompt(priceData,'PUT'))
+            callClaude(watchlistScanPrompt(priceData,'CALL', newsMap)),
+            callClaude(watchlistScanPrompt(priceData,'PUT', newsMap))
         ]);
 
-        // Render calls — inject live prices before building cards
+        // Attach news items to each card based on ticker
+        function attachNews(cards){
+            return cards.map(s=>{
+                const n=newsMap[(s.ticker||'').toUpperCase()];
+                if(n&&n.items&&n.items.length) s._newsItems=n.items.slice(0,2);
+                return s;
+            });
+        }
+
+        // Render calls — inject live prices + news before building cards
         try{
-            const calls=injectLivePrices(JSON.parse(stripJSON(callsRaw)), quotes);
+            const calls=attachNews(injectLivePrices(JSON.parse(stripJSON(callsRaw)), quotes));
             document.getElementById('calls-section').innerHTML=`
                 <div class="d-cat-label" style="margin-bottom:12px">📈 CALL IDEAS — Bullish Setups</div>
                 <div class="ideas-grid">${calls.map(buildCard).join('')}</div>`;
@@ -1716,9 +1759,9 @@ async function scanWatchlist(){
                 <div class="empty-sub" style="color:var(--muted);font-size:12px">Could not load — try scanning again.</div>`;
         }
 
-        // Render puts — inject live prices before building cards
+        // Render puts — inject live prices + news before building cards
         try{
-            const puts=injectLivePrices(JSON.parse(stripJSON(putsRaw)), quotes);
+            const puts=attachNews(injectLivePrices(JSON.parse(stripJSON(putsRaw)), quotes));
             document.getElementById('puts-section').innerHTML=`
                 <div class="d-cat-label" style="margin-bottom:12px">📉 PUT IDEAS — Bearish Setups</div>
                 <div class="ideas-grid">${puts.map(buildCard).join('')}</div>`;
@@ -1793,15 +1836,18 @@ async function scanDiscover(){
         }catch(e){ return []; }
     });
 
-    // Step 3: ONE batch price call for ALL tickers across all categories
+    // Step 3: ONE batch price + news call for ALL tickers across all categories
     const allTickers = [...new Set(catStocks.flat().map(s=>(s.ticker||'').toUpperCase()).filter(Boolean))];
-    console.log('[Discover] Fetching live prices for:', allTickers);
-    const priceMap = allTickers.length ? await fetchQuotes(allTickers) : {};
+    console.log('[Discover] Fetching live prices + news for:', allTickers);
+    const [priceMap, discoverNewsMap] = await Promise.all([
+        allTickers.length ? fetchQuotes(allTickers) : Promise.resolve({}),
+        allTickers.length ? fetchNewsForPromptBatch(allTickers) : Promise.resolve({})
+    ]);
     const liveCount = Object.keys(priceMap).length;
     console.log('[Discover] priceMap returned', liveCount, 'tickers:', Object.keys(priceMap));
     if(!liveCount) console.warn('[Discover] ⚠️ All price APIs failed — cards will show Claude estimated prices');
 
-    // Step 4: apply live prices and render each category
+    // Step 4: apply live prices, attach news, and render each category
     cats.forEach((cat, i) => {
         const el = document.getElementById('dcat-'+cat.key);
         let stocks = catStocks[i];
@@ -1810,7 +1856,7 @@ async function scanDiscover(){
                 <div style="font-size:12px;color:var(--muted);padding:8px 0">Could not load — try scanning again.</div>`;
             return;
         }
-        // Overwrite Claude's stale prices — case-insensitive ticker lookup
+        // Overwrite Claude's stale prices and attach news items
         stocks = stocks.map(s=>{
             const key = (s.ticker||'').toUpperCase();
             const q = priceMap[key];
@@ -1822,6 +1868,11 @@ async function scanDiscover(){
             } else {
                 s._priceIsLive = false;
                 console.warn(`[Discover] ${key}: no live price — showing Claude estimate $${s.current_price}`);
+            }
+            // Attach news for card display
+            const newsEntry = discoverNewsMap[key];
+            if(newsEntry && newsEntry.items && newsEntry.items.length){
+                s._newsItems = newsEntry.items.slice(0,2);
             }
             return s;
         });
@@ -1840,13 +1891,19 @@ async function analyzeSingle(){
     out.style.display='block';
     out.innerHTML=`<div class="loading-state"><div class="spinner"></div><div class="loading-text">Fetching CALL & PUT analysis for ${ticker}...</div></div>`;
     try{
-        const q=await fetchQuote(ticker);
+        // Fetch live price + recent news in parallel
+        const [q, newsResult] = await Promise.all([
+            fetchQuote(ticker),
+            fetchNewsForPrompt(ticker)
+        ]);
         if(!q)throw new Error(`Couldn't find data for "${ticker}" — double-check the ticker symbol.`);
+        const newsCtx = newsResult.text || '';
+        const newsItems = newsResult.items || [];
 
-        // Fetch both CALL and PUT in parallel with expiry tabs
+        // Fetch both CALL and PUT in parallel — with live news injected into prompts
         const [callRaw, putRaw] = await Promise.all([
-            callClaude(singleDirPrompt(ticker, q.price, q.chg, 'CALL')),
-            callClaude(singleDirPrompt(ticker, q.price, q.chg, 'PUT'))
+            callClaude(singleDirPrompt(ticker, q.price, q.chg, 'CALL', newsCtx)),
+            callClaude(singleDirPrompt(ticker, q.price, q.chg, 'PUT', newsCtx))
         ]);
 
         let callIdea=null, putIdea=null;
@@ -1855,9 +1912,9 @@ async function analyzeSingle(){
 
         if(!callIdea && !putIdea) throw new Error('Could not parse analysis — try again.');
 
-        // ✅ Force real live price onto both directions — Claude's prices are stale
-        if(callIdea){ callIdea.current_price=q.price; callIdea.price_change=q.chg; callIdea._priceIsLive=true; }
-        if(putIdea) { putIdea.current_price =q.price; putIdea.price_change =q.chg; putIdea._priceIsLive=true; }
+        // ✅ Force real live price + attach news items onto both directions
+        if(callIdea){ callIdea.current_price=q.price; callIdea.price_change=q.chg; callIdea._priceIsLive=true; callIdea._newsItems=newsItems; }
+        if(putIdea) { putIdea.current_price =q.price; putIdea.price_change =q.chg; putIdea._priceIsLive=true;  putIdea._newsItems=newsItems; }
 
         // Pre-create cardId and populate both directions before rendering
         const cardId = 'c' + (++_cardIdCounter);
@@ -1917,19 +1974,48 @@ function fmt_agent(text){
     return text.replace(/#{1,3} (.+)/g,'<h4>$1</h4>').replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>').replace(/\n\n/g,'</p><p>').replace(/\n/g,'<br>');
 }
 
-// Fetch recent news articles from Finnhub
+// Fetch recent news articles from Finnhub (always direct — Vercel proxy is unreliable)
 async function fetchNewsArticles(ticker){
     try{
-        if(!ON_VERCEL&&!getFinnhubKey())return[];
+        const fhKey=getFinnhubKey();
+        if(!fhKey) return [];
         const to=new Date().toISOString().split('T')[0];
-        const from=new Date(Date.now()-10*24*60*60*1000).toISOString().split('T')[0];
-        const url=ON_VERCEL
-            ?`/api/finnhub?endpoint=company-news&symbol=${ticker}&from=${from}&to=${to}`
-            :`https://finnhub.io/api/v1/company-news?symbol=${ticker}&from=${from}&to=${to}&token=${getFinnhubKey()}`;
+        const from=new Date(Date.now()-7*24*60*60*1000).toISOString().split('T')[0];
+        const url=`https://finnhub.io/api/v1/company-news?symbol=${encodeURIComponent(ticker)}&from=${from}&to=${to}&token=${fhKey}`;
         const r=await fetch(url);
+        if(!r.ok) return [];
         const d=await r.json();
-        return Array.isArray(d)?d.slice(0,5):[];
+        return Array.isArray(d)?d.slice(0,6):[];
     }catch(e){return[];}
+}
+
+// Format news articles into a compact string for Claude prompt injection
+async function fetchNewsForPrompt(ticker){
+    const articles=await fetchNewsArticles(ticker);
+    if(!articles.length) return {text:'', items:[]};
+    const items=articles.slice(0,4);
+    const text='\nRecent news headlines for '+ticker+' (use these to inform your analysis — if you reference a headline, end your summary sentence with "(Source: [publication name, date])"):\n'+
+        items.map(a=>{
+            const src=a.source||'News';
+            const date=a.datetime?new Date(a.datetime*1000).toLocaleDateString('en-US',{month:'short',day:'numeric'}):'';
+            return `• "${a.headline||'(no title)'}" — ${src}${date?', '+date:''}`;
+        }).join('\n');
+    return {text, items};
+}
+
+// Batch-fetch news for a list of tickers in parallel
+async function fetchNewsForPromptBatch(tickers){
+    const results=await Promise.allSettled(
+        tickers.map(t=>fetchNewsForPrompt(t).then(n=>[t,n]))
+    );
+    const map={};
+    results.forEach(r=>{
+        if(r.status==='fulfilled'&&r.value){
+            const[t,n]=r.value;
+            map[t.toUpperCase()]=n;
+        }
+    });
+    return map;
 }
 
 function renderNewsSection(articles, ticker){
