@@ -1284,7 +1284,7 @@ async function callClaude(prompt){
         r=await fetch('/api/claude',{
             method:'POST',
             headers:{'Content-Type':'application/json'},
-            body:JSON.stringify({model:'claude-opus-4-6',max_tokens:4096,messages:[{role:'user',content:prompt}]})
+            body:JSON.stringify({model:'claude-opus-4-6',max_tokens:6000,messages:[{role:'user',content:prompt}]})
         });
     } else {
         // Local dev — use key from localStorage/config.js with browser direct access
@@ -1293,7 +1293,7 @@ async function callClaude(prompt){
         r=await fetch('https://api.anthropic.com/v1/messages',{
             method:'POST',
             headers:{'Content-Type':'application/json','x-api-key':key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
-            body:JSON.stringify({model:'claude-opus-4-6',max_tokens:4096,messages:[{role:'user',content:prompt}]})
+            body:JSON.stringify({model:'claude-opus-4-6',max_tokens:6000,messages:[{role:'user',content:prompt}]})
         });
     }
     const d=await r.json();
@@ -1686,10 +1686,9 @@ function singleDirPrompt(ticker, price, priceChange, optType, newsContext=''){
     const chgStr   = (priceChange>=0?'+':'')+parseFloat(priceChange||0).toFixed(2)+'%';
     return `You are a trading analyst helping a beginner options trader with a $500 account. Max loss per trade: $75 (15% rule). Today: ${exp.today}.
 
-Live data for ${ticker}: $${priceStr} (${chgStr} today) — USE THIS EXACT PRICE to anchor all levels.
-${newsContext}
-Analyze this as a ${isPut?'PUT (bearish — expecting price to fall)':'CALL (bullish — expecting price to rise)'} options trade.
-IMPORTANT: entry_low, entry_high, stop_loss, and target MUST be based on the current price of $${priceStr}. Do not use your training data's outdated price.
+Live data for ${ticker}: $${priceStr} (${chgStr} today)
+${newsContext?'News (cite as "Source: pub, date" in summary if used): '+newsContext:''}
+IMPORTANT: All price levels must be anchored to $${priceStr}. Analyze as a ${isPut?'PUT (bearish)':'CALL (bullish)'}.
 ${isPut?'Identify downside catalysts, weak technicals, and reasons to expect a drop.':'Identify upside catalysts, strong technicals, and reasons to expect a rise.'}
 
 Return ONLY a raw JSON object. No markdown. No code fences.
@@ -1782,8 +1781,12 @@ async function runActiveFilter(){
 function watchlistScanPrompt(priceData, optionType, newsMap={}){
     const isPut = optionType === 'PUT';
     const exp = getExpiryContext();
-    // Build a news block from all tickers that have headlines
-    const newsEntries = Object.entries(newsMap).filter(([,n])=>n&&n.text).map(([,n])=>n.text).join('\n');
+    // Build a compact news block (max 8 tickers, 2 headlines each — already limited in fetchNewsForPrompt)
+    const newsEntries = Object.entries(newsMap)
+        .filter(([,n])=>n&&n.text)
+        .slice(0,8)
+        .map(([t,n])=>n.text)
+        .join('\n');
     return `You are a trading analyst helping a beginner options trader with a $500 account who trades 1-3 month options on tech stocks. Her rule: never lose more than 15% of her account ($75 max) per trade.
 
 Today's date: ${exp.today}
@@ -1795,8 +1798,8 @@ Pick a realistic options expiration Friday close to each window above. Do NOT us
 
 Live price data (use these EXACT prices for all levels — do NOT substitute your training data prices):
 ${priceData}
-${newsEntries?'\n'+newsEntries:''}
-IMPORTANT: entry_low, entry_high, stop_loss, and target must all be anchored to the live prices above. A stock trading at $8 should have entry near $8, not $15.
+${newsEntries?'\nRecent news (cite with "Source: pub, date" if used in summary):\n'+newsEntries:''}
+IMPORTANT: All price levels must match the live prices above. $8 stock → entry near $8.
 
 Find the TOP 3 best ${isPut ? 'PUT (bearish/short) trade setups' : 'CALL (bullish) trade setups'} right now from this watchlist — one aggressive, one moderate, one conservative.
 ${isPut ? 'Look for: stocks that are overextended, showing weakness, breaking down, bad news, sector headwinds, or strong downside momentum.' : 'Look for: stocks with bullish momentum, strong technicals, positive catalysts, or clear upside setups.'}
@@ -1955,8 +1958,17 @@ async function scanDiscover(){
     console.log('[Discover] priceMap returned', liveCount, 'tickers:', Object.keys(priceMap));
     if(!liveCount) console.warn('[Discover] ⚠️ All price APIs failed — cards will show Claude estimated prices');
 
-    // Step 4: apply live prices, attach news, and render each category
-    cats.forEach((cat, i) => {
+    // Step 4: apply live prices, attach news, update summary with live context, then render
+    // Build a prompt to regenerate just the summary for a discover card with live price + news
+    function discoverSummaryPrompt(s, livePrice, newsText){
+        const isPut=(s.option_type||'').toUpperCase()==='PUT';
+        return `${s.ticker} (${s.company}) is currently trading at $${livePrice.toFixed(2)}.
+${newsText?'Recent news: '+newsText:''}
+Write ONE concise sentence (max 20 words) explaining why ${isPut?'a put (bearish)':'a call (bullish)'} trade on ${s.ticker} makes sense RIGHT NOW at $${livePrice.toFixed(2)}.${newsText?' If referencing news, end with (Source: pub, date).':''}
+Reply with ONLY the sentence. No extra text.`;
+    }
+
+    cats.forEach(async (cat, i) => {
         const el = document.getElementById('dcat-'+cat.key);
         let stocks = catStocks[i];
         if(!stocks || !stocks.length){
@@ -1969,24 +1981,49 @@ async function scanDiscover(){
             const key = (s.ticker||'').toUpperCase();
             const q = priceMap[key];
             if(q && q.c){
-                s = sanitizePriceLevels(s, q.c);  // rescale levels BEFORE overwriting price
+                s = sanitizePriceLevels(s, q.c);
                 s.current_price = q.c;
                 s.price_change  = q.dp || 0;
                 s._priceIsLive  = true;
-                console.log(`[Discover] ${key}: $${q.c} (${q.dp>=0?'+':''}${q.dp}%)`);
             } else {
                 s._priceIsLive = false;
-                console.warn(`[Discover] ${key}: no live price — showing Claude estimate $${s.current_price}`);
             }
-            // Attach news for card display
-            const newsEntry = discoverNewsMap[key];
-            if(newsEntry && newsEntry.items && newsEntry.items.length){
-                s._newsItems = newsEntry.items.slice(0,2);
-            }
+            const newsEntry = discoverNewsMap[(s.ticker||'').toUpperCase()];
+            if(newsEntry && newsEntry.items && newsEntry.items.length) s._newsItems=newsEntry.items.slice(0,2);
             return s;
         });
+
+        // Render immediately with sanitized prices
         el.innerHTML=`<div class="d-cat-label">${cat.label}</div>
             <div class="ideas-grid">${stocks.map(s=>buildCard(s)).join('')}</div>`;
+
+        // Then update summaries in background with live price + news context
+        stocks.forEach(async s=>{
+            const cardEls=document.querySelectorAll(`[id^="cwrap-"]`);
+            // Find this card's cardId by ticker
+            let cardId=null;
+            for(const [id,d] of Object.entries(window._cardData)){
+                if(d.ticker===s.ticker && (d.call||d.put)){
+                    const idea=d.call||d.put;
+                    if(Math.abs((idea.current_price||0)-s.current_price)<0.01){ cardId=id; break; }
+                }
+            }
+            if(!cardId) return;
+            const livePrice=s.current_price;
+            if(!livePrice||livePrice<=0) return;
+            const newsEntry=discoverNewsMap[(s.ticker||'').toUpperCase()];
+            const newsText=(newsEntry&&newsEntry.text)?newsEntry.text:'';
+            try{
+                const newSummary=await callClaude(discoverSummaryPrompt(s, livePrice, newsText));
+                const clean=newSummary.trim().replace(/^["']|["']$/g,'');
+                // Update the summary in DOM
+                const summaryEl=document.querySelector(`#cwrap-${cardId} .card-summary`);
+                if(summaryEl) summaryEl.textContent=clean;
+                // Update stored idea
+                const storedIdea=window._cardData[cardId]?.call||window._cardData[cardId]?.put;
+                if(storedIdea) storedIdea.summary=clean;
+            }catch(e){ /* keep original summary on error */ }
+        });
     });
 }
 
@@ -2102,13 +2139,14 @@ async function fetchNewsArticles(ticker){
 async function fetchNewsForPrompt(ticker){
     const articles=await fetchNewsArticles(ticker);
     if(!articles.length) return {text:'', items:[]};
-    const items=articles.slice(0,4);
-    const text='\nRecent news headlines for '+ticker+' (use these to inform your analysis — if you reference a headline, end your summary sentence with "(Source: [publication name, date])"):\n'+
-        items.map(a=>{
+    const items=articles.slice(0,4);         // keep up to 4 for card display
+    const promptItems=articles.slice(0,2);   // only 2 in prompt to save output tokens
+    const text='\n'+ticker+' news: '+
+        promptItems.map(a=>{
             const src=a.source||'News';
             const date=a.datetime?new Date(a.datetime*1000).toLocaleDateString('en-US',{month:'short',day:'numeric'}):'';
-            return `• "${a.headline||'(no title)'}" — ${src}${date?', '+date:''}`;
-        }).join('\n');
+            return `"${(a.headline||'').slice(0,80)}" (${src}${date?', '+date:''})`;
+        }).join(' | ');
     return {text, items};
 }
 
