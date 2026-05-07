@@ -1708,33 +1708,46 @@ async function scanDiscover(){
             <div class="loading-state" style="padding:20px"><div class="spinner"></div><div class="loading-text">Loading...</div></div>
         </div>`).join('');
 
-    // Fire all category calls in parallel
-    await Promise.all(cats.map(async cat=>{
-        const el=document.getElementById('dcat-'+cat.key);
+    // Step 1: fire all 4 Claude calls in parallel
+    const rawResults = await Promise.allSettled(
+        cats.map(cat => callClaude(discoverPrompt(cat.desc)))
+    );
+
+    // Step 2: parse each Claude response into a stocks array
+    const catStocks = cats.map((cat, i) => {
         try{
-            const raw=await callClaude(discoverPrompt(cat.desc));
-            let stocks=JSON.parse(stripJSON(raw));
-            if(!Array.isArray(stocks)||!stocks.length) throw new Error('Empty response');
-            stocks=stocks.map(s=>({...s,category:cat.label}));
+            const r = rawResults[i];
+            if(r.status !== 'fulfilled') return [];
+            const stocks = JSON.parse(stripJSON(r.value));
+            if(!Array.isArray(stocks)||!stocks.length) return [];
+            return stocks.map(s=>({...s, category:cat.label}));
+        }catch(e){ return []; }
+    });
 
-            // Fetch live prices BEFORE building cards so they render correctly on first paint
-            const tickers=stocks.map(s=>s.ticker);
-            const liveQMap=await fetchQuotes(tickers);
-            if(Object.keys(liveQMap).length){
-                stocks=stocks.map(s=>{
-                    const q=liveQMap[s.ticker];
-                    if(q&&q.c){ s.current_price=q.c; s.price_change=q.dp||0; }
-                    return s;
-                });
-            }
+    // Step 3: ONE batch price call for ALL tickers across all categories
+    const allTickers = [...new Set(catStocks.flat().map(s=>s.ticker).filter(Boolean))];
+    const priceMap = allTickers.length ? await fetchQuotes(allTickers) : {};
 
-            el.innerHTML=`<div class="d-cat-label">${cat.label}</div>
-                <div class="ideas-grid">${stocks.map(buildCard).join('')}</div>`;
-        }catch(e){
+    // Step 4: apply live prices and render each category
+    cats.forEach((cat, i) => {
+        const el = document.getElementById('dcat-'+cat.key);
+        let stocks = catStocks[i];
+        if(!stocks || !stocks.length){
             el.innerHTML=`<div class="d-cat-label">${cat.label}</div>
                 <div style="font-size:12px;color:var(--muted);padding:8px 0">Could not load — try scanning again.</div>`;
+            return;
         }
-    }));
+        // Overwrite Claude's stale prices with live prices
+        if(Object.keys(priceMap).length){
+            stocks = stocks.map(s=>{
+                const q = priceMap[s.ticker];
+                if(q && q.c){ s.current_price=q.c; s.price_change=q.dp||0; }
+                return s;
+            });
+        }
+        el.innerHTML=`<div class="d-cat-label">${cat.label}</div>
+            <div class="ideas-grid">${stocks.map(buildCard).join('')}</div>`;
+    });
 }
 
 // ── ANALYZE SINGLE ────────────────────────────────────────────
