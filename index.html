@@ -928,20 +928,40 @@ function updateSettingsBtn(){
 document.getElementById('settingsModal').addEventListener('click',e=>{if(e.target.id==='settingsModal')closeSettings();});
 
 // ── FETCH STOCK DATA ──────────────────────────────────────────
+// Uses Yahoo Finance for real-time prices (no API key, no delay).
+// Finnhub free tier is 15-min delayed — we keep it only for news/company data.
 async function fetchQuote(ticker){
     try{
         let r;
         if(ON_VERCEL){
-            r=await fetch(`/api/finnhub?endpoint=quote&symbol=${ticker}`);
+            // Yahoo Finance proxy — real-time, no key required
+            r = await fetch(`/api/quote?symbol=${encodeURIComponent(ticker)}`);
         } else {
-            const key=getFinnhubKey();
-            if(!key)return null;
-            r=await fetch(`https://finnhub.io/api/v1/quote?symbol=${ticker}&token=${key}`);
+            // Local dev: try Yahoo Finance directly (may hit CORS), fall back to Finnhub
+            try {
+                r = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1m&range=1d`, {
+                    headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json' }
+                });
+                if(r.ok){
+                    const data = await r.json();
+                    const meta = data?.chart?.result?.[0]?.meta;
+                    if(meta && meta.regularMarketPrice){
+                        const price = meta.regularMarketPrice;
+                        const prev  = meta.previousClose || price;
+                        const chg   = prev ? parseFloat(((price-prev)/prev*100).toFixed(2)) : 0;
+                        return { ticker, price, chg, closes:[prev,price], high52:meta.regularMarketDayHigh||price, low52:meta.regularMarketDayLow||price, vol:0 };
+                    }
+                }
+            } catch(corsErr){ /* CORS blocked locally — fall through to Finnhub */ }
+            // Finnhub fallback for local dev
+            const key = getFinnhubKey();
+            if(!key) return null;
+            r = await fetch(`https://finnhub.io/api/v1/quote?symbol=${ticker}&token=${key}`);
         }
-        const d=await r.json();
-        if(!d.c||d.c===0)return null;
-        return{ticker,price:d.c,chg:d.dp||0,closes:[d.pc,d.c],high52:d.h,low52:d.l,vol:0};
-    }catch(e){return null;}
+        const d = await r.json();
+        if(!d.c || d.c === 0) return null;
+        return { ticker, price:d.c, chg:d.dp||0, closes:[d.pc,d.c], high52:d.h||d.c, low52:d.l||d.c, vol:0 };
+    }catch(e){ return null; }
 }
 
 // ── LIVE PRICE INJECTION ──────────────────────────────────────
