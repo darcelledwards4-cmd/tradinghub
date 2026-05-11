@@ -1234,32 +1234,68 @@ async function manualRefreshPrices(){
 }
 
 // ── STRIP JSON FROM CLAUDE RESPONSES ─────────────────────────
+// Attempt to repair truncated or slightly malformed JSON
+function repairJSON(str){
+    if(!str) return str;
+    // 1. Remove trailing commas before } or ]
+    str=str.replace(/,(\s*[}\]])/g,'$1');
+    // 2. Walk chars to find open strings/brackets and close them
+    const opens=[];
+    let inStr=false, esc=false;
+    for(let i=0;i<str.length;i++){
+        const c=str[i];
+        if(esc){esc=false;continue;}
+        if(c==='\\'&&inStr){esc=true;continue;}
+        if(c==='"'){inStr=!inStr;continue;}
+        if(inStr) continue;
+        if(c==='[') opens.push(']');
+        else if(c==='{') opens.push('}');
+        else if(c===']'||c==='}'){if(opens.length) opens.pop();}
+    }
+    if(inStr) str+='"';           // close unterminated string
+    return str+opens.reverse().join('');  // close open brackets
+}
+
 function stripJSON(raw){
     let s=raw.replace(/```[^\n]*\n?/g,'').replace(/```/g,'').trim();
-    // Try full match first
     const obj=s.match(/\{[\s\S]*\}/);
     const arr=s.match(/\[[\s\S]*\]/);
     let candidate;
     if(obj&&arr) candidate=obj.index<arr.index?obj[0]:arr[0];
     else candidate=(obj||arr||[s])[0];
-    // Validate — if it parses, great
+    // Pass 1: direct parse
     try{ JSON.parse(candidate); return candidate; }catch(e){}
-    // Truncated array: extract complete objects from a partial array
-    if(candidate&&candidate.trim().startsWith('[')){
+    // Pass 2: repair (trailing commas, close truncated brackets/strings)
+    const repaired=repairJSON(candidate);
+    try{ JSON.parse(repaired); return repaired; }catch(e){}
+    // Pass 3: extract individually valid objects from a partial array
+    const src=repaired||candidate||'';
+    if(src.trim().startsWith('[')){
         const objects=[];
         let depth=0, start=-1, inStr=false, esc=false;
-        for(let i=0;i<candidate.length;i++){
-            const c=candidate[i];
+        for(let i=0;i<src.length;i++){
+            const c=src[i];
             if(esc){esc=false;continue;}
             if(c==='\\'&&inStr){esc=true;continue;}
             if(c==='"'){inStr=!inStr;continue;}
             if(inStr) continue;
             if(c==='{'){if(depth===0)start=i;depth++;}
-            else if(c==='}'){depth--;if(depth===0&&start>=0){objects.push(candidate.slice(start,i+1));start=-1;}}
+            else if(c==='}'){
+                depth--;
+                if(depth===0&&start>=0){
+                    const chunk=src.slice(start,i+1);
+                    // Only include chunks that are themselves valid JSON
+                    try{JSON.parse(chunk);objects.push(chunk);}catch(e){
+                        // Try repairing the chunk too
+                        try{const fc=repairJSON(chunk);JSON.parse(fc);objects.push(fc);}catch(e2){}
+                    }
+                    start=-1;
+                }
+            }
         }
         if(objects.length>0) return '['+objects.join(',')+']';
     }
-    return candidate;
+    return repaired||candidate;
 }
 
 // ── CLAUDE ────────────────────────────────────────────────────
@@ -1270,7 +1306,7 @@ async function callClaude(prompt){
         r=await fetch('/api/claude',{
             method:'POST',
             headers:{'Content-Type':'application/json'},
-            body:JSON.stringify({model:'claude-opus-4-6',max_tokens:8000,messages:[{role:'user',content:prompt}]})
+            body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:12000,messages:[{role:'user',content:prompt}]})
         });
     } else {
         // Local dev — use key from localStorage/config.js with browser direct access
@@ -1279,7 +1315,7 @@ async function callClaude(prompt){
         r=await fetch('https://api.anthropic.com/v1/messages',{
             method:'POST',
             headers:{'Content-Type':'application/json','x-api-key':key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
-            body:JSON.stringify({model:'claude-opus-4-6',max_tokens:8000,messages:[{role:'user',content:prompt}]})
+            body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:12000,messages:[{role:'user',content:prompt}]})
         });
     }
     const d=await r.json();
