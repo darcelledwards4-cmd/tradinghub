@@ -1997,11 +1997,14 @@ async function loadMoreFilter(){
         let newCards=[];
 
         if(meta.type==='watchlist'){
-            const [qMap,newsMap]=await Promise.all([fetchQuotesCached(WATCHLIST),fetchNewsForPromptBatch(WATCHLIST)]);
+            const qMap=await fetchQuotesCached(WATCHLIST);
             const quotes=Object.entries(qMap).map(([ticker,q])=>({ticker,price:q.c,chg:q.dp||0,closes:[q.pc,q.c],high52:q.h||q.c,low52:q.l||q.c,vol:0})).filter(q=>q.price>0);
             const priceData=quotes.length>0?quotes.map(q=>`${q.ticker}: $${q.price.toFixed(2)} (${q.chg>=0?'+':''}${q.chg.toFixed(2)}% today)`).join('\n'):WATCHLIST.join(', ');
-            const raw=await callClaude(watchlistScanPrompt(priceData,meta.optType,newsMap,shownTickers));
-            newCards=injectLivePrices(JSON.parse(stripJSON(raw)),quotes).map(s=>{
+            const raw=await callClaude(watchlistScanPrompt(priceData,meta.optType,{},shownTickers));
+            newCards=injectLivePrices(JSON.parse(stripJSON(raw)),quotes);
+            const lmTickers=[...new Set(newCards.map(s=>(s.ticker||'').toUpperCase()).filter(Boolean))];
+            const newsMap=lmTickers.length?await fetchNewsForPromptBatch(lmTickers):{};
+            newCards=newCards.map(s=>{
                 const n=newsMap[(s.ticker||'').toUpperCase()];
                 if(n&&n.items&&n.items.length) s._newsItems=n.items.slice(0,2);
                 return s;
@@ -2045,18 +2048,19 @@ async function runActiveFilter(){
     try{
         let cards;
         if(meta.type==='watchlist'){
-            const [qMap, newsMap] = await Promise.all([
-                fetchQuotesCached(WATCHLIST),
-                fetchNewsForPromptBatch(WATCHLIST)
-            ]);
+            // Fetch prices first — no news pre-fetch for whole watchlist (rate limits)
+            const qMap = await fetchQuotesCached(WATCHLIST);
             const quotes=Object.entries(qMap).map(([ticker,q])=>({ticker,price:q.c,chg:q.dp||0,closes:[q.pc,q.c],high52:q.h||q.c,low52:q.l||q.c,vol:0})).filter(q=>q.price>0);
             const priceData=quotes.length>0
                 ?quotes.map(q=>`${q.ticker}: $${q.price.toFixed(2)} (${q.chg>=0?'+':''}${q.chg.toFixed(2)}% today)`).join('\n')
                 :WATCHLIST.join(', ')+' — use your latest knowledge';
-            const raw=await callClaude(watchlistScanPrompt(priceData, meta.optType, newsMap));
+            const raw=await callClaude(watchlistScanPrompt(priceData, meta.optType, {}));
             cards=JSON.parse(stripJSON(raw));
-            // ✅ Override Claude's guessed prices and attach news
-            cards=injectLivePrices(cards, quotes).map(s=>{
+            cards=injectLivePrices(cards, quotes);
+            // ✅ Fetch news ONLY for the 3 tickers Claude picked (avoids rate-limit)
+            const cardTickers=[...new Set(cards.map(s=>(s.ticker||'').toUpperCase()).filter(Boolean))];
+            const newsMap = cardTickers.length ? await fetchNewsForPromptBatch(cardTickers) : {};
+            cards=cards.map(s=>{
                 const n=newsMap[(s.ticker||'').toUpperCase()];
                 if(n&&n.items&&n.items.length) s._newsItems=n.items.slice(0,2);
                 return s;
