@@ -832,6 +832,11 @@
                 <input type="password" id="s-finnhub" placeholder="your-finnhub-key" style="font-family:monospace;font-size:12px" />
                 <span style="font-size:10px;color:var(--muted);margin-top:3px">Get yours free at <a href="https://finnhub.io" target="_blank" style="color:var(--blue)">finnhub.io</a></span>
             </div>
+            <div class="fg">
+                <label>Massive.com API Key <span style="font-weight:400;text-transform:none;letter-spacing:0">(real options contract prices — free tier)</span></label>
+                <input type="password" id="s-massive" placeholder="your-massive-api-key" style="font-family:monospace;font-size:12px" />
+                <span style="font-size:10px;color:var(--muted);margin-top:3px">Get yours free at <a href="https://massive.com" target="_blank" style="color:var(--blue)">massive.com</a> (formerly Polygon.io)</span>
+            </div>
         </div>
         <div id="s-status" style="margin-top:12px;font-size:12px;display:none"></div>
         <div class="mactions">
@@ -932,6 +937,10 @@ function getTwelveDataKey(){
     return localStorage.getItem('th_twelvedata_key') ||
         (typeof TWELVEDATA_API_KEY!=='undefined'&&TWELVEDATA_API_KEY?TWELVEDATA_API_KEY:null);
 }
+function getMassiveKey(){
+    return localStorage.getItem('th_massive_key') ||
+        (typeof MASSIVE_API_KEY!=='undefined'&&MASSIVE_API_KEY&&!MASSIVE_API_KEY.includes('paste')?MASSIVE_API_KEY:null);
+}
 
 // ── SETTINGS MODAL ────────────────────────────────────────────
 function openSettings(){
@@ -941,6 +950,8 @@ function openSettings(){
     document.getElementById('s-twelvedata').value=localStorage.getItem('th_twelvedata_key')||'';
     document.getElementById('s-finnhub').disabled=false;
     document.getElementById('s-finnhub').value=localStorage.getItem('th_finnhub_key')||'';
+    document.getElementById('s-massive').disabled=false;
+    document.getElementById('s-massive').value=localStorage.getItem('th_massive_key')||'';
     document.getElementById('s-claude').disabled=false;
     document.getElementById('s-claude').placeholder='sk-ant-api03-...';
     document.getElementById('s-claude').value=localStorage.getItem('th_claude_key')||'';
@@ -956,6 +967,8 @@ function saveSettings(){
     if(tdk) localStorage.setItem('th_twelvedata_key',tdk);
     const fhk=document.getElementById('s-finnhub').value.trim();
     if(fhk) localStorage.setItem('th_finnhub_key',fhk);
+    const mk=document.getElementById('s-massive').value.trim();
+    if(mk) localStorage.setItem('th_massive_key',mk);
     const ck=document.getElementById('s-claude').value.trim();
     if(!ck){alert('Claude API key is required for AI features to work.');return;}
     localStorage.setItem('th_claude_key',ck);
