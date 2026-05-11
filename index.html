@@ -1365,8 +1365,8 @@ async function refreshVisiblePrices(){
     const tickers = Object.keys(tickerToCards);
     if(!tickers.length) return;
 
-    // ONE batch call — all symbols, single round trip to Vercel
-    const qMap = await fetchQuotes(tickers);
+    // ONE batch call — use cache if available, fresh fetch otherwise
+    const qMap = await fetchQuotesCached(tickers);
     if(!Object.keys(qMap).length) return;
 
     // Push live prices into every matching card
@@ -1972,6 +1972,8 @@ function renderFilterResult(key, cards){
     const cardIds=[];
     for(let i=before+1;i<=_cardIdCounter;i++) cardIds.push('c'+i);
     enrichCardsWithOptionPrices(cardIds);
+    // Belt-and-suspenders: push live prices into DOM regardless of injectLivePrices result
+    refreshVisiblePrices();
 }
 
 async function runActiveFilter(){
