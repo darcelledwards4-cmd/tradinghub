@@ -1076,10 +1076,31 @@ async function fetchQuotes(tickers){
         }catch(e){}
     }
 
-    // ── Last resort: server-side proxy (if Vercel functions work) ──
+    // ── Fallback: Yahoo Finance (no API key needed, CORS-friendly) ──
     try{
-        const r=await fetch(`/api/quotes?symbols=${unique.join(',')}`);
-        if(r.ok){ const data=await r.json(); return data.prices||{}; }
+        const results=await Promise.allSettled(
+            unique.map(t=>{
+                const ctrl=new AbortController();
+                setTimeout(()=>ctrl.abort(),6000);
+                return fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${t}?interval=1d&range=1d`,{signal:ctrl.signal})
+                    .then(r=>r.json()).then(d=>({t,d})).catch(()=>null);
+            })
+        );
+        const map={};
+        results.forEach(r=>{
+            if(r.status!=='fulfilled'||!r.value) return;
+            const{t,d}=r.value;
+            const res=d?.chart?.result?.[0];
+            if(!res) return;
+            const meta=res.meta;
+            const price=meta?.regularMarketPrice||meta?.price;
+            const prev=meta?.chartPreviousClose||meta?.previousClose||price;
+            if(price&&price>0){
+                const dp=prev?parseFloat(((price-prev)/prev*100).toFixed(2)):0;
+                map[t]={c:price,pc:prev,dp,h:meta?.regularMarketDayHigh||price,l:meta?.regularMarketDayLow||price};
+            }
+        });
+        if(Object.keys(map).length>0) return map;
     }catch(e){}
 
     return {};
