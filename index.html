@@ -2420,22 +2420,24 @@ async function fetchNewsArticles(ticker){
             }
         }catch(e){}
     }
-    // ── Fallback: Yahoo Finance RSS via rss2json.com (no key, no cookies needed) ──
+    // ── Fallback: Google News RSS via rss2json.com (no key needed) ──
     try{
-        const rssUrl=encodeURIComponent(`https://feeds.finance.yahoo.com/rss/2.0/headline?s=${encodeURIComponent(ticker)}&region=US&lang=en-US`);
+        const q=encodeURIComponent(`${ticker} stock`);
+        const rssUrl=encodeURIComponent(`https://news.google.com/rss/search?q=${q}&hl=en-US&gl=US&ceid=US:en`);
         const ctrl=new AbortController();
-        setTimeout(()=>ctrl.abort(),6000);
-        const r=await fetch(`https://api.rss2json.com/v1/api.json?rss_url=${rssUrl}&count=5`,{signal:ctrl.signal});
-        if(!r.ok) return [];
+        setTimeout(()=>ctrl.abort(),8000);
+        const r=await fetch(`https://api.rss2json.com/v1/api.json?rss_url=${rssUrl}&count=4`,{signal:ctrl.signal});
+        if(!r.ok){ console.warn('[news]',ticker,'rss2json status',r.status); return []; }
         const d=await r.json();
-        if(d.status!=='ok'||!d.items||!d.items.length) return [];
-        return d.items.slice(0,5).map(n=>({
-            headline:(n.title||'').replace(/<[^>]*>/g,''),
+        console.log('[news]',ticker,'status:',d.status,'items:',d.items?.length);
+        if(d.status!=='ok'||!d.items?.length) return [];
+        return d.items.slice(0,4).map(n=>({
+            headline:(n.title||'').replace(/<[^>]*>/g,'').replace(/\s+-\s+[\w\s]+$/,'').trim(),
             url:n.link||'#',
-            source:n.author||n.feed?.title||'Yahoo Finance',
+            source:(n.source?.title||n.author||'').replace(/^.*via\s+/i,'').trim()||'Google News',
             datetime:n.pubDate?Math.floor(new Date(n.pubDate).getTime()/1000):0
         }));
-    }catch(e){ return []; }
+    }catch(e){ console.warn('[news]',ticker,'error:',e.message); return []; }
 }
 
 // Format news articles into a compact string for Claude prompt injection
