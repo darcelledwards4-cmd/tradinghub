@@ -382,6 +382,42 @@
         .dir-tab.active-call { background:rgba(63,185,80,.18); color:var(--green); border-color:rgba(63,185,80,.3); }
         .dir-tab.active-put  { background:rgba(248,81,73,.15);  color:var(--red);   border-color:rgba(248,81,73,.25); }
 
+        /* ── JOURNAL CARDS ──────────────────────────── */
+        .j-cards-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px;margin-bottom:6px}
+        .j-trade-card{background:var(--bg2);border:1px solid var(--border);border-radius:10px;overflow:hidden}
+        .j-rec-banner{padding:9px 14px;font-size:12px;font-weight:700;display:flex;align-items:flex-start;gap:10px}
+        .j-rec-hold{background:rgba(63,185,80,.13);color:var(--green);border-bottom:1px solid rgba(63,185,80,.2)}
+        .j-rec-adjust{background:rgba(230,162,60,.13);color:var(--orange);border-bottom:1px solid rgba(230,162,60,.2)}
+        .j-rec-exit{background:rgba(248,81,73,.18);color:var(--red);border-bottom:1px solid rgba(248,81,73,.2)}
+        .j-rec-pending{background:rgba(139,148,158,.08);color:var(--muted);border-bottom:1px solid var(--border)}
+        .j-banner-reason{font-size:11px;font-weight:400;opacity:.9;line-height:1.4;flex:1}
+        .j-card-inner{padding:14px}
+        .j-card-top{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px}
+        .j-jticker{font-size:20px;font-weight:800}
+        .j-jbadge{display:inline-block;padding:2px 7px;border-radius:4px;font-size:10px;font-weight:700;margin-top:3px}
+        .j-call-badge{background:rgba(63,185,80,.15);color:var(--green)}
+        .j-put-badge{background:rgba(248,81,73,.15);color:var(--red)}
+        .j-cprice{text-align:right}
+        .j-cprice-val{font-size:17px;font-weight:700}
+        .j-cprice-chg{font-size:11px;margin-top:2px}
+        .j-lvl-row{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin:10px 0}
+        .j-lvl{background:var(--bg3);border-radius:6px;padding:7px 9px;text-align:center}
+        .j-lvl-lbl{font-size:9px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.4px;margin-bottom:3px}
+        .j-lvl-val{font-size:13px;font-weight:700}
+        .j-action-box{background:var(--bg3);border-radius:7px;padding:9px 11px;font-size:12px;color:var(--text);line-height:1.55;margin-top:8px}
+        .j-news-line{font-size:11px;color:var(--muted);margin-top:6px;line-height:1.4}
+        .j-card-ftr{display:flex;justify-content:space-between;align-items:center;margin-top:10px;padding-top:10px;border-top:1px solid var(--border)}
+        .j-ftr-meta{font-size:10px;color:var(--muted);line-height:1.6}
+        .j-close-trade-btn{background:none;border:1px solid rgba(63,185,80,.3);color:var(--green);border-radius:5px;padding:4px 10px;font-size:11px;cursor:pointer;margin-right:6px;transition:all .15s}
+        .j-close-trade-btn:hover{background:rgba(63,185,80,.1)}
+        .j-del-btn{background:none;border:1px solid var(--border);color:var(--muted);border-radius:5px;padding:4px 9px;font-size:11px;cursor:pointer;transition:all .15s}
+        .j-del-btn:hover{background:rgba(248,81,73,.1);color:var(--red);border-color:rgba(248,81,73,.3)}
+        .j-analyzing-row{display:flex;align-items:center;gap:7px;font-size:11px;color:var(--muted);padding:7px 14px;border-bottom:1px solid var(--border)}
+        .log-trade-btn{width:100%;margin-top:10px;padding:9px;background:rgba(139,92,246,.1);border:1px solid rgba(139,92,246,.22);color:#a78bfa;border-radius:7px;font-size:12px;font-weight:700;cursor:pointer;transition:all .15s;letter-spacing:.3px}
+        .log-trade-btn:hover{background:rgba(139,92,246,.22);border-color:rgba(139,92,246,.45)}
+        .j-refresh-btn{background:var(--bg3);border:1px solid var(--border);color:var(--muted);border-radius:6px;padding:7px 13px;font-size:12px;cursor:pointer;transition:all .15s}
+        .j-refresh-btn:hover{color:var(--text);border-color:var(--muted)}
+
         /* ── MOBILE — iPhone ── */
         @media (max-width:640px){
             body { overflow:hidden; }
@@ -755,7 +791,10 @@
             <div class="journal-inner">
                 <div class="j-top">
                     <div class="j-title">📒 My Trade Journal</div>
-                    <button class="j-add" onclick="openModal()">+ Log a Trade</button>
+                    <div style="display:flex;gap:8px">
+                        <button class="j-refresh-btn" onclick="analyzeOpenTrades()" id="analyzeBtn" title="Re-check all open trades with live prices + news">⟳ Refresh Analysis</button>
+                        <button class="j-add" onclick="openModal()">+ Log a Trade</button>
+                    </div>
                 </div>
                 <div class="stats">
                     <div class="stat"><div class="stat-lbl">Total Trades</div><div class="stat-val" id="s-total">0</div></div>
@@ -763,16 +802,7 @@
                     <div class="stat"><div class="stat-lbl">Total P&amp;L</div><div class="stat-val" id="s-pnl">$0</div></div>
                     <div class="stat"><div class="stat-lbl">Win Rate</div><div class="stat-val" id="s-wr">—</div></div>
                 </div>
-                <div class="tbl-wrap">
-                    <table class="tbl">
-                        <thead><tr>
-                            <th>Date</th><th>Ticker</th><th>Type</th><th>Strike</th>
-                            <th>Expiry</th><th>Qty</th><th>Entry $</th><th>Exit $</th>
-                            <th>P&amp;L</th><th>Status</th><th>Why I Took It</th><th></th>
-                        </tr></thead>
-                        <tbody id="journalBody"></tbody>
-                    </table>
-                </div>
+                <div id="journalBody"></div>
             </div>
         </div>
     </div>
@@ -866,6 +896,7 @@ function showTab(t){
     if(t==='charts') loadChart(curTicker);
     if(t==='news'&&!document.getElementById('newsWidget').children.length) loadNews('newsWidget');
     if(t==='watchlist') renderWLTabCards();
+    if(t==='journal'){renderJournal();analyzeOpenTrades();}
 }
 
 // ── CLOCK ─────────────────────────────────────────────────────
@@ -1436,6 +1467,7 @@ function buildCard(idea, existingCardId=null){
             <div class="conf ${confCls}">${confLbl}</div>
             <div class="rr">R:R ${idea.risk_reward||'—'}</div>
         </div>
+        <button class="log-trade-btn" onclick="logTradeFromCard('${cardId}')">📒 Log This Trade</button>
     </div></div>`;
 }
 
@@ -2556,34 +2588,205 @@ function goTicker(){const v=document.getElementById('chartSearch').value.trim().
 // ── JOURNAL ───────────────────────────────────────────────────
 let trades=JSON.parse(localStorage.getItem('darcell_v2_trades')||'[]');
 function openModal(){document.getElementById('m-date').value=new Date().toISOString().split('T')[0];document.getElementById('modal').classList.add('open');}
-function closeModal(){document.getElementById('modal').classList.remove('open');}
+function closeModal(){document.getElementById('modal').classList.remove('open');window._pendingCardData=null;}
 function saveTrade(){
     const t={id:Date.now(),date:document.getElementById('m-date').value,ticker:document.getElementById('m-ticker').value.toUpperCase().trim(),type:document.getElementById('m-type').value,strike:document.getElementById('m-strike').value,exp:document.getElementById('m-exp').value,qty:parseInt(document.getElementById('m-qty').value)||1,entry:parseFloat(document.getElementById('m-entry').value)||0,exit:document.getElementById('m-exit').value?parseFloat(document.getElementById('m-exit').value):null,thesis:document.getElementById('m-thesis').value.trim()};
     t.status=t.exit!==null?'Closed':'Open';
     if(!t.ticker||!t.entry){alert('Ticker and entry price are required.');return;}
+    if(window._pendingCardData){Object.assign(t,window._pendingCardData);window._pendingCardData=null;}
     trades.unshift(t);localStorage.setItem('darcell_v2_trades',JSON.stringify(trades));renderJournal();closeModal();
     ['m-ticker','m-strike','m-entry','m-exit','m-thesis'].forEach(id=>document.getElementById(id).value='');document.getElementById('m-exp').value='';
 }
 function deleteTrade(id){if(!confirm('Delete this trade?'))return;trades=trades.filter(t=>t.id!==id);localStorage.setItem('darcell_v2_trades',JSON.stringify(trades));renderJournal();}
+function closeTrade(id){
+    const ep=prompt('What price did you close/sell at (per contract $)? Leave blank to just mark closed.');
+    if(ep===null)return;
+    const idx=trades.findIndex(t=>t.id===id);
+    if(idx<0)return;
+    trades[idx].status='Closed';
+    const v=parseFloat(ep);
+    if(!isNaN(v)&&v>0)trades[idx].exit=v;
+    localStorage.setItem('darcell_v2_trades',JSON.stringify(trades));
+    renderJournal();
+}
+function logTradeFromCard(cardId){
+    const cd=window._cardData[cardId];
+    if(!cd)return;
+    const dir=cd.activeDir||'call';
+    const idea=cd[dir]||cd.call||cd.put;
+    if(!idea)return;
+    const elEl=document.getElementById('el-'+cardId);
+    const slEl=document.getElementById('sl-'+cardId);
+    const tlEl=document.getElementById('tl-'+cardId);
+    const odEl=document.getElementById('od-'+cardId);
+    const acEl=document.getElementById('ac-'+cardId);
+    let entryLow=idea.entry_low,entryHigh=idea.entry_high;
+    if(elEl){const m=elEl.textContent.match(/\$([\d.]+)\s*[–\-]\s*\$([\d.]+)/);if(m){entryLow=parseFloat(m[1]);entryHigh=parseFloat(m[2]);}}
+    const stopLoss=parseFloat((slEl?.textContent||'').replace(/[^0-9.]/g,''))||idea.stop_loss;
+    const target=parseFloat((tlEl?.textContent||'').replace(/[^0-9.]/g,''))||idea.target;
+    const optDetail=odEl?.textContent||idea.option_detail||'';
+    const acctSizing=acEl?.textContent||idea.account_sizing||'';
+    const strikeMatch=optDetail.match(/\$([\d.]+)/);
+    const strike=strikeMatch?strikeMatch[1]:'';
+    const expMatch=optDetail.match(/(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2},?\s+\d{4}/);
+    let expDate='';
+    if(expMatch){try{const d=new Date(expMatch[0]);if(!isNaN(d.getTime()))expDate=d.toISOString().split('T')[0];}catch(e){}}
+    window._pendingCardData={entry_low:entryLow,entry_high:entryHigh,stop_loss:stopLoss,target:target,option_detail:optDetail,account_sizing:acctSizing,stock_price_at_entry:cd.current_price||idea.current_price||0,option_type:(idea.option_type||'CALL').toUpperCase()};
+    document.getElementById('m-date').value=new Date().toISOString().split('T')[0];
+    document.getElementById('m-ticker').value=idea.ticker||'';
+    document.getElementById('m-type').value=(idea.option_type||'CALL').toUpperCase();
+    document.getElementById('m-strike').value=strike;
+    if(expDate)document.getElementById('m-exp').value=expDate;
+    document.getElementById('m-qty').value='1';
+    document.getElementById('m-entry').value='';
+    document.getElementById('m-exit').value='';
+    document.getElementById('m-thesis').value=idea.summary||'';
+    document.getElementById('modal').classList.add('open');
+}
+function buildJournalCard(trade){
+    const rec=trade.recommendation||'pending';
+    const bannerCls=rec==='exit'?'j-rec-exit':rec==='adjust'?'j-rec-adjust':rec==='hold'?'j-rec-hold':'j-rec-pending';
+    const bannerIcon=rec==='exit'?'🔴 EXIT NOW':rec==='adjust'?'🟡 CONSIDER ADJUSTING':rec==='hold'?'🟢 HOLD':'⏳ Not yet analyzed';
+    const isCall=(trade.type||'CALL')==='CALL';
+    const cp=trade.current_price;
+    const chg=parseFloat(trade.price_change||0);
+    const lastChecked=trade.last_checked?'Updated '+new Date(trade.last_checked).toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'}):'Tap ⟳ Refresh Analysis to check';
+    const analyzingHtml=trade._analyzing?`<div class="j-analyzing-row"><div class="spinner" style="width:11px;height:11px;border-width:2px"></div>Analyzing with live prices &amp; news...</div>`:'';
+    const hasLevels=trade.entry_low||trade.stop_loss||trade.target;
+    return`<div class="j-trade-card">
+        <div class="j-rec-banner ${bannerCls}">
+            <span>${bannerIcon}</span>
+            ${trade.recommendation_reason?`<span class="j-banner-reason">${trade.recommendation_reason}</span>`:''}
+        </div>
+        ${analyzingHtml}
+        <div class="j-card-inner">
+            <div class="j-card-top">
+                <div>
+                    <div class="j-jticker">${trade.ticker}</div>
+                    <span class="j-jbadge ${isCall?'j-call-badge':'j-put-badge'}">${trade.type||'CALL'} · $${trade.strike||'?'} · ${fmt(trade.exp)}</span>
+                </div>
+                <div class="j-cprice">
+                    ${cp?`<div class="j-cprice-val">$${parseFloat(cp).toFixed(2)}</div><div class="j-cprice-chg ${chg>=0?'pos':'neg'}">${chg>=0?'▲':'▼'} ${Math.abs(chg).toFixed(2)}%</div>`:`<div style="font-size:11px;color:var(--muted)">Price loading...</div>`}
+                </div>
+            </div>
+            ${hasLevels?`<div class="j-lvl-row">
+                <div class="j-lvl"><div class="j-lvl-lbl">Entry Zone</div><div class="j-lvl-val" style="font-size:11px">$${trade.entry_low||'?'}–$${trade.entry_high||'?'}</div></div>
+                <div class="j-lvl"><div class="j-lvl-lbl">Stop Loss</div><div class="j-lvl-val" style="color:var(--red)">$${trade.stop_loss||'?'}</div></div>
+                <div class="j-lvl"><div class="j-lvl-lbl">Target</div><div class="j-lvl-val" style="color:var(--green)">$${trade.target||'?'}</div></div>
+            </div>`:''}
+            ${trade.action?`<div class="j-action-box">💡 ${trade.action}</div>`:''}
+            ${trade.news_summary?`<div class="j-news-line">📰 ${trade.news_summary.slice(0,140)}${trade.news_summary.length>140?'…':''}</div>`:''}
+            <div class="j-card-ftr">
+                <div class="j-ftr-meta">
+                    <div>Logged ${fmt(trade.date)} · ${trade.qty} contract${trade.qty!==1?'s':''} @ $${parseFloat(trade.entry||0).toFixed(2)}</div>
+                    <div>${lastChecked}</div>
+                </div>
+                <div>
+                    <button class="j-close-trade-btn" onclick="closeTrade(${trade.id})">Mark Closed</button>
+                    <button class="j-del-btn" onclick="deleteTrade(${trade.id})">×</button>
+                </div>
+            </div>
+        </div>
+    </div>`;
+}
+function journalAnalysisPrompt(trade,currentPrice,priceChange,newsText){
+    const dir=(trade.type||'CALL')==='CALL'?'CALL (bullish — betting stock goes UP)':'PUT (bearish — betting stock goes DOWN)';
+    return `You are monitoring an active options trade for a beginner with a $500 account (max $75 loss rule).
+
+Trade: ${trade.ticker} ${dir}
+Strike: $${trade.strike||'?'}, Expires: ${trade.exp||'?'}
+Entry zone when logged: $${trade.entry_low||'?'} – $${trade.entry_high||'?'}
+Stock price when logged: ~$${trade.stock_price_at_entry||'?'}
+Stop loss: $${trade.stop_loss||'?'}, Target: $${trade.target||'?'}
+Original thesis: "${trade.thesis||'Not recorded'}"
+
+Current stock price: $${currentPrice} (${priceChange>=0?'+':''}${parseFloat(priceChange||0).toFixed(2)}% today)
+${newsText?'Recent news:\n'+newsText:'No recent news available.'}
+
+Assess: hold, adjust, or exit? Consider price movement vs entry/stop/target, news vs thesis.
+
+Return ONLY this JSON (no markdown):
+{"recommendation":"hold","reason":"1-2 sentences","rating":"moderate","action":"1 specific actionable sentence"}
+
+recommendation: "hold", "adjust", or "exit" only
+rating: "high", "moderate", "low", or "exit" only`;
+}
+async function analyzeOpenTrades(){
+    const open=trades.filter(t=>t.status==='Open');
+    if(!open.length)return;
+    const btn=document.getElementById('analyzeBtn');
+    if(btn){btn.disabled=true;btn.textContent='⏳ Analyzing...';}
+    open.forEach(t=>{t._analyzing=true;});
+    renderJournal();
+    try{
+        const tickers=[...new Set(open.map(t=>t.ticker).filter(Boolean))];
+        const [priceMap,newsMap]=await Promise.all([
+            tickers.length?fetchQuotes(tickers):Promise.resolve({}),
+            tickers.length?fetchNewsForPromptBatch(tickers):Promise.resolve({})
+        ]);
+        for(const trade of open){
+            try{
+                const q=priceMap[(trade.ticker||'').toUpperCase()];
+                const currentPrice=q?.c||trade.stock_price_at_entry||0;
+                const priceChange=q?.dp||0;
+                const newsEntry=newsMap[(trade.ticker||'').toUpperCase()];
+                const newsText=newsEntry?.text||'';
+                const raw=await callClaude(journalAnalysisPrompt(trade,currentPrice,priceChange,newsText));
+                const result=JSON.parse(stripJSON(raw));
+                const idx=trades.findIndex(t=>t.id===trade.id);
+                if(idx>=0){
+                    trades[idx].recommendation=result.recommendation||'hold';
+                    trades[idx].recommendation_reason=result.reason||'';
+                    trades[idx].rating=result.rating||'moderate';
+                    trades[idx].action=result.action||'';
+                    trades[idx].current_price=currentPrice;
+                    trades[idx].price_change=priceChange;
+                    trades[idx].news_summary=newsText.replace(/\n/g,' ').slice(0,200);
+                    trades[idx].last_checked=new Date().toISOString();
+                    trades[idx]._analyzing=false;
+                }
+            }catch(e){
+                const idx=trades.findIndex(t=>t.id===trade.id);
+                if(idx>=0){trades[idx]._analyzing=false;trades[idx].recommendation_reason='Analysis failed — check API key.';}
+            }
+        }
+    }catch(e){}
+    localStorage.setItem('darcell_v2_trades',JSON.stringify(trades));
+    renderJournal();
+    if(btn){btn.disabled=false;btn.textContent='⟳ Refresh Analysis';}
+}
 function fmt(d){if(!d)return'—';return new Date(d+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'2-digit'});}
 function renderJournal(){
     const body=document.getElementById('journalBody');
-    if(!trades.length){body.innerHTML='<tr class="empty-row"><td colspan="12">No trades yet — click "+ Log a Trade" to start tracking.</td></tr>';setStats(0,0,0,null);return;}
-    let pnl=0,wins=0,closed=0,open=0;
-    body.innerHTML=trades.map(t=>{
-        const p=t.exit!==null?(t.exit-t.entry)*t.qty*100:null;
-        if(p!==null){pnl+=p;closed++;if(p>0)wins++;}
-        if(t.status==='Open')open++;
-        const ph=p!==null?`<span class="${p>=0?'pos':'neg'}">${p>=0?'+':'-'}$${Math.abs(p).toFixed(0)}</span>`:'<span style="color:var(--muted)">—</span>';
-        return`<tr><td style="color:var(--muted);white-space:nowrap">${fmt(t.date)}</td><td><strong>${t.ticker}</strong></td><td><span class="badge ${t.type==='CALL'?'bc':'bp'}">${t.type}</span></td><td>$${t.strike}</td><td style="color:var(--muted);white-space:nowrap">${fmt(t.exp)}</td><td>${t.qty}</td><td>$${t.entry.toFixed(2)}</td><td>${t.exit!=null?'$'+t.exit.toFixed(2):'<span style="color:var(--muted)">Open</span>'}</td><td>${ph}</td><td><span class="badge ${t.status==='Open'?'bo':'bx'}">${t.status}</span></td><td style="max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:11px" title="${t.thesis||''}">${t.thesis||'—'}</td><td><button class="del" onclick="deleteTrade(${t.id})">×</button></td></tr>`;
-    }).join('');
-    setStats(trades.length,open,pnl,closed>0?Math.round(wins/closed*100):null);
-}
-function setStats(total,open,pnl,wr){
-    document.getElementById('s-total').textContent=total;document.getElementById('s-open').textContent=open;
+    if(!body)return;
+    const open=trades.filter(t=>t.status==='Open');
+    const closed=trades.filter(t=>t.status!=='Open');
+    let pnl=0,wins=0;
+    closed.forEach(t=>{const p=t.exit!=null?(t.exit-t.entry)*t.qty*100:null;if(p!=null){pnl+=p;if(p>0)wins++;}});
+    document.getElementById('s-total').textContent=trades.length;
+    document.getElementById('s-open').textContent=open.length;
     const pe=document.getElementById('s-pnl');pe.textContent=(pnl>=0?'+':'-')+'$'+Math.abs(pnl).toFixed(0);pe.className='stat-val '+(pnl>=0?'pos':'neg');
-    const we=document.getElementById('s-wr');we.textContent=wr!==null?wr+'%':'—';if(wr!==null)we.className='stat-val '+(wr>=50?'pos':'neg');
+    const we=document.getElementById('s-wr');const wr=closed.length?Math.round(wins/closed.length*100):null;we.textContent=wr!==null?wr+'%':'—';if(wr!==null)we.className='stat-val '+(wr>=50?'pos':'neg');
+    if(!trades.length){body.innerHTML='<div class="empty-state" style="margin-top:24px"><div class="empty-icon">📒</div><div class="empty-title">No trades logged yet</div><div class="empty-sub">Open any trade idea card and tap "📒 Log This Trade" to start tracking.</div></div>';return;}
+    let html='';
+    if(open.length){
+        html+=`<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);margin-bottom:10px">🔴 Active Positions (${open.length})</div>`;
+        html+=`<div class="j-cards-grid">${open.map(t=>buildJournalCard(t)).join('')}</div>`;
+    }
+    if(closed.length){
+        html+=`<div style="margin-top:${open.length?'28px':'0'};margin-bottom:8px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:var(--muted)">✅ Closed Trades</div>`;
+        html+=`<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Date</th><th>Ticker</th><th>Type</th><th>Strike</th><th>Expiry</th><th>Qty</th><th>Entry</th><th>Exit</th><th>P&L</th><th>Notes</th><th></th></tr></thead><tbody>`;
+        html+=closed.map(t=>{
+            const p=t.exit!=null?(t.exit-t.entry)*t.qty*100:null;
+            const ph=p!=null?`<span class="${p>=0?'pos':'neg'}">${p>=0?'+':'-'}$${Math.abs(p).toFixed(0)}</span>`:'—';
+            return`<tr><td style="color:var(--muted);white-space:nowrap">${fmt(t.date)}</td><td><strong>${t.ticker}</strong></td><td><span class="badge ${(t.type||'CALL')==='CALL'?'bc':'bp'}">${t.type||'CALL'}</span></td><td>$${t.strike||'?'}</td><td style="color:var(--muted)">${fmt(t.exp)}</td><td>${t.qty}</td><td>$${parseFloat(t.entry||0).toFixed(2)}</td><td>${t.exit!=null?'$'+t.exit.toFixed(2):'—'}</td><td>${ph}</td><td style="max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:11px">${t.thesis||'—'}</td><td><button class="del" onclick="deleteTrade(${t.id})">×</button></td></tr>`;
+        }).join('');
+        html+=`</tbody></table></div>`;
+    }
+    body.innerHTML=html;
 }
+function isMarketHours(){const et=new Date(new Date().toLocaleString('en-US',{timeZone:'America/New_York'}));const dow=et.getDay(),h=et.getHours(),m=et.getMinutes();return dow>0&&dow<6&&h*100+m>=930&&h*100+m<1600;}
+setInterval(()=>{if(document.getElementById('tab-journal')?.classList.contains('active')&&isMarketHours())analyzeOpenTrades();},30*60*1000);
 document.getElementById('modal').addEventListener('click',e=>{if(e.target.id==='modal')closeModal();});
 window.addEventListener('load',()=>{
     loadTape(); loadChart(curTicker); renderJournal();
