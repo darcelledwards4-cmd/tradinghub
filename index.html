@@ -875,6 +875,26 @@ const filterCache = {};
 window._cardData = {};
 let _cardIdCounter = 0;
 
+// ── PRICE CACHE (5-minute TTL) ────────────────────────────────
+// Prevents burning Twelve Data quota when switching filters quickly
+const _priceCache = { data: {}, ts: 0 };
+async function fetchQuotesCached(tickers){
+    const now = Date.now();
+    const allCovered = tickers.every(t => _priceCache.data[t.toUpperCase()]);
+    if(allCovered && (now - _priceCache.ts) < 5 * 60 * 1000){
+        console.log('[prices] Cache hit ✓', tickers);
+        const result = {};
+        tickers.forEach(t => { result[t.toUpperCase()] = _priceCache.data[t.toUpperCase()]; });
+        return result;
+    }
+    const fresh = await fetchQuotes(tickers);
+    if(Object.keys(fresh).length > 0){
+        Object.assign(_priceCache.data, fresh);
+        _priceCache.ts = now;
+    }
+    return fresh;
+}
+
 const FILTER_META = {
     calls:     { scanLabel:'Scan Calls',      type:'watchlist', optType:'CALL',  sectionLabel:'📈 CALL IDEAS — Bullish Setups' },
     puts:      { scanLabel:'Scan Puts',       type:'watchlist', optType:'PUT',   sectionLabel:'📉 PUT IDEAS — Bearish Setups' },
@@ -1964,7 +1984,7 @@ async function runActiveFilter(){
         let cards;
         if(meta.type==='watchlist'){
             const [qMap, newsMap] = await Promise.all([
-                fetchQuotes(WATCHLIST),
+                fetchQuotesCached(WATCHLIST),
                 fetchNewsForPromptBatch(WATCHLIST)
             ]);
             const quotes=Object.entries(qMap).map(([ticker,q])=>({ticker,price:q.c,chg:q.dp||0,closes:[q.pc,q.c],high52:q.h||q.c,low52:q.l||q.c,vol:0})).filter(q=>q.price>0);
@@ -1987,7 +2007,7 @@ async function runActiveFilter(){
             // Fetch live prices + news for all discover cards, then sanitize levels
             const discTickers=[...new Set(cards.map(s=>(s.ticker||'').toUpperCase()).filter(Boolean))];
             const [discPriceMap, discNewsMap] = await Promise.all([
-                discTickers.length ? fetchQuotes(discTickers) : Promise.resolve({}),
+                discTickers.length ? fetchQuotesCached(discTickers) : Promise.resolve({}),
                 discTickers.length ? fetchNewsForPromptBatch(discTickers) : Promise.resolve({})
             ]);
             cards=cards.map(s=>{
@@ -2074,7 +2094,7 @@ async function scanWatchlist(){
     try{
         // Fetch live prices + news headlines for all watchlist tickers in parallel
         const [qMap, newsMap] = await Promise.all([
-            fetchQuotes(WATCHLIST),
+            fetchQuotesCached(WATCHLIST),
             fetchNewsForPromptBatch(WATCHLIST)
         ]);
         const quotes=Object.entries(qMap).map(([ticker,q])=>({ticker,price:q.c,chg:q.dp||0,closes:[q.pc,q.c],high52:q.h||q.c,low52:q.l||q.c,vol:0})).filter(q=>q.price>0);
