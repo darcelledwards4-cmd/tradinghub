@@ -2420,18 +2420,20 @@ async function fetchNewsArticles(ticker){
             }
         }catch(e){}
     }
-    // ── Fallback: Yahoo Finance news via CORS proxy ──
+    // ── Fallback: Yahoo Finance RSS via rss2json.com (no key, no cookies needed) ──
     try{
-        const yhUrl=encodeURIComponent(`https://query2.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(ticker)}&quotesCount=0&newsCount=5&enableFuzzyQuery=false`);
-        const r=await fetch(`https://corsproxy.io/?url=${yhUrl}`);
+        const rssUrl=encodeURIComponent(`https://feeds.finance.yahoo.com/rss/2.0/headline?s=${encodeURIComponent(ticker)}&region=US&lang=en-US`);
+        const ctrl=new AbortController();
+        setTimeout(()=>ctrl.abort(),6000);
+        const r=await fetch(`https://api.rss2json.com/v1/api.json?rss_url=${rssUrl}&count=5`,{signal:ctrl.signal});
         if(!r.ok) return [];
         const d=await r.json();
-        const news=d?.news||[];
-        return news.slice(0,5).map(n=>({
-            headline:n.title||'',
+        if(d.status!=='ok'||!d.items||!d.items.length) return [];
+        return d.items.slice(0,5).map(n=>({
+            headline:(n.title||'').replace(/<[^>]*>/g,''),
             url:n.link||'#',
-            source:n.publisher||'Yahoo Finance',
-            datetime:n.providerPublishTime||0
+            source:n.author||n.feed?.title||'Yahoo Finance',
+            datetime:n.pubDate?Math.floor(new Date(n.pubDate).getTime()/1000):0
         }));
     }catch(e){ return []; }
 }
