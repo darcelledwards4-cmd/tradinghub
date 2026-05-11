@@ -1099,48 +1099,30 @@ async function fetchQuotes(tickers){
         }catch(e){ console.warn('[prices] Finnhub error:',e.message); }
     }
 
-    // ── Fallback: Yahoo Finance (no key needed) ──
-    // Uses v7 quotes endpoint — more reliable CORS than v8 chart
+    // ── Fallback: Yahoo Finance via corsproxy.io (bypasses CORS block on Vercel origin) ──
     try{
         const results=await Promise.allSettled(
             unique.map(t=>{
                 const ctrl=new AbortController();
-                setTimeout(()=>ctrl.abort(),7000);
-                // v7/finance/quote is more CORS-stable than v8/finance/chart
-                return fetch(`https://query1.finance.yahoo.com/v7/finance/quote?symbols=${t}&fields=regularMarketPrice,regularMarketPreviousClose,regularMarketDayHigh,regularMarketDayLow,regularMarketChangePercent`,{signal:ctrl.signal})
-                    .then(r=>r.json()).then(d=>({t,d})).catch(()=>{
-                        // Try query2 server as backup
-                        const ctrl2=new AbortController();
-                        setTimeout(()=>ctrl2.abort(),6000);
-                        return fetch(`https://query2.finance.yahoo.com/v8/finance/chart/${t}?interval=1d&range=1d`,{signal:ctrl2.signal})
-                            .then(r=>r.json()).then(d=>({t,d,_v8:true})).catch(()=>null);
-                    });
+                setTimeout(()=>ctrl.abort(),8000);
+                const yhUrl=encodeURIComponent(`https://query1.finance.yahoo.com/v8/finance/chart/${t}?interval=1d&range=1d`);
+                return fetch(`https://corsproxy.io/?url=${yhUrl}`,{signal:ctrl.signal})
+                    .then(r=>r.ok?r.json():null).then(d=>d?{t,d}:null).catch(()=>null);
             })
         );
         const map={};
         results.forEach(r=>{
             if(r.status!=='fulfilled'||!r.value) return;
-            const{t,d,_v8}=r.value;
-            if(_v8){
-                // Parse v8 chart response
-                const meta=d?.chart?.result?.[0]?.meta;
-                const price=meta?.regularMarketPrice;
-                const prev=meta?.chartPreviousClose||meta?.previousClose||price;
-                if(price&&price>0){
-                    map[t]={c:price,pc:prev||price,dp:prev?parseFloat(((price-prev)/prev*100).toFixed(2)):0,h:meta?.regularMarketDayHigh||price,l:meta?.regularMarketDayLow||price};
-                }
-            } else {
-                // Parse v7 quote response
-                const q=d?.quoteResponse?.result?.[0];
-                if(!q||!q.regularMarketPrice) return;
-                const price=q.regularMarketPrice;
-                const prev=q.regularMarketPreviousClose||price;
-                map[t]={c:price,pc:prev,dp:parseFloat((q.regularMarketChangePercent||0).toFixed(2)),h:q.regularMarketDayHigh||price,l:q.regularMarketDayLow||price};
-            }
+            const{t,d}=r.value;
+            const meta=d?.chart?.result?.[0]?.meta;
+            const price=meta?.regularMarketPrice;
+            if(!price||price<=0) return;
+            const prev=meta?.chartPreviousClose||meta?.previousClose||price;
+            map[t]={c:price,pc:prev||price,dp:prev?parseFloat(((price-prev)/prev*100).toFixed(2)):0,h:meta?.regularMarketDayHigh||price,l:meta?.regularMarketDayLow||price};
         });
-        if(Object.keys(map).length>0){ console.log('[prices] Yahoo Finance ✓',unique); return map; }
-        else console.warn('[prices] Yahoo Finance returned no prices');
-    }catch(e){ console.warn('[prices] Yahoo Finance error:',e.message); }
+        if(Object.keys(map).length>0){ console.log('[prices] corsproxy+Yahoo ✓',unique); return map; }
+        else console.warn('[prices] corsproxy+Yahoo returned no prices');
+    }catch(e){ console.warn('[prices] corsproxy+Yahoo error:',e.message); }
 
     console.error('[prices] All price sources failed for',unique);
     return {};
