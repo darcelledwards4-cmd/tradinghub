@@ -1129,14 +1129,27 @@ async function fetchQuotesFinnhub(tickers){
     }catch(e){return{};}
 }
 
-// Batch quotes — calls Twelve Data DIRECTLY from the browser (CORS enabled)
-// Falls back to Finnhub if no Twelve Data key, then Yahoo Finance via server
+// Batch quotes — tries Vercel serverless /api/quotes first (no CORS), then direct browser fallbacks
 // Returns { TICKER: { c, pc, dp, h, l }, ... }
 async function fetchQuotes(tickers){
     if(!tickers||!tickers.length) return {};
     const unique=[...new Set(tickers.map(t=>t.toUpperCase().trim()))].filter(Boolean);
 
-    // ── Try Twelve Data direct (browser CORS call — no Vercel function needed) ──
+    // ── PRIMARY: Vercel serverless /api/quotes (server-side, no CORS, Yahoo Finance with proper headers) ──
+    try{
+        const ctrl=new AbortController();
+        setTimeout(()=>ctrl.abort(),10000);
+        const r=await fetch(`/api/quotes?symbols=${unique.join(',')}`,{signal:ctrl.signal});
+        if(r.ok){
+            const data=await r.json();
+            if(data.prices&&Object.keys(data.prices).length>0){
+                console.log('[prices] /api/quotes ✓',data.source,unique);
+                return data.prices;
+            }
+        }
+    }catch(e){ console.warn('[prices] /api/quotes error:',e.message); }
+
+    // ── FALLBACK: Twelve Data direct (browser CORS call — needs local key) ──
     const tdKey = getTwelveDataKey();
     if(tdKey){
         try{
