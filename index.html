@@ -1249,50 +1249,40 @@ async function fetchQuotes(tickers){
     return {};
 }
 
-// ── MASSIVE.COM OPTIONS PRICING ──────────────────────────────
-// Fetches real bid/ask for the nearest matching options contract
-async function fetchMassiveOption(ticker, strikeApprox, expiryFrom, expiryTo, contractType){
-    const mKey=getMassiveKey();
-    if(!mKey) return null;
-    const type=contractType.toLowerCase()==='put'?'put':'call';
-    const strike=parseFloat(strikeApprox);
-    if(!strike||isNaN(strike)) return null;
+// ── YAHOO FINANCE OPTIONS PRICING (via /api/options serverless) ──────────────
+// Fetches real bid/ask from Yahoo's live options chain — no API key needed
+// expiryTarget: '1w', '30d', '60d', or 'YYYY-MM-DD'
+async function fetchRealOption(ticker, currentPrice, contractType, expiryTarget){
     try{
-        const params=new URLSearchParams({
-            underlying_ticker:ticker,
-            'expiration_date.gte':expiryFrom,
-            'expiration_date.lte':expiryTo,
-            'strike_price.gte':Math.floor(strike*0.95),
-            'strike_price.lte':Math.ceil(strike*1.05),
-            contract_type:type,
-            limit:10,
-            sort:'expiration_date',
-            apiKey:mKey
-        });
-        const r=await fetch(`https://api.massive.com/v3/reference/options/contracts?${params}`);
-        if(!r.ok) return null;
+        const type=contractType.toLowerCase()==='put'?'put':'call';
+        // For strike: use current price so we get ATM — not Claude's stale suggestion
+        const atmStrike=currentPrice>0?currentPrice:null;
+        const params=new URLSearchParams({ ticker, type, expiry:expiryTarget||'30d' });
+        if(atmStrike) params.set('strike', atmStrike.toFixed(2));
+        const ctrl=new AbortController();
+        setTimeout(()=>ctrl.abort(),10000);
+        const r=await fetch(`/api/options?${params}`,{signal:ctrl.signal});
+        if(!r.ok){ console.warn('[options] /api/options',r.status); return null; }
         const data=await r.json();
-        if(!data.results||!data.results.length) return null;
-        // Pick closest strike to what Claude suggested
-        const best=data.results.reduce((a,b)=>Math.abs(b.strike_price-strike)<Math.abs(a.strike_price-strike)?b:a);
-        // Get snapshot (bid/ask/OI)
-        const sr=await fetch(`https://api.massive.com/v3/snapshot/options/${ticker}/${best.ticker}?apiKey=${mKey}`);
-        if(!sr.ok) return null;
-        const snap=await sr.json();
-        const res=snap.results;
-        if(!res) return null;
+        if(data.error){ console.warn('[options]',data.error); return null; }
+        const c=data.best;
+        if(!c) return null;
         return{
-            contractTicker:best.ticker,
-            strike:best.strike_price,
-            expiry:best.expiration_date,
-            bid:res.last_quote?.bid,
-            ask:res.last_quote?.ask,
-            last:res.day?.close||res.last_trade?.price,
-            volume:res.day?.volume,
-            oi:res.open_interest,
-            iv:res.implied_volatility?(res.implied_volatility*100).toFixed(1):null
+            strike:     c.strike,
+            expiry:     c.expiry,
+            bid:        c.bid,
+            ask:        c.ask,
+            mid:        c.mid,
+            last:       c.last,
+            volume:     c.volume,
+            oi:         c.openInterest,
+            iv:         c.iv,
+            inTheMoney: c.inTheMoney,
+            nextOtm:    data.nextOtm,       // next OTM strike for comparison
+            allStrikes: data.allStrikes,    // full chain for strike picker
+            currentPrice: data.currentPrice,
         };
-    }catch(e){return null;}
+    }catch(e){ console.warn('[options] fetch error:',e.message); return null; }
 }
 
 // Parse expiry date range from option_detail string
@@ -1315,10 +1305,8 @@ function parseExpiryRange(optDetail){
     return null;
 }
 
-// After cards render, fetch real option prices from Massive and update the display
+// After cards render, fetch real option prices from Yahoo Finance and update the display
 async function enrichCardsWithOptionPrices(cardIds){
-    const mKey=getMassiveKey();
-    if(!mKey) return;
     for(const cardId of cardIds){
         try{
             const cd=window._cardData[cardId];
@@ -1326,35 +1314,78 @@ async function enrichCardsWithOptionPrices(cardIds){
             const idea=cd[cd.activeDir||'call']||cd.call||cd.put;
             if(!idea||!idea.ticker) continue;
             const optType=(idea.option_type||'CALL').toUpperCase();
-            // Use the currently active expiry option's detail
-            const activeExp=idea.expiry_options&&idea.expiry_options[0];
-            const odText=(activeExp?.option_detail||idea.option_detail||'');
-            const strikeMatch=odText.match(/\$([\d.]+)/);
-            if(!strikeMatch) continue;
-            const strike=strikeMatch[1];
-            const range=parseExpiryRange(odText);
-            if(!range) continue;
-            const opt=await fetchMassiveOption(idea.ticker,strike,range.from,range.to,optType);
-            if(!opt) continue;
-            // Format real price string
-            const bid=opt.bid!=null?opt.bid.toFixed(2):null;
-            const ask=opt.ask!=null?opt.ask.toFixed(2):null;
-            const last=opt.last!=null?opt.last.toFixed(2):null;
-            const priceStr=bid&&ask?`$${bid} bid / $${ask} ask`:(last?`$${last} last`:'—');
-            const oiStr=opt.oi?` · OI: ${opt.oi.toLocaleString()}`:'';
-            const ivStr=opt.iv?` · IV: ${opt.iv}%`:'';
-            const expiryFmt=opt.expiry?new Date(opt.expiry+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):'';
-            const realDetail=`$${opt.strike} ${optType} · Expires ${expiryFmt}${oiStr}${ivStr} · ${priceStr}`;
-            // Update the card display
+            const livePrice=idea.current_price||0;
+
+            // Show loading state
             const odEl=document.getElementById('od-'+cardId);
-            if(odEl){
-                odEl.textContent=realDetail;
-                odEl.style.color='var(--green)';
-                odEl.title='Live data from Massive.com';
+            if(odEl){ odEl.textContent='Loading live option prices…'; odEl.style.color='var(--muted)'; }
+
+            // Fetch two expiry windows in parallel: short (~30d) and longer (~60d)
+            const [opt30, opt60]=await Promise.all([
+                fetchRealOption(idea.ticker, livePrice, optType, '30d'),
+                fetchRealOption(idea.ticker, livePrice, optType, '60d'),
+            ]);
+
+            const opt=opt30||opt60;
+            if(!opt){
+                if(odEl){ odEl.textContent='Option prices unavailable'; odEl.style.color='var(--muted)'; }
+                continue;
             }
-            // Store real price on card data for journal logging
-            if(cd[cd.activeDir||'call']) cd[cd.activeDir||'call']._realOptionPrice={bid:opt.bid,ask:opt.ask,last:opt.last,expiry:opt.expiry,strike:opt.strike};
-        }catch(e){}
+
+            // Format price string — mid is most actionable for a beginner
+            function fmtOpt(o){
+                if(!o) return null;
+                const expiryFmt=o.expiry?new Date(o.expiry+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'2-digit'}):'';
+                const priceDisplay=o.bid!=null&&o.ask!=null
+                    ?`ask $${o.ask.toFixed(2)} / bid $${o.bid.toFixed(2)} · mid $${o.mid!=null?o.mid.toFixed(2):((o.bid+o.ask)/2).toFixed(2)}`
+                    :(o.last!=null?`last $${o.last.toFixed(2)}`:'—');
+                const ivStr=o.iv?` · IV ${o.iv}%`:'';
+                const oiStr=o.oi?` · OI ${o.oi.toLocaleString()}`:'';
+                return{
+                    strike:o.strike,
+                    expiry:expiryFmt,
+                    detail:`$${o.strike} ${optType} · exp ${expiryFmt}${ivStr}${oiStr} · ${priceDisplay}`,
+                    priceDisplay, ivStr, oiStr,
+                    raw:o
+                };
+            }
+
+            const f30=fmtOpt(opt30);
+            const f60=fmtOpt(opt60);
+            const primary=f30||f60;
+
+            // Update main option detail display
+            if(odEl&&primary){
+                odEl.innerHTML=`<span style="color:var(--green)">● Live</span>&nbsp;${primary.detail}`;
+                odEl.title='Real bid/ask from Yahoo Finance options chain';
+            }
+
+            // Update expiry tabs if they exist — inject real prices per timeframe
+            const tabs=document.getElementById('etabs-'+cardId);
+            if(tabs&&f30&&f60){
+                const tabEls=tabs.querySelectorAll('.expiry-tab');
+                if(tabEls[0]) tabEls[0].innerHTML=tabEls[0].innerHTML.replace(/\n[\s\S]*$/,'')+`\n<small style="font-size:9px;opacity:.8">ask $${opt30.ask!=null?opt30.ask.toFixed(2):'—'}</small>`;
+                if(tabEls[1]) tabEls[1].innerHTML=tabEls[1].innerHTML.replace(/\n[\s\S]*$/,'')+`\n<small style="font-size:9px;opacity:.8">ask $${opt60.ask!=null?opt60.ask.toFixed(2):'—'}</small>`;
+            }
+
+            // Store on card data for journal/add-to-journal actions
+            if(cd[cd.activeDir||'call']){
+                cd[cd.activeDir||'call']._realOptionPrice={
+                    bid:opt.bid, ask:opt.ask, mid:opt.mid, last:opt.last,
+                    expiry:opt.expiry, strike:opt.strike, iv:opt.iv,
+                };
+            }
+
+            // Update entry/target levels to reflect the real option price (ask = what you'd actually pay)
+            if(opt.ask!=null){
+                const elEl=document.getElementById('el-'+cardId);
+                const tlEl=document.getElementById('tl-'+cardId);
+                const slEl=document.getElementById('sl-'+cardId);
+                if(elEl) elEl.textContent=`$${opt.bid!=null?opt.bid.toFixed(2):'—'} – $${opt.ask.toFixed(2)}`;
+                if(tlEl) tlEl.textContent=`$${(opt.ask*1.5).toFixed(2)} (+50%)`;
+                if(slEl) slEl.textContent=`$${(opt.ask*0.5).toFixed(2)} (–50%)`;
+            }
+        }catch(e){ console.warn('[options] enrich error:',e.message); }
     }
 }
 
