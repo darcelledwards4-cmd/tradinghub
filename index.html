@@ -876,6 +876,66 @@ const filterAllCards = {};   // all accumulated cards per filter key (for Load M
 window._cardData = {};
 let _cardIdCounter = 0;
 
+// ── PERSIST FILTER RESULTS TO LOCALSTORAGE ────────────────────
+// Cards survive page refresh; prices auto-refresh to Live on load
+const LS_PREFIX = 'th_cards_';
+const LS_LAST   = 'th_last_filter';
+
+function saveCardsToStorage(key, cards){
+    try{
+        // Strip _newsItems (re-fetched fresh) and mark prices as stale for reload
+        const slim = cards.map(c=>({...c, _priceIsLive:false, _newsItems:undefined}));
+        localStorage.setItem(LS_PREFIX+key, JSON.stringify(slim));
+        localStorage.setItem(LS_LAST, key);
+    }catch(e){}
+}
+
+function loadCardsFromStorage(key){
+    try{
+        const raw=localStorage.getItem(LS_PREFIX+key);
+        return raw ? JSON.parse(raw) : null;
+    }catch(e){ return null; }
+}
+
+// On page load: restore last active filter from localStorage then auto-refresh prices
+function restoreLastSession(){
+    const lastKey = localStorage.getItem(LS_LAST);
+    if(!lastKey || !FILTER_META[lastKey]) return;
+    const cards = loadCardsFromStorage(lastKey);
+    if(!cards || !cards.length) return;
+    // Silently seed cache + render without triggering a new API scan
+    filterAllCards[lastKey] = cards;
+    filterCache[lastKey]    = cards;
+    selectFilter(lastKey);          // updates pill + button label
+    renderFilterResult(lastKey, cards); // renders cards + calls refreshVisiblePrices automatically
+    document.getElementById('lastScan').textContent = 'Restored — refreshing prices…';
+    // Auto-refresh prices in the background so badges flip to ● Live
+    const tickers = [...new Set(cards.map(c=>(c.ticker||'').toUpperCase()).filter(Boolean))];
+    if(tickers.length){
+        fetchQuotesCached(tickers).then(qMap=>{
+            if(!Object.keys(qMap).length) return;
+            const updated = (filterAllCards[lastKey]||[]).map(c=>{
+                const k=(c.ticker||'').toUpperCase();
+                const q=qMap[k];
+                if(q&&q.c){ c={...c,current_price:q.c,price_change:q.dp||0,_priceIsLive:true}; }
+                return c;
+            });
+            filterAllCards[lastKey]=updated;
+            filterCache[lastKey]=updated;
+            saveCardsToStorage(lastKey, updated);
+            // refreshVisiblePrices reads from _cardData + DOM — call it to flip badges
+            refreshVisiblePrices();
+            const now=new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'});
+            document.getElementById('lastScan').textContent=`Restored from last session · prices live as of ${now} — hit ⚡ to rescan`;
+            document.getElementById('lastUpdated').textContent=`Prices live · ${now}`;
+        }).catch(()=>{
+            document.getElementById('lastScan').textContent='Restored from last session — hit ⚡ to rescan';
+        });
+    } else {
+        document.getElementById('lastScan').textContent = 'Restored from last session — hit ⚡ to rescan';
+    }
+}
+
 // ── PRICE CACHE (5-minute TTL) ────────────────────────────────
 // Prevents burning Twelve Data quota when switching filters quickly
 const _priceCache = { data: {}, ts: 0 };
@@ -1984,6 +2044,8 @@ function renderFilterResult(key, cards, append=false){
     for(let i=before+1;i<=_cardIdCounter;i++) cardIds.push('c'+i);
     enrichCardsWithOptionPrices(cardIds);
     refreshVisiblePrices();
+    // Persist cards so they survive page refresh
+    saveCardsToStorage(key, filterAllCards[key]);
 }
 
 async function loadMoreFilter(){
@@ -2412,9 +2474,10 @@ function fmt_agent(text){
 window.testNews = async function(ticker='NVDA'){
     console.group(`[news debug] ${ticker}`);
     const proxies=[
-        {label:'allorigins+Google', url:`https://api.allorigins.win/raw?url=${encodeURIComponent(`https://news.google.com/rss/search?q=${encodeURIComponent(ticker+' stock')}&hl=en-US&gl=US&ceid=US:en`)}`},
-        {label:'corsproxy+Bing',    url:`https://corsproxy.io/?url=${encodeURIComponent(`https://www.bing.com/news/search?q=${encodeURIComponent(ticker+' stock')}&format=RSS`)}`},
-        {label:'allorigins+Bing',   url:`https://api.allorigins.win/raw?url=${encodeURIComponent(`https://www.bing.com/news/search?q=${encodeURIComponent(ticker+' stock')}&format=RSS`)}`},
+        {label:'allorigins+YahooRSS', url:`https://api.allorigins.win/raw?url=${encodeURIComponent(`https://feeds.finance.yahoo.com/rss/2.0/headline?s=${encodeURIComponent(ticker)}&region=US&lang=en-US`)}`},
+        {label:'allorigins+Google',   url:`https://api.allorigins.win/raw?url=${encodeURIComponent(`https://news.google.com/rss/search?q=${encodeURIComponent(ticker+' stock')}&hl=en-US&gl=US&ceid=US:en`)}`},
+        {label:'corsproxy+Bing',      url:`https://corsproxy.io/?url=${encodeURIComponent(`https://www.bing.com/news/search?q=${encodeURIComponent(ticker+' stock')}&format=RSS`)}`},
+        {label:'allorigins+Bing',     url:`https://api.allorigins.win/raw?url=${encodeURIComponent(`https://www.bing.com/news/search?q=${encodeURIComponent(ticker+' stock')}&format=RSS`)}`},
     ];
     for(const p of proxies){
         console.group(p.label);
@@ -2457,9 +2520,11 @@ async function fetchNewsArticles(ticker){
     }
     // ── Fallback: try multiple proxy+source combos until one works ──
     const newsProxyCandidates = [
-        // allorigins.win + Google News (different proxy, Google doesn't block it)
+        // Yahoo Finance RSS (most reliable — structured feed, always returns items)
+        `https://api.allorigins.win/raw?url=${encodeURIComponent(`https://feeds.finance.yahoo.com/rss/2.0/headline?s=${encodeURIComponent(ticker)}&region=US&lang=en-US`)}`,
+        // allorigins.win + Google News
         `https://api.allorigins.win/raw?url=${encodeURIComponent(`https://news.google.com/rss/search?q=${encodeURIComponent(ticker+' stock')}&hl=en-US&gl=US&ceid=US:en`)}`,
-        // corsproxy.io + Bing News RSS (Google blocks corsproxy, Bing doesn't)
+        // corsproxy.io + Bing News RSS
         `https://corsproxy.io/?url=${encodeURIComponent(`https://www.bing.com/news/search?q=${encodeURIComponent(ticker+' stock')}&format=RSS`)}`,
         // allorigins.win + Bing News RSS
         `https://api.allorigins.win/raw?url=${encodeURIComponent(`https://www.bing.com/news/search?q=${encodeURIComponent(ticker+' stock')}&format=RSS`)}`,
@@ -2491,7 +2556,7 @@ async function fetchNewsArticles(ticker){
             const r=await fetch(proxyUrl,{signal:ctrl.signal});
             if(!r.ok){ console.warn('[news]',ticker,'proxy 非-OK:',r.status,proxyUrl.slice(0,60)); continue; }
             const text=await r.text();
-            const sourceName=proxyUrl.includes('bing')?'Bing News':'Google News';
+            const sourceName=proxyUrl.includes('finance.yahoo.com')||proxyUrl.includes('feeds.finance')?'Yahoo Finance':proxyUrl.includes('bing')?'Bing News':'Google News';
             const articles=parseRssXml(text,sourceName);
             console.log('[news]',ticker,sourceName,'articles:',articles.length,'via',proxyUrl.slice(0,50));
             if(articles.length>0) return articles;
@@ -3129,6 +3194,8 @@ document.getElementById('modal').addEventListener('click',e=>{if(e.target.id==='
 window.addEventListener('load',()=>{
     loadTape(); loadChart(curTicker); renderJournal();
     updateSettingsBtn();
+    // Restore last session's trade ideas and auto-refresh prices
+    restoreLastSession();
 });
 </script>
 </body>
