@@ -2411,39 +2411,31 @@ function fmt_agent(text){
 // ── NEWS DEBUG — call window.testNews('NVDA') from console to diagnose ──
 window.testNews = async function(ticker='NVDA'){
     console.group(`[news debug] ${ticker}`);
-    // Step 1: raw fetch
-    const q=encodeURIComponent(`${ticker} stock`);
-    const rssUrl=encodeURIComponent(`https://news.google.com/rss/search?q=${q}&hl=en-US&gl=US&ceid=US:en`);
-    const proxyUrl=`https://corsproxy.io/?url=${rssUrl}`;
-    console.log('Step 1: fetching', proxyUrl);
-    let r;
-    try{ r=await fetch(proxyUrl); } catch(e){ console.error('FETCH FAILED:',e.message); console.groupEnd(); return; }
-    console.log('Step 2: response status', r.status, r.ok?'OK':'FAIL', 'content-type:', r.headers.get('content-type'));
-    if(!r.ok){ console.error('Non-OK response'); console.groupEnd(); return; }
-    const raw=await r.text();
-    console.log('Step 3: raw text length', raw.length, '| first 500 chars:', raw.slice(0,500));
-    // Step 2: parse XML
-    const xml=new DOMParser().parseFromString(raw,'application/xml');
-    const parseErr=xml.querySelector('parsererror');
-    if(parseErr){ console.error('XML parse error:', parseErr.textContent.slice(0,200)); }
-    const items=[...xml.querySelectorAll('item')];
-    console.log('Step 4: items found in XML:', items.length);
-    if(items.length){
-        console.log('Step 5: first item raw innerHTML:', items[0].innerHTML.slice(0,400));
-        const title=items[0].querySelector('title')?.textContent;
-        const link=items[0].getElementsByTagName('link')[0]?.textContent;
-        const guid=items[0].querySelector('guid')?.textContent;
-        const pub=items[0].querySelector('pubDate')?.textContent;
-        const src=items[0].querySelector('source')?.textContent;
-        console.log('  title:', title);
-        console.log('  link:', link);
-        console.log('  guid:', guid);
-        console.log('  pubDate:', pub);
-        console.log('  source:', src);
+    const proxies=[
+        {label:'allorigins+Google', url:`https://api.allorigins.win/raw?url=${encodeURIComponent(`https://news.google.com/rss/search?q=${encodeURIComponent(ticker+' stock')}&hl=en-US&gl=US&ceid=US:en`)}`},
+        {label:'corsproxy+Bing',    url:`https://corsproxy.io/?url=${encodeURIComponent(`https://www.bing.com/news/search?q=${encodeURIComponent(ticker+' stock')}&format=RSS`)}`},
+        {label:'allorigins+Bing',   url:`https://api.allorigins.win/raw?url=${encodeURIComponent(`https://www.bing.com/news/search?q=${encodeURIComponent(ticker+' stock')}&format=RSS`)}`},
+    ];
+    for(const p of proxies){
+        console.group(p.label);
+        try{
+            const r=await fetch(p.url);
+            console.log('status:',r.status,r.ok?'✅':'❌');
+            if(r.ok){
+                const text=await r.text();
+                console.log('text length:',text.length,'| preview:',text.slice(0,200));
+                const xml=new DOMParser().parseFromString(text,'application/xml');
+                const err=xml.querySelector('parsererror');
+                if(err) console.error('XML parse error:',err.textContent.slice(0,100));
+                const items=[...xml.querySelectorAll('item')];
+                console.log('items:',items.length);
+                if(items[0]) console.log('first title:',items[0].querySelector('title')?.textContent?.slice(0,80));
+            }
+        }catch(e){ console.error('error:',e.message); }
+        console.groupEnd();
     }
-    // Step 3: full pipeline
     const articles=await fetchNewsArticles(ticker);
-    console.log('Step 6: fetchNewsArticles result:', articles.length, 'articles', articles);
+    console.log('fetchNewsArticles final result:',articles.length,'articles',articles);
     console.groupEnd();
 };
 
@@ -2463,36 +2455,50 @@ async function fetchNewsArticles(ticker){
             }
         }catch(e){}
     }
-    // ── Fallback: Google News RSS via corsproxy.io + DOMParser (no rss2json, no rate limits) ──
-    try{
-        const q=encodeURIComponent(`${ticker} stock`);
-        const rssUrl=encodeURIComponent(`https://news.google.com/rss/search?q=${q}&hl=en-US&gl=US&ceid=US:en`);
-        const ctrl=new AbortController();
-        setTimeout(()=>ctrl.abort(),8000);
-        const r=await fetch(`https://corsproxy.io/?url=${rssUrl}`,{signal:ctrl.signal});
-        if(!r.ok){ console.warn('[news]',ticker,'corsproxy status',r.status); return []; }
-        const xml=new DOMParser().parseFromString(await r.text(),'application/xml');
-        const items=[...xml.querySelectorAll('item')].slice(0,4);
-        console.log('[news]',ticker,'Google News items:',items.length);
-        if(!items.length) return [];
-        return items.map(item=>{
-            const rawTitle=(item.querySelector('title')?.textContent||'').replace(/<!\[CDATA\[|\]\]>/g,'').trim();
-            const lastDash=rawTitle.lastIndexOf(' - ');
-            const headline=lastDash>0?rawTitle.slice(0,lastDash).trim():rawTitle;
-            const srcFallback=lastDash>0?rawTitle.slice(lastDash+3).trim():'Google News';
-            const src=(item.querySelector('source')?.textContent||srcFallback).trim();
-            const pub=item.querySelector('pubDate')?.textContent||'';
-            // <link> in RSS XML — try text content, fallback to guid
-            const linkEl=item.getElementsByTagName('link')[0];
-            const url=(linkEl?.textContent||item.querySelector('guid')?.textContent||'#').trim();
-            return{
-                headline:headline.replace(/<[^>]*>/g,''),
-                url,
-                source:src,
-                datetime:pub?Math.floor(new Date(pub).getTime()/1000):0
-            };
-        }).filter(n=>n.headline);
-    }catch(e){ console.warn('[news]',ticker,'error:',e.message); return []; }
+    // ── Fallback: try multiple proxy+source combos until one works ──
+    const newsProxyCandidates = [
+        // allorigins.win + Google News (different proxy, Google doesn't block it)
+        `https://api.allorigins.win/raw?url=${encodeURIComponent(`https://news.google.com/rss/search?q=${encodeURIComponent(ticker+' stock')}&hl=en-US&gl=US&ceid=US:en`)}`,
+        // corsproxy.io + Bing News RSS (Google blocks corsproxy, Bing doesn't)
+        `https://corsproxy.io/?url=${encodeURIComponent(`https://www.bing.com/news/search?q=${encodeURIComponent(ticker+' stock')}&format=RSS`)}`,
+        // allorigins.win + Bing News RSS
+        `https://api.allorigins.win/raw?url=${encodeURIComponent(`https://www.bing.com/news/search?q=${encodeURIComponent(ticker+' stock')}&format=RSS`)}`,
+    ];
+
+    function parseRssXml(xmlText, sourceName){
+        try{
+            const xml=new DOMParser().parseFromString(xmlText,'application/xml');
+            if(xml.querySelector('parsererror')) return [];
+            const items=[...xml.querySelectorAll('item')].slice(0,4);
+            return items.map(item=>{
+                const rawTitle=(item.querySelector('title')?.textContent||'').replace(/<!\[CDATA\[|\]\]>/g,'').trim();
+                const lastDash=rawTitle.lastIndexOf(' - ');
+                const headline=lastDash>0?rawTitle.slice(0,lastDash).trim():rawTitle;
+                const srcEl=item.querySelector('source')?.textContent||'';
+                const src=srcEl||(lastDash>0?rawTitle.slice(lastDash+3).trim():sourceName);
+                const pub=item.querySelector('pubDate')?.textContent||'';
+                const linkEl=item.getElementsByTagName('link')[0];
+                const url=(linkEl?.textContent||item.querySelector('guid')?.textContent||'#').trim();
+                return{headline:headline.replace(/<[^>]*>/g,''),url,source:src.trim()||sourceName,datetime:pub?Math.floor(new Date(pub).getTime()/1000):0};
+            }).filter(n=>n.headline);
+        }catch(e){ return []; }
+    }
+
+    for(const proxyUrl of newsProxyCandidates){
+        try{
+            const ctrl=new AbortController();
+            setTimeout(()=>ctrl.abort(),7000);
+            const r=await fetch(proxyUrl,{signal:ctrl.signal});
+            if(!r.ok){ console.warn('[news]',ticker,'proxy 非-OK:',r.status,proxyUrl.slice(0,60)); continue; }
+            const text=await r.text();
+            const sourceName=proxyUrl.includes('bing')?'Bing News':'Google News';
+            const articles=parseRssXml(text,sourceName);
+            console.log('[news]',ticker,sourceName,'articles:',articles.length,'via',proxyUrl.slice(0,50));
+            if(articles.length>0) return articles;
+        }catch(e){ console.warn('[news]',ticker,'proxy error:',e.message); }
+    }
+    console.warn('[news]',ticker,'all proxies failed');
+    return [];
 }
 
 // Format news articles into a compact string for Claude prompt injection
