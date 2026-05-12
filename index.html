@@ -2408,6 +2408,45 @@ function fmt_agent(text){
     return text.replace(/#{1,3} (.+)/g,'<h4>$1</h4>').replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>').replace(/\n\n/g,'</p><p>').replace(/\n/g,'<br>');
 }
 
+// ── NEWS DEBUG — call window.testNews('NVDA') from console to diagnose ──
+window.testNews = async function(ticker='NVDA'){
+    console.group(`[news debug] ${ticker}`);
+    // Step 1: raw fetch
+    const q=encodeURIComponent(`${ticker} stock`);
+    const rssUrl=encodeURIComponent(`https://news.google.com/rss/search?q=${q}&hl=en-US&gl=US&ceid=US:en`);
+    const proxyUrl=`https://corsproxy.io/?url=${rssUrl}`;
+    console.log('Step 1: fetching', proxyUrl);
+    let r;
+    try{ r=await fetch(proxyUrl); } catch(e){ console.error('FETCH FAILED:',e.message); console.groupEnd(); return; }
+    console.log('Step 2: response status', r.status, r.ok?'OK':'FAIL', 'content-type:', r.headers.get('content-type'));
+    if(!r.ok){ console.error('Non-OK response'); console.groupEnd(); return; }
+    const raw=await r.text();
+    console.log('Step 3: raw text length', raw.length, '| first 500 chars:', raw.slice(0,500));
+    // Step 2: parse XML
+    const xml=new DOMParser().parseFromString(raw,'application/xml');
+    const parseErr=xml.querySelector('parsererror');
+    if(parseErr){ console.error('XML parse error:', parseErr.textContent.slice(0,200)); }
+    const items=[...xml.querySelectorAll('item')];
+    console.log('Step 4: items found in XML:', items.length);
+    if(items.length){
+        console.log('Step 5: first item raw innerHTML:', items[0].innerHTML.slice(0,400));
+        const title=items[0].querySelector('title')?.textContent;
+        const link=items[0].getElementsByTagName('link')[0]?.textContent;
+        const guid=items[0].querySelector('guid')?.textContent;
+        const pub=items[0].querySelector('pubDate')?.textContent;
+        const src=items[0].querySelector('source')?.textContent;
+        console.log('  title:', title);
+        console.log('  link:', link);
+        console.log('  guid:', guid);
+        console.log('  pubDate:', pub);
+        console.log('  source:', src);
+    }
+    // Step 3: full pipeline
+    const articles=await fetchNewsArticles(ticker);
+    console.log('Step 6: fetchNewsArticles result:', articles.length, 'articles', articles);
+    console.groupEnd();
+};
+
 // Fetch recent news articles from Finnhub (always direct — Vercel proxy is unreliable)
 async function fetchNewsArticles(ticker){
     // ── Try Finnhub direct (needs valid key) ──
