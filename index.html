@@ -1354,36 +1354,64 @@ async function enrichCardsWithOptionPrices(cardIds){
             const f60=fmtOpt(opt60);
             const primary=f30||f60;
 
-            // Update main option detail display
+            // ── Update the option contract section with REAL live prices ──
+            // The entry/stop/target rows stay as STOCK price levels (that's correct)
+            // We only update the option contract line at the bottom of the card
+
+            function fmtPrice(o){
+                if(!o) return null;
+                const expiryFmt=o.expiry?new Date(o.expiry+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'2-digit'}):'';
+                const costPer=o.ask!=null?o.ask:o.last;
+                const costPer100=costPer!=null?(costPer*100).toFixed(2):null;
+                const mid=o.mid!=null?o.mid:(o.bid!=null&&o.ask!=null?(o.bid+o.ask)/2:null);
+                return{expiryFmt,costPer,costPer100,mid,
+                    bidAsk:o.bid!=null&&o.ask!=null?`Bid $${o.bid.toFixed(2)} · Ask $${o.ask.toFixed(2)}`:(o.last!=null?`Last $${o.last.toFixed(2)}`:'—'),
+                    iv:o.iv,oi:o.oi,strike:o.strike};
+            }
+
+            const p30=fmtPrice(opt30);
+            const p60=fmtPrice(opt60);
+            const primary=p30||p60;
+
+            // Replace the option detail line with a rich live-price block
             if(odEl&&primary){
-                odEl.innerHTML=`<span style="color:var(--green)">● Live</span>&nbsp;${primary.detail}`;
-                odEl.title='Real bid/ask from Yahoo Finance options chain';
+                const costNote=primary.costPer100?`<span style="color:var(--muted);font-size:10px"> = $${primary.costPer100} per contract (100 shares)</span>`:'';
+                const ivNote=primary.iv?`<span style="color:var(--muted);font-size:10px"> · IV ${primary.iv}%</span>`:'';
+                const oiNote=primary.oi?`<span style="color:var(--muted);font-size:10px"> · OI ${primary.oi.toLocaleString()}</span>`:'';
+                odEl.innerHTML=`
+                    <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+                        <span style="background:rgba(63,185,80,.15);color:var(--green);border:1px solid rgba(63,185,80,.3);border-radius:4px;padding:1px 6px;font-size:10px;font-weight:700">● LIVE</span>
+                        <span style="font-weight:700">$${primary.strike} ${optType} · exp ${primary.expiryFmt}</span>
+                    </div>
+                    <div style="margin-top:4px;font-size:13px;font-weight:700;color:var(--text)">${primary.bidAsk}${costNote}</div>
+                    <div style="margin-top:2px;font-size:11px;color:var(--muted)">Enter at ask · mid $${primary.mid!=null?primary.mid.toFixed(2):'—'} · ${ivNote}${oiNote}</div>`;
+                odEl.style.lineHeight='1.5';
+                odEl.title='Live option chain data from Yahoo Finance';
             }
 
-            // Update expiry tabs if they exist — inject real prices per timeframe
+            // Inject real ask prices into expiry tabs
             const tabs=document.getElementById('etabs-'+cardId);
-            if(tabs&&f30&&f60){
+            if(tabs){
                 const tabEls=tabs.querySelectorAll('.expiry-tab');
-                if(tabEls[0]) tabEls[0].innerHTML=tabEls[0].innerHTML.replace(/\n[\s\S]*$/,'')+`\n<small style="font-size:9px;opacity:.8">ask $${opt30.ask!=null?opt30.ask.toFixed(2):'—'}</small>`;
-                if(tabEls[1]) tabEls[1].innerHTML=tabEls[1].innerHTML.replace(/\n[\s\S]*$/,'')+`\n<small style="font-size:9px;opacity:.8">ask $${opt60.ask!=null?opt60.ask.toFixed(2):'—'}</small>`;
+                if(tabEls[0]&&p30&&p30.costPer!=null){
+                    const existing=tabEls[0].querySelector('.opt-live-price');
+                    if(!existing) tabEls[0].insertAdjacentHTML('beforeend',`<div class="opt-live-price" style="font-size:10px;font-weight:800;color:var(--green);margin-top:2px">ask $${p30.costPer.toFixed(2)}</div>`);
+                    else existing.textContent=`ask $${p30.costPer.toFixed(2)}`;
+                }
+                if(tabEls[1]&&p60&&p60.costPer!=null){
+                    const existing=tabEls[1].querySelector('.opt-live-price');
+                    if(!existing) tabEls[1].insertAdjacentHTML('beforeend',`<div class="opt-live-price" style="font-size:10px;font-weight:800;color:var(--green);margin-top:2px">ask $${p60.costPer.toFixed(2)}</div>`);
+                    else existing.textContent=`ask $${p60.costPer.toFixed(2)}`;
+                }
             }
 
-            // Store on card data for journal/add-to-journal actions
-            if(cd[cd.activeDir||'call']){
+            // Store real prices on card data for journal logging
+            const bestOpt=opt30||opt60;
+            if(cd[cd.activeDir||'call']&&bestOpt){
                 cd[cd.activeDir||'call']._realOptionPrice={
-                    bid:opt.bid, ask:opt.ask, mid:opt.mid, last:opt.last,
-                    expiry:opt.expiry, strike:opt.strike, iv:opt.iv,
+                    bid:bestOpt.bid, ask:bestOpt.ask, mid:bestOpt.mid, last:bestOpt.last,
+                    expiry:bestOpt.expiry, strike:bestOpt.strike, iv:bestOpt.iv,
                 };
-            }
-
-            // Update entry/target levels to reflect the real option price (ask = what you'd actually pay)
-            if(opt.ask!=null){
-                const elEl=document.getElementById('el-'+cardId);
-                const tlEl=document.getElementById('tl-'+cardId);
-                const slEl=document.getElementById('sl-'+cardId);
-                if(elEl) elEl.textContent=`$${opt.bid!=null?opt.bid.toFixed(2):'—'} – $${opt.ask.toFixed(2)}`;
-                if(tlEl) tlEl.textContent=`$${(opt.ask*1.5).toFixed(2)} (+50%)`;
-                if(slEl) slEl.textContent=`$${(opt.ask*0.5).toFixed(2)} (–50%)`;
             }
         }catch(e){ console.warn('[options] enrich error:',e.message); }
     }
