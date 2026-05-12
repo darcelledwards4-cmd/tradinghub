@@ -936,14 +936,44 @@ function restoreLastSession(){
     }
 }
 
-// ── PRICE CACHE (5-minute TTL) ────────────────────────────────
-// Prevents burning Twelve Data quota when switching filters quickly
+// ── PRICE CACHE (5-min in-memory + 30-min localStorage) ──────
+// In-memory: prevents burning API quota on rapid filter switches
+// localStorage: survives page refreshes — prices stay Live for 30 min
+const LS_PRICE_KEY = 'th_price_cache';
+const PRICE_TTL_MEM = 5  * 60 * 1000;   // 5  min  — in-memory
+const PRICE_TTL_LS  = 30 * 60 * 1000;   // 30 min  — localStorage
+
 const _priceCache = { data: {}, ts: 0 };
+
+function _savePriceCache(){
+    try{ localStorage.setItem(LS_PRICE_KEY, JSON.stringify({data:_priceCache.data, ts:_priceCache.ts})); }catch(e){}
+}
+function _loadPriceCache(){
+    try{
+        const raw = localStorage.getItem(LS_PRICE_KEY);
+        if(!raw) return;
+        const parsed = JSON.parse(raw);
+        if(parsed && parsed.ts && (Date.now() - parsed.ts) < PRICE_TTL_LS){
+            Object.assign(_priceCache.data, parsed.data);
+            _priceCache.ts = parsed.ts;
+            console.log('[prices] Loaded from localStorage cache ✓', Object.keys(parsed.data));
+        }
+    }catch(e){}
+}
+_loadPriceCache(); // run once on page load
+
 async function fetchQuotesCached(tickers){
     const now = Date.now();
     const allCovered = tickers.every(t => _priceCache.data[t.toUpperCase()]);
-    if(allCovered && (now - _priceCache.ts) < 5 * 60 * 1000){
-        console.log('[prices] Cache hit ✓', tickers);
+    if(allCovered && (now - _priceCache.ts) < PRICE_TTL_MEM){
+        console.log('[prices] Memory cache hit ✓', tickers);
+        const result = {};
+        tickers.forEach(t => { result[t.toUpperCase()] = _priceCache.data[t.toUpperCase()]; });
+        return result;
+    }
+    // Check localStorage cache (30-min TTL) before hitting any API
+    if(allCovered && (now - _priceCache.ts) < PRICE_TTL_LS){
+        console.log('[prices] localStorage cache hit ✓', tickers);
         const result = {};
         tickers.forEach(t => { result[t.toUpperCase()] = _priceCache.data[t.toUpperCase()]; });
         return result;
@@ -952,6 +982,7 @@ async function fetchQuotesCached(tickers){
     if(Object.keys(fresh).length > 0){
         Object.assign(_priceCache.data, fresh);
         _priceCache.ts = now;
+        _savePriceCache(); // persist to localStorage
     }
     return fresh;
 }
@@ -1160,30 +1191,46 @@ async function fetchQuotes(tickers){
         }catch(e){ console.warn('[prices] Finnhub error:',e.message); }
     }
 
-    // ── Fallback: Yahoo Finance via corsproxy.io (bypasses CORS block on Vercel origin) ──
-    try{
-        const results=await Promise.allSettled(
-            unique.map(t=>{
-                const ctrl=new AbortController();
-                setTimeout(()=>ctrl.abort(),8000);
-                const yhUrl=encodeURIComponent(`https://query1.finance.yahoo.com/v8/finance/chart/${t}?interval=1d&range=1d`);
-                return fetch(`https://corsproxy.io/?url=${yhUrl}`,{signal:ctrl.signal})
-                    .then(r=>r.ok?r.json():null).then(d=>d?{t,d}:null).catch(()=>null);
-            })
-        );
-        const map={};
-        results.forEach(r=>{
-            if(r.status!=='fulfilled'||!r.value) return;
-            const{t,d}=r.value;
-            const meta=d?.chart?.result?.[0]?.meta;
-            const price=meta?.regularMarketPrice;
-            if(!price||price<=0) return;
-            const prev=meta?.chartPreviousClose||meta?.previousClose||price;
-            map[t]={c:price,pc:prev||price,dp:prev?parseFloat(((price-prev)/prev*100).toFixed(2)):0,h:meta?.regularMarketDayHigh||price,l:meta?.regularMarketDayLow||price};
-        });
-        if(Object.keys(map).length>0){ console.log('[prices] corsproxy+Yahoo ✓',unique); return map; }
-        else console.warn('[prices] corsproxy+Yahoo returned no prices');
-    }catch(e){ console.warn('[prices] corsproxy+Yahoo error:',e.message); }
+    // ── Fallback: Yahoo Finance via multiple CORS proxies (cascade until one works) ──
+    const yhProxies = [
+        t => `https://corsproxy.io/?url=${encodeURIComponent(`https://query1.finance.yahoo.com/v8/finance/chart/${t}?interval=1d&range=1d`)}`,
+        t => `https://api.allorigins.win/raw?url=${encodeURIComponent(`https://query1.finance.yahoo.com/v8/finance/chart/${t}?interval=1d&range=1d`)}`,
+        t => `https://corsproxy.io/?url=${encodeURIComponent(`https://query2.finance.yahoo.com/v8/finance/chart/${t}?interval=1d&range=1d`)}`,
+        t => `https://api.allorigins.win/raw?url=${encodeURIComponent(`https://query2.finance.yahoo.com/v8/finance/chart/${t}?interval=1d&range=1d`)}`,
+    ];
+
+    function parseYahooResponse(d){
+        const meta=d?.chart?.result?.[0]?.meta;
+        const price=meta?.regularMarketPrice;
+        if(!price||price<=0) return null;
+        const prev=meta?.chartPreviousClose||meta?.previousClose||price;
+        return{c:price,pc:prev||price,dp:prev?parseFloat(((price-prev)/prev*100).toFixed(2)):0,h:meta?.regularMarketDayHigh||price,l:meta?.regularMarketDayLow||price};
+    }
+
+    for(const makeUrl of yhProxies){
+        try{
+            const results=await Promise.allSettled(
+                unique.map(t=>{
+                    const ctrl=new AbortController();
+                    setTimeout(()=>ctrl.abort(),8000);
+                    return fetch(makeUrl(t),{signal:ctrl.signal})
+                        .then(r=>r.ok?r.json():null).then(d=>d?{t,d}:null).catch(()=>null);
+                })
+            );
+            const map={};
+            results.forEach(r=>{
+                if(r.status!=='fulfilled'||!r.value) return;
+                const{t,d}=r.value;
+                const q=parseYahooResponse(d);
+                if(q) map[t]=q;
+            });
+            if(Object.keys(map).length>0){
+                const proxyName=makeUrl('_').split('?')[0].replace('https://','').split('/')[0];
+                console.log(`[prices] Yahoo via ${proxyName} ✓`,unique);
+                return map;
+            }
+        }catch(e){ console.warn('[prices] Yahoo proxy error:',e.message); }
+    }
 
     console.error('[prices] All price sources failed for',unique);
     return {};
