@@ -1249,40 +1249,149 @@ async function fetchQuotes(tickers){
     return {};
 }
 
-// ── YAHOO FINANCE OPTIONS PRICING (via /api/options serverless) ──────────────
-// Fetches real bid/ask from Yahoo's live options chain — no API key needed
-// expiryTarget: '1w', '30d', '60d', or 'YYYY-MM-DD'
+// ── OPTIONS PRICING — browser-side (Vercel IPs blocked by Yahoo) ─────────────
+// Layer 1: Yahoo Finance options chain via CORS proxies (real bid/ask)
+// Layer 2: Black-Scholes estimation (always works — labeled "~Est")
+
+// Black-Scholes normal CDF approximation
+function _normCDF(x){
+    const t=1/(1+0.2315419*Math.abs(x));
+    const d=0.3989423*Math.exp(-x*x/2);
+    const p=d*t*(0.3193815+t*(-0.3565638+t*(1.7814779+t*(-1.8212560+t*1.3302744))));
+    return x>=0?1-p:p;
+}
+// Estimate IV by ticker — rough but gives reasonable BS prices
+function _estimateIV(ticker){
+    const hi=['NVDA','AMD','TSLA','MSTR','GME','AMC','PLTR','SOFI','RIVN','LCID','COIN','HOOD'];
+    const lo=['SPY','QQQ','DIA','IWM','GLD','TLT','AAPL','MSFT','GOOGL','AMZN','META','BRK'];
+    const t=ticker.toUpperCase();
+    if(hi.some(s=>t.includes(s))) return 0.75;
+    if(lo.some(s=>t.includes(s))) return 0.28;
+    return 0.48; // mid default
+}
+function _blackScholes(S, K, T, r, sigma, isCall){
+    if(T<=0||S<=0||K<=0) return null;
+    const d1=(Math.log(S/K)+(r+sigma*sigma/2)*T)/(sigma*Math.sqrt(T));
+    const d2=d1-sigma*Math.sqrt(T);
+    if(isCall) return S*_normCDF(d1)-K*Math.exp(-r*T)*_normCDF(d2);
+    return K*Math.exp(-r*T)*_normCDF(-d2)-S*_normCDF(-d1);
+}
+// Snap stock price to a real-world option strike grid
+function _nearestStrike(price){
+    if(price>500) return Math.round(price/10)*10;
+    if(price>100) return Math.round(price/5)*5;
+    if(price>20)  return Math.round(price/2.5)*2.5;
+    return Math.round(price);
+}
+// Compute next N option expiry Fridays from today
+function _getExpiryFridays(n){
+    const dates=[];
+    const d=new Date();
+    d.setHours(0,0,0,0);
+    while(dates.length<n){
+        d.setDate(d.getDate()+1);
+        if(d.getDay()===5) dates.push(new Date(d));
+    }
+    return dates;
+}
+function _bsEstimate(ticker, stockPrice, contractType, expiryTarget){
+    const fridays=_getExpiryFridays(26); // up to ~6 months of Fridays
+    const days=expiryTarget==='1w'?7:expiryTarget==='90d'?90:expiryTarget==='180d'?180:30;
+    const targetMs=Date.now()+days*86400000;
+    const expDate=fridays.reduce((a,b)=>Math.abs(b-targetMs)<Math.abs(a-targetMs)?b:a);
+    const T=Math.max((expDate-Date.now())/(365*86400000), 1/365);
+    const K=_nearestStrike(stockPrice);
+    const sigma=_estimateIV(ticker);
+    const isCall=contractType.toLowerCase()!=='put';
+    const price=_blackScholes(stockPrice, K, T, 0.045, sigma, isCall);
+    if(!price||price<0.01) return null;
+    const ask=parseFloat((price*1.05).toFixed(2));  // ask ≈ mid + small spread
+    const bid=parseFloat((price*0.95).toFixed(2));
+    return{
+        strike:K,
+        expiry:expDate.toISOString().split('T')[0],
+        bid, ask,
+        mid:parseFloat(price.toFixed(2)),
+        last:null, volume:null, oi:null,
+        iv:parseFloat((sigma*100).toFixed(0)),
+        isEstimate:true  // flag so UI shows "~Est" not "● Live"
+    };
+}
+
+// Try Yahoo Finance options chain via CORS proxies (browser-side — no Vercel needed)
+async function _fetchYahooOptionChain(ticker, contractType, expiryDays){
+    const proxyFns=[
+        u=>`https://corsproxy.io/?url=${encodeURIComponent(u)}`,
+        u=>`https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
+    ];
+    const baseYUrl=`https://query1.finance.yahoo.com/v7/finance/options/${ticker}`;
+    for(const mkProxy of proxyFns){
+        try{
+            const ctrl=new AbortController();
+            setTimeout(()=>ctrl.abort(),8000);
+            const r=await fetch(mkProxy(baseYUrl),{signal:ctrl.signal});
+            if(!r.ok) continue;
+            const d=await r.json();
+            const result=d?.optionChain?.result?.[0];
+            if(!result) continue;
+            const currentPrice=result.quote?.regularMarketPrice||0;
+            const expiryDates=result.expirationDates||[];
+            if(!expiryDates.length) continue;
+            const now=Math.floor(Date.now()/1000);
+            const ideal=now+expiryDays*86400;
+            const future=expiryDates.filter(t=>t>now);
+            if(!future.length) continue;
+            const targetTs=future.reduce((a,b)=>Math.abs(b-ideal)<Math.abs(a-ideal)?b:a);
+            // Fetch chain for that expiry
+            const ctrl2=new AbortController();
+            setTimeout(()=>ctrl2.abort(),8000);
+            const chainUrl=`https://query1.finance.yahoo.com/v7/finance/options/${ticker}?date=${targetTs}`;
+            const r2=await fetch(mkProxy(chainUrl),{signal:ctrl2.signal});
+            if(!r2.ok) continue;
+            const d2=await r2.json();
+            const cr=d2?.optionChain?.result?.[0];
+            if(!cr) continue;
+            const contracts=cr.options?.[0]?.[contractType==='put'?'puts':'calls']||[];
+            if(!contracts.length) continue;
+            const expDateStr=new Date(targetTs*1000).toISOString().split('T')[0];
+            console.log('[options] Yahoo via proxy ✓',ticker,contractType,expDateStr,'contracts:',contracts.length);
+            return{contracts, expDateStr, currentPrice};
+        }catch(e){ console.warn('[options] proxy attempt failed:',e.message); }
+    }
+    return null;
+}
+
 async function fetchRealOption(ticker, currentPrice, contractType, expiryTarget){
+    const type=contractType.toLowerCase()==='put'?'put':'call';
+    const days=expiryTarget==='1w'?7:expiryTarget==='90d'?90:expiryTarget==='180d'?180:30;
+    const refPrice=currentPrice>0?currentPrice:0;
+
+    // ── Layer 1: Try Yahoo Finance via CORS proxy ──────────────
     try{
-        const type=contractType.toLowerCase()==='put'?'put':'call';
-        // For strike: use current price so we get ATM — not Claude's stale suggestion
-        const atmStrike=currentPrice>0?currentPrice:null;
-        const params=new URLSearchParams({ ticker, type, expiry:expiryTarget||'30d' });
-        if(atmStrike) params.set('strike', atmStrike.toFixed(2));
-        const ctrl=new AbortController();
-        setTimeout(()=>ctrl.abort(),10000);
-        const r=await fetch(`/api/options?${params}`,{signal:ctrl.signal});
-        if(!r.ok){ console.warn('[options] /api/options',r.status); return null; }
-        const data=await r.json();
-        if(data.error){ console.warn('[options]',data.error); return null; }
-        const c=data.best;
-        if(!c) return null;
-        return{
-            strike:     c.strike,
-            expiry:     c.expiry,
-            bid:        c.bid,
-            ask:        c.ask,
-            mid:        c.mid,
-            last:       c.last,
-            volume:     c.volume,
-            oi:         c.openInterest,
-            iv:         c.iv,
-            inTheMoney: c.inTheMoney,
-            nextOtm:    data.nextOtm,       // next OTM strike for comparison
-            allStrikes: data.allStrikes,    // full chain for strike picker
-            currentPrice: data.currentPrice,
-        };
-    }catch(e){ console.warn('[options] fetch error:',e.message); return null; }
+        const chain=await _fetchYahooOptionChain(ticker, type, days);
+        if(chain){
+            const{contracts, expDateStr, currentPrice:yPrice}=chain;
+            const ref=refPrice||yPrice;
+            const best=contracts.reduce((a,b)=>Math.abs(b.strike-ref)<Math.abs(a.strike-ref)?b:a);
+            return{
+                strike:best.strike, expiry:expDateStr,
+                bid:best.bid??null, ask:best.ask??null,
+                mid:best.bid!=null&&best.ask!=null?parseFloat(((best.bid+best.ask)/2).toFixed(2)):null,
+                last:best.lastPrice??null, volume:best.volume??0,
+                oi:best.openInterest??0,
+                iv:best.impliedVolatility!=null?parseFloat((best.impliedVolatility*100).toFixed(1)):null,
+                inTheMoney:best.inTheMoney??false,
+                isEstimate:false
+            };
+        }
+    }catch(e){ console.warn('[options] Yahoo chain error:',e.message); }
+
+    // ── Layer 2: Black-Scholes fallback (always works) ─────────
+    if(refPrice>0){
+        const est=_bsEstimate(ticker, refPrice, type, expiryTarget||'30d');
+        if(est){ console.log('[options] BS fallback for',ticker,type,expiryTarget,'→ ask $'+est.ask); return est; }
+    }
+    return null;
 }
 
 // Parse expiry date range from option_detail string
@@ -1325,10 +1434,16 @@ function buildLiveOptionHTML(o, optType){
     const costNote = costPer100
         ? `<span style="font-size:10px;color:var(--muted)"> = $${costPer100}/contract</span>`
         : '';
-    return `<span style="background:rgba(63,185,80,.15);color:var(--green);border:1px solid rgba(63,185,80,.3);border-radius:4px;padding:1px 6px;font-size:10px;font-weight:700;display:inline-block;margin-bottom:3px">● LIVE</span>
+    const badge=o.isEstimate
+        ?`<span style="background:rgba(210,153,34,.15);color:var(--orange);border:1px solid rgba(210,153,34,.3);border-radius:4px;padding:1px 6px;font-size:10px;font-weight:700;display:inline-block;margin-bottom:3px">~ Est (BS)</span>`
+        :`<span style="background:rgba(63,185,80,.15);color:var(--green);border:1px solid rgba(63,185,80,.3);border-radius:4px;padding:1px 6px;font-size:10px;font-weight:700;display:inline-block;margin-bottom:3px">● Live</span>`;
+    const subNote=o.isEstimate
+        ?`<div style="font-size:10px;color:var(--muted);margin-top:1px">Black-Scholes model estimate · IV ~${o.iv||'—'}%${ivNote}${oiNote}</div>`
+        :`<div style="font-size:10px;color:var(--muted);margin-top:1px">Yahoo Finance · enter at ask · mid $${midFmt}${ivNote}${oiNote}</div>`;
+    return `${badge}
 <span style="font-weight:700;font-size:12px">$${o.strike} ${optType} · exp ${expiryFmt}</span>
 <div style="margin-top:3px;font-size:13px;font-weight:700;color:var(--text)">${bidAsk}${costNote}</div>
-<div style="font-size:10px;color:var(--muted);margin-top:1px">Buy at ask · mid $${midFmt}${ivNote}${oiNote}</div>`;
+${subNote}`;
 }
 
 // Enrich ONE card with live option price — separated so switchCardDir can call it too
