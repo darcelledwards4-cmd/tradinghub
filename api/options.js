@@ -28,11 +28,25 @@ module.exports = async function handler(req, res) {
 
     try {
         // Step 1: Get current price + available expiry dates
+        // Try query2 first, fall back to query1 if it fails
         const ctrl1 = new AbortController();
         setTimeout(() => ctrl1.abort(), 8000);
-        const baseUrl = `https://query2.finance.yahoo.com/v7/finance/options/${symbol}`;
-        const baseRes = await fetch(baseUrl, { headers, signal: ctrl1.signal });
-        if (!baseRes.ok) return res.status(502).json({ error: `Yahoo options error ${baseRes.status}` });
+        let baseRes, baseUrl;
+        for (const host of ['query2', 'query1']) {
+            baseUrl = `https://${host}.finance.yahoo.com/v7/finance/options/${symbol}`;
+            try {
+                baseRes = await fetch(baseUrl, { headers, signal: ctrl1.signal });
+                if (baseRes.ok) break;
+                const body = await baseRes.text().catch(() => '');
+                console.error(`[options] ${host} status ${baseRes.status}:`, body.slice(0, 200));
+            } catch(e) {
+                console.error(`[options] ${host} fetch error:`, e.message);
+                baseRes = null;
+            }
+        }
+        if (!baseRes || !baseRes.ok) {
+            return res.status(502).json({ error: `Yahoo options unavailable for ${symbol}` });
+        }
 
         const baseData = await baseRes.json();
         const optResult = baseData?.optionChain?.result?.[0];

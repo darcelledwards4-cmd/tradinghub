@@ -1331,77 +1331,86 @@ function buildLiveOptionHTML(o, optType){
 <div style="font-size:10px;color:var(--muted);margin-top:1px">Buy at ask · mid $${midFmt}${ivNote}${oiNote}</div>`;
 }
 
-// After cards render, fetch real option prices from Yahoo Finance and update the display
-async function enrichCardsWithOptionPrices(cardIds){
-    // Tab-index → expiry target map (matches 1Mo / 3Mo / 6Mo tabs)
+// Enrich ONE card with live option price — separated so switchCardDir can call it too
+// Only fetches the ACTIVE tab expiry to avoid rate-limiting Yahoo Finance
+async function enrichOneCard(cardId){
     const EXPIRY_TARGETS = ['30d', '90d', '180d'];
+    const cd = window._cardData[cardId];
+    if(!cd) return;
+    const idea = cd[cd.activeDir||'call'] || cd.call || cd.put;
+    if(!idea || !idea.ticker) return;
+    const optType   = (idea.option_type||'CALL').toUpperCase();
+    const livePrice = cd.current_price || idea.current_price || 0;
 
-    for(const cardId of cardIds){
-        try{
-            const cd = window._cardData[cardId];
-            if(!cd) continue;
-            const idea = cd[cd.activeDir||'call'] || cd.call || cd.put;
-            if(!idea || !idea.ticker) continue;
-            const optType  = (idea.option_type||'CALL').toUpperCase();
-            const livePrice = cd.current_price || idea.current_price || 0;
+    const odEl = document.getElementById('od-'+cardId);
+    if(odEl){ odEl.innerHTML = '<span style="color:var(--muted);font-size:11px">⏳ Loading live option price…</span>'; }
 
-            // Show loading on the active option detail
-            const odEl = document.getElementById('od-'+cardId);
-            if(odEl){ odEl.innerHTML = '<span style="color:var(--muted);font-size:11px">Loading live prices…</span>'; }
+    // Determine which tab is active (default 0)
+    const tabEls = document.querySelectorAll(`#etabs-${cardId} .expiry-tab`);
+    let activeIdx = 0;
+    tabEls.forEach((t,i) => { if(t.classList.contains('active')) activeIdx = i; });
+    const activeExpiry = EXPIRY_TARGETS[activeIdx] || '30d';
 
-            // Fetch all 3 expiry windows in parallel
-            const [r0, r1, r2] = await Promise.all(
-                EXPIRY_TARGETS.map(t => fetchRealOption(idea.ticker, livePrice, optType, t))
-            );
-            const results = [r0, r1, r2];
+    // Fetch ONLY the active tab first — prevents hammering Yahoo with 3N requests
+    const result = await fetchRealOption(idea.ticker, livePrice, optType, activeExpiry);
 
-            // Store live price on each expiry_options slot so tab switching stays live
-            if(idea.expiry_options){
-                idea.expiry_options.forEach((slot, i) => {
-                    if(results[i]) slot._livePrice = results[i];
-                });
+    // Store on the idea object for this tab slot
+    if(idea.expiry_options && idea.expiry_options[activeIdx]){
+        if(result) idea.expiry_options[activeIdx]._livePrice = result;
+    }
+    // Also store as a direct reference for easy access
+    cd._liveOption = result;
+
+    // Re-get the element in case DOM was replaced while we were fetching
+    const odElNow = document.getElementById('od-'+cardId);
+    if(!odElNow) return; // card was removed from DOM
+
+    if(result){
+        odElNow.innerHTML = buildLiveOptionHTML(result, optType);
+        odElNow.style.lineHeight = '1.6';
+        odElNow.title = 'Live option data from Yahoo Finance';
+        // Store for journal
+        const dir = cd.activeDir||'call';
+        if(cd[dir]) cd[dir]._realOptionPrice = {
+            bid:result.bid, ask:result.ask, mid:result.mid, last:result.last,
+            expiry:result.expiry, strike:result.strike, iv:result.iv,
+        };
+        // Update the active tab button with ask price
+        if(tabEls[activeIdx] && result.ask != null){
+            const existing = tabEls[activeIdx].querySelector('.opt-live-price');
+            const html = `<div class="opt-live-price" style="font-size:10px;font-weight:800;color:var(--green);margin-top:1px">ask $${result.ask.toFixed(2)}</div>`;
+            if(!existing) tabEls[activeIdx].insertAdjacentHTML('beforeend', html);
+            else existing.outerHTML = html;
+        }
+        console.log('[options]', idea.ticker, optType, activeExpiry, `ask=$${result.ask} strike=$${result.strike} exp=${result.expiry}`);
+    } else {
+        odElNow.innerHTML = '<span style="color:var(--muted);font-size:11px">Option price unavailable — check console (testOptions)</span>';
+        console.warn('[options] enrichOneCard failed for', idea.ticker, optType, activeExpiry);
+    }
+
+    // Lazily fetch remaining 2 expiry tabs in background without blocking display
+    EXPIRY_TARGETS.forEach((expiry, i) => {
+        if(i === activeIdx) return; // already fetched
+        fetchRealOption(idea.ticker, livePrice, optType, expiry).then(r => {
+            if(!r) return;
+            if(idea.expiry_options && idea.expiry_options[i]) idea.expiry_options[i]._livePrice = r;
+            // Update tab button ask price if still in DOM
+            const tab = document.querySelectorAll(`#etabs-${cardId} .expiry-tab`)[i];
+            if(tab && r.ask != null){
+                const existing = tab.querySelector('.opt-live-price');
+                const html = `<div class="opt-live-price" style="font-size:10px;font-weight:800;color:var(--green);margin-top:1px">ask $${r.ask.toFixed(2)}</div>`;
+                if(!existing) tab.insertAdjacentHTML('beforeend', html);
+                else existing.outerHTML = html;
             }
+        }).catch(()=>{});
+    });
+}
 
-            // Find the active tab index
-            const tabEls = document.querySelectorAll(`#etabs-${cardId} .expiry-tab`);
-            let activeIdx = 0;
-            tabEls.forEach((t,i) => { if(t.classList.contains('active')) activeIdx = i; });
-
-            // Render the active tab's live price in the detail section
-            const activeResult = results[activeIdx] || results.find(Boolean);
-            if(odEl && activeResult){
-                odEl.innerHTML = buildLiveOptionHTML(activeResult, optType);
-                odEl.style.lineHeight = '1.6';
-                odEl.title = 'Live option data from Yahoo Finance';
-            } else if(odEl){
-                odEl.innerHTML = '<span style="color:var(--muted);font-size:11px">Option prices unavailable right now</span>';
-            }
-
-            // Inject ask price badge into each expiry tab button
-            tabEls.forEach((tabEl, i) => {
-                const r = results[i];
-                const existing = tabEl.querySelector('.opt-live-price');
-                if(r && r.ask != null){
-                    const html = `<div class="opt-live-price" style="font-size:10px;font-weight:800;color:var(--green);margin-top:1px">ask $${r.ask.toFixed(2)}</div>`;
-                    if(!existing) tabEl.insertAdjacentHTML('beforeend', html);
-                    else existing.outerHTML = html;
-                } else if(existing){
-                    existing.remove();
-                }
-            });
-
-            // Store best result on card for journal
-            const best = results.find(Boolean);
-            if(best && cd[cd.activeDir||'call']){
-                cd[cd.activeDir||'call']._realOptionPrice = {
-                    bid:best.bid, ask:best.ask, mid:best.mid, last:best.last,
-                    expiry:best.expiry, strike:best.strike, iv:best.iv,
-                };
-            }
-
-            console.log('[options]', idea.ticker, optType, results.map(r=>r?`${r.expiry} ask=$${r.ask}`:'null'));
-
-        }catch(e){ console.warn('[options] enrich error:', e.message, e.stack); }
+// Enrich a batch of cards — staggered with 300ms delay to avoid Yahoo rate limits
+async function enrichCardsWithOptionPrices(cardIds){
+    for(let i = 0; i < cardIds.length; i++){
+        if(i > 0) await new Promise(r => setTimeout(r, 300)); // throttle
+        enrichOneCard(cardIds[i]).catch(e => console.warn('[options] batch error:', e.message));
     }
 }
 
@@ -2008,7 +2017,7 @@ function switchCardExpiry(cardId, idx){
     if(tl && opt.target!=null)
         tl.textContent=`$${opt.target}`;
 
-    // Update option detail — use live price if available, else fall back to Claude estimate
+    // Update option detail — use live price if available, else lazy-fetch it now
     const od=document.getElementById('od-'+cardId);
     if(od){
         const optType=(idea.option_type||'CALL').toUpperCase();
@@ -2016,8 +2025,28 @@ function switchCardExpiry(cardId, idx){
             od.innerHTML = buildLiveOptionHTML(opt._livePrice, optType);
             od.style.lineHeight='1.6';
         } else {
+            // No live price for this tab yet — show stale estimate and trigger background fetch
             od.textContent = opt.option_detail||'';
             od.style.lineHeight='';
+            const EXPIRY_TARGETS = ['30d','90d','180d'];
+            const livePrice = cardData.current_price || idea.current_price || 0;
+            fetchRealOption(idea.ticker, livePrice, optType, EXPIRY_TARGETS[idx]||'30d').then(r=>{
+                if(!r) return;
+                opt._livePrice = r;
+                const odNow=document.getElementById('od-'+cardId);
+                // Only update if this tab is still active
+                const stillActive=document.querySelectorAll(`#etabs-${cardId} .expiry-tab`)[idx]?.classList.contains('active');
+                if(odNow && stillActive){
+                    odNow.innerHTML=buildLiveOptionHTML(r, optType);
+                    odNow.style.lineHeight='1.6';
+                }
+                const tab=document.querySelectorAll(`#etabs-${cardId} .expiry-tab`)[idx];
+                if(tab && r.ask!=null){
+                    const ex=tab.querySelector('.opt-live-price');
+                    const html=`<div class="opt-live-price" style="font-size:10px;font-weight:800;color:var(--green);margin-top:1px">ask $${r.ask.toFixed(2)}</div>`;
+                    if(!ex) tab.insertAdjacentHTML('beforeend',html); else ex.outerHTML=html;
+                }
+            }).catch(()=>{});
         }
     }
 
@@ -2042,9 +2071,10 @@ async function switchCardDir(cardId, dir){
     if (!data || data.activeDir === dir) return;
 
     if (data[dir]) {
-        // Already cached — just re-render in place
+        // Already cached — re-render in place then re-enrich (outerHTML replaces DOM)
         const wrap = document.getElementById('cwrap-'+cardId);
         if (wrap) wrap.outerHTML = buildCard(data[dir], cardId);
+        enrichOneCard(cardId).catch(()=>{}); // re-fetch options for the new direction
         return;
     }
 
@@ -2075,6 +2105,7 @@ async function switchCardDir(cardId, dir){
         data[dir] = idea;
         const wrap2 = document.getElementById('cwrap-'+cardId);
         if (wrap2) wrap2.outerHTML = buildCard(idea, cardId);
+        enrichOneCard(cardId).catch(()=>{}); // fetch live option price for new direction
     } catch(e) {
         const wrap2 = document.getElementById('cwrap-'+cardId);
         if (wrap2) wrap2.innerHTML = `<div style="background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:16px">
@@ -2552,6 +2583,8 @@ async function analyzeSingle(){
         // Render starting with CALL (or PUT if call failed)
         const displayIdea = callIdea || putIdea;
         out.innerHTML=`<div style="margin-bottom:8px;font-size:12px;color:var(--muted)">Analysis for <strong style="color:var(--text)">${ticker}</strong> — both CALL & PUT ready, use toggle to switch:</div><div class="ideas-grid">${buildCard(displayIdea, cardId)}</div>`;
+
+        enrichOneCard(cardId).catch(()=>{}); // fetch live option price
 
         const now=new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'});
         document.getElementById('lastUpdated').textContent=`Updated ${now}`;
