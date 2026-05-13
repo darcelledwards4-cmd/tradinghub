@@ -274,7 +274,7 @@ module.exports = async function handler(req, res) {
         }
 
         return res.status(502).json({
-            error: `Options data unavailable for ${symbol}. Add POLYGON_API_KEY to Vercel env for reliable data.`,
+            error: `Options data unavailable for ${symbol}. Add MASSIVE_API_KEY to Vercel env for reliable data.`,
             hint: 'Free API key at https://polygon.io — add MASSIVE_API_KEY to Vercel project settings'
         });
 
