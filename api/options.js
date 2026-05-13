@@ -2,7 +2,7 @@
 // GET /api/options?ticker=NVDA&type=call&expiry=30d
 // expiry: '1w' | '30d' | '90d' | '180d' | 'YYYY-MM-DD'
 //
-// Setup: add POLYGON_API_KEY to Vercel environment variables
+// Setup: add MASSIVE_API_KEY to Vercel environment variables
 //   https://app.vercel.com → project → Settings → Environment Variables
 //   Free key at: https://polygon.io (no credit card)
 
@@ -232,7 +232,7 @@ module.exports = async function handler(req, res) {
 
     try {
         // ── Source 1: Polygon.io (if API key configured) ──────────────
-        const polygonKey = process.env.POLYGON_API_KEY;
+        const polygonKey = process.env.MASSIVE_API_KEY;
         if (polygonKey) {
             const result = await fetchPolygonOptions(symbol, contractType, targetDateStr, refPrice, polygonKey);
             if (result) {
@@ -275,7 +275,7 @@ module.exports = async function handler(req, res) {
 
         return res.status(502).json({
             error: `Options data unavailable for ${symbol}. Add POLYGON_API_KEY to Vercel env for reliable data.`,
-            hint: 'Free API key at https://polygon.io — add POLYGON_API_KEY to Vercel project settings'
+            hint: 'Free API key at https://polygon.io — add MASSIVE_API_KEY to Vercel project settings'
         });
 
     } catch(err) {
