@@ -40,7 +40,8 @@ async function fetchMassiveOptions(symbol, contractType, targetDate, currentPric
 
     const data = await r.json();
     if (!data.results || !data.results.length) {
-        console.warn('[options] Massive: no results for', symbol, contractType, fromDate, '–', toDate);
+        // Free Polygon tier returns 200 + empty array for options — paid plan required
+        console.error('[options] Massive: empty results for', symbol, contractType, fromDate, '–', toDate, '| status:', data.status, '| count:', data.results?.length ?? 'undefined');
         return null;
     }
 
@@ -80,7 +81,7 @@ async function fetchMassiveOptions(symbol, contractType, targetDate, currentPric
 
     // Accept any available price — bid/ask live during hours, day.close always available
     if (bid == null && ask == null && last == null && dayClose == null) {
-        console.warn('[options] Massive: all price fields null for', best.details?.ticker, '— raw day:', JSON.stringify(best.day));
+        console.error('[options] Massive: all price fields null for', best.details?.ticker, '— raw day:', JSON.stringify(best.day));
         return null;
     }
 
@@ -103,6 +104,117 @@ async function fetchMassiveOptions(symbol, contractType, targetDate, currentPric
         contractSymbol: best.details?.ticker ?? '',
         priceType,      // 'live' | 'last_trade' | 'prev_close'
         source:         'massive',
+    };
+}
+
+// ── Twelve Data options chain ────────────────────────────────────────────────
+// Free tier: 800 credits/day, 8 req/min. Options chain included on free plan.
+async function fetchTwelvedataOptions(symbol, contractType, targetDateStr, currentPrice, apiKey) {
+    // Step 1: get available expiration dates so we can pick the closest to target
+    const expUrl = `https://api.twelvedata.com/options/expiration?symbol=${symbol}&apikey=${apiKey}`;
+    const ctrl1 = new AbortController();
+    setTimeout(() => ctrl1.abort(), 10000);
+
+    let expirations = [];
+    try {
+        const r1 = await fetch(expUrl, { headers: { 'User-Agent': UA, 'Accept': 'application/json' }, signal: ctrl1.signal });
+        if (!r1.ok) {
+            console.error(`[options] TwelveData expirations ${r1.status}`);
+            return null;
+        }
+        const d1 = await r1.json();
+        if (d1.code || d1.status === 'error') {
+            console.error('[options] TwelveData expirations error:', d1.message?.slice(0, 120));
+            return null;
+        }
+        // API returns { dates: [...] } or { expiration_dates: [...] }
+        expirations = d1.dates ?? d1.expiration_dates ?? [];
+        if (!Array.isArray(expirations)) expirations = [];
+    } catch(e) {
+        console.error('[options] TwelveData expirations fetch error:', e.message);
+        return null;
+    }
+
+    if (!expirations.length) {
+        console.error('[options] TwelveData: no expirations returned for', symbol);
+        return null;
+    }
+
+    // Pick expiry closest to target date
+    const targetMs = new Date(targetDateStr).getTime();
+    const bestExpiry = expirations.reduce((a, b) => {
+        const da = Math.abs(new Date(a).getTime() - targetMs);
+        const db = Math.abs(new Date(b).getTime() - targetMs);
+        return db < da ? b : a;
+    });
+
+    // Step 2: get options chain for that expiry, filtered by contract type
+    const chainUrl = `https://api.twelvedata.com/options/chain?symbol=${symbol}&expiration_date=${bestExpiry}&option_type=${contractType}&apikey=${apiKey}`;
+    const ctrl2 = new AbortController();
+    setTimeout(() => ctrl2.abort(), 12000);
+
+    let data;
+    try {
+        const r2 = await fetch(chainUrl, { headers: { 'User-Agent': UA, 'Accept': 'application/json' }, signal: ctrl2.signal });
+        if (!r2.ok) {
+            console.error(`[options] TwelveData chain ${r2.status}`);
+            return null;
+        }
+        data = await r2.json();
+    } catch(e) {
+        console.error('[options] TwelveData chain fetch error:', e.message);
+        return null;
+    }
+
+    if (data.code || data.status === 'error') {
+        console.error('[options] TwelveData chain error:', data.message?.slice(0, 120));
+        return null;
+    }
+
+    // Twelve Data returns calls/puts arrays — pick the correct one
+    const contracts = (contractType === 'put' ? data.puts : data.calls) ?? [];
+    if (!contracts.length) {
+        console.error('[options] TwelveData: no', contractType, 'contracts for', symbol, bestExpiry);
+        return null;
+    }
+
+    // Find ATM contract (closest strike to current price)
+    const ref = currentPrice || 0;
+    const best = contracts.reduce((a, b) => {
+        const sa = Math.abs(parseFloat(a.strike_price ?? a.strike) - ref);
+        const sb = Math.abs(parseFloat(b.strike_price ?? b.strike) - ref);
+        return sb < sa ? b : a;
+    });
+
+    const bid  = best.bid  != null && best.bid  !== '' ? parseFloat(best.bid)  : null;
+    const ask  = best.ask  != null && best.ask  !== '' ? parseFloat(best.ask)  : null;
+    const last = best.last_price != null && best.last_price !== '' ? parseFloat(best.last_price) : null;
+
+    // implied_volatility from TwelveData comes as a decimal (0.35 = 35%)
+    const ivRaw = best.implied_volatility;
+    const iv = ivRaw != null && ivRaw !== '' ? parseFloat((parseFloat(ivRaw) * 100).toFixed(1)) : null;
+
+    const priceType = (bid != null || ask != null) ? 'live' : last != null ? 'last_trade' : null;
+    if (priceType == null) {
+        console.error('[options] TwelveData: no price data for best contract', best.contract_name ?? best.strike_price);
+        return null;
+    }
+
+    console.log(`[options] ✓ TwelveData ${symbol} ${contractType} ${bestExpiry} strike=${best.strike_price} bid=${bid} ask=${ask} last=${last}`);
+
+    return {
+        strike:         parseFloat(best.strike_price ?? best.strike),
+        expiry:         bestExpiry,
+        bid, ask,
+        mid:            bid != null && ask != null ? parseFloat(((bid + ask) / 2).toFixed(2)) : null,
+        last,
+        volume:         parseInt(best.volume) || 0,
+        openInterest:   parseInt(best.open_interest) || 0,
+        iv,
+        inTheMoney:     best.in_the_money === 'true' || best.in_the_money === true,
+        contractSymbol: best.contract_name ?? best.symbol ?? '',
+        priceType,
+        source:         'twelvedata',
     };
 }
 
@@ -248,10 +360,33 @@ module.exports = async function handler(req, res) {
                     source: 'massive',
                 });
             }
-            console.warn('[options] Massive failed, trying Yahoo v10 fallback');
+            console.warn('[options] Massive failed, trying Twelve Data');
         }
 
-        // ── Source 2: Yahoo Finance v10/quoteSummary ──────────────────
+        // ── Source 2: Twelve Data (TWELVEDATA_API_KEY) ────────────────
+        const twelvedataKey = process.env.TWELVEDATA_API_KEY;
+        if (twelvedataKey) {
+            const result = await fetchTwelvedataOptions(symbol, contractType, targetDateStr, refPrice, twelvedataKey);
+            if (result) {
+                return res.status(200).json({
+                    ticker: symbol, contractType, currentPrice,
+                    targetExpiry: result.expiry,
+                    best: {
+                        strike: result.strike, expiry: result.expiry,
+                        bid: result.bid, ask: result.ask, mid: result.mid,
+                        last: result.last, volume: result.volume,
+                        openInterest: result.openInterest, iv: result.iv,
+                        inTheMoney: result.inTheMoney, contractSymbol: result.contractSymbol,
+                        priceType: result.priceType,
+                    },
+                    fetchedAt: new Date().toISOString(),
+                    source: 'twelvedata',
+                });
+            }
+            console.warn('[options] TwelveData failed, trying Yahoo v10 fallback');
+        }
+
+        // ── Source 3: Yahoo Finance v10/quoteSummary ──────────────────
         const yahooResult = await fetchYahooV10Options(symbol, contractType, expiryDays);
         if (yahooResult) {
             return res.status(200).json({
