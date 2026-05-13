@@ -1326,81 +1326,93 @@ function _bsEstimate(ticker, stockPrice, contractType, expiryTarget){
     };
 }
 
-// Try Yahoo Finance options chain via CORS proxies (browser-side — bypasses Vercel IP block)
-async function _fetchYahooOptionChain(ticker, contractType, expiryDays){
-    // Try query2 + query1 hosts × corsproxy + allorigins proxies = 4 combos
-    const hosts=['query2','query1'];
-    const proxyFns=[
-        u=>`https://corsproxy.io/?url=${encodeURIComponent(u)}`,
-        u=>`https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
-    ];
-    for(const mkProxy of proxyFns){
-        for(const host of hosts){
-            const baseYUrl=`https://${host}.finance.yahoo.com/v7/finance/options/${ticker}`;
-            try{
-                const ctrl=new AbortController();
-                setTimeout(()=>ctrl.abort(),9000);
-                const r=await fetch(mkProxy(baseYUrl),{signal:ctrl.signal});
-                if(!r.ok){ console.warn('[options]',host,'base',r.status); continue; }
-                const text=await r.text();
-                let d; try{ d=JSON.parse(text); }catch(e){ console.warn('[options] JSON parse fail, preview:',text.slice(0,120)); continue; }
-                const result=d?.optionChain?.result?.[0];
-                if(!result){ console.warn('[options]',host,'no result in response'); continue; }
-                const currentPrice=result.quote?.regularMarketPrice||0;
-                const expiryDates=result.expirationDates||[];
-                if(!expiryDates.length){ console.warn('[options]',host,'no expiry dates'); continue; }
-                const now=Math.floor(Date.now()/1000);
-                const ideal=now+expiryDays*86400;
-                const future=expiryDates.filter(t=>t>now);
-                if(!future.length) continue;
-                const targetTs=future.reduce((a,b)=>Math.abs(b-ideal)<Math.abs(a-ideal)?b:a);
-                // Fetch chain for that expiry
-                const ctrl2=new AbortController();
-                setTimeout(()=>ctrl2.abort(),9000);
-                const chainUrl=`https://${host}.finance.yahoo.com/v7/finance/options/${ticker}?date=${targetTs}`;
-                const r2=await fetch(mkProxy(chainUrl),{signal:ctrl2.signal});
-                if(!r2.ok){ console.warn('[options]',host,'chain',r2.status); continue; }
-                const d2=await r2.json();
-                const cr=d2?.optionChain?.result?.[0];
-                if(!cr) continue;
-                const contracts=cr.options?.[0]?.[contractType==='put'?'puts':'calls']||[];
-                if(!contracts.length){ console.warn('[options]',host,'empty contracts for',contractType); continue; }
-                const expDateStr=new Date(targetTs*1000).toISOString().split('T')[0];
-                console.log('[options] ✓',host,'via',mkProxy('x').split('?')[0].split('//')[1].split('/')[0],ticker,contractType,expDateStr,'contracts:',contracts.length);
-                return{contracts, expDateStr, currentPrice};
-            }catch(e){ console.warn('[options]',host,'error:',e.message); }
-        }
-    }
-    console.warn('[options] all proxies failed for',ticker,'→ using Black-Scholes');
-    return null;
+// Parse /api/options serverless response into standard shape
+function _parseApiOptionsResponse(data){
+    const b=data.best;
+    if(!b||b.strike==null) return null;
+    return{
+        strike:b.strike, expiry:b.expiry,
+        bid:b.bid??null, ask:b.ask??null,
+        mid:b.mid??null, last:b.last??null,
+        volume:b.volume??0, oi:b.openInterest??0,
+        iv:b.iv??null, inTheMoney:b.inTheMoney??false,
+        isEstimate:false
+    };
 }
 
 async function fetchRealOption(ticker, currentPrice, contractType, expiryTarget){
-    const type=contractType.toLowerCase()==='put'?'put':'call';
-    const days=expiryTarget==='1w'?7:expiryTarget==='90d'?90:expiryTarget==='180d'?180:30;
+    const type    =contractType.toLowerCase()==='put'?'put':'call';
+    const days    =expiryTarget==='1w'?7:expiryTarget==='90d'?90:expiryTarget==='180d'?180:30;
     const refPrice=currentPrice>0?currentPrice:0;
 
-    // ── Layer 1: Try Yahoo Finance via CORS proxy ──────────────
+    // ── Layer 1: Vercel serverless /api/options (v10/quoteSummary — not IP-blocked) ──
     try{
-        const chain=await _fetchYahooOptionChain(ticker, type, days);
-        if(chain){
-            const{contracts, expDateStr, currentPrice:yPrice}=chain;
-            const ref=refPrice||yPrice;
-            const best=contracts.reduce((a,b)=>Math.abs(b.strike-ref)<Math.abs(a.strike-ref)?b:a);
-            return{
-                strike:best.strike, expiry:expDateStr,
-                bid:best.bid??null, ask:best.ask??null,
-                mid:best.bid!=null&&best.ask!=null?parseFloat(((best.bid+best.ask)/2).toFixed(2)):null,
-                last:best.lastPrice??null, volume:best.volume??0,
-                oi:best.openInterest??0,
-                iv:best.impliedVolatility!=null?parseFloat((best.impliedVolatility*100).toFixed(1)):null,
-                inTheMoney:best.inTheMoney??false,
-                isEstimate:false
-            };
+        const ctrl=new AbortController();
+        setTimeout(()=>ctrl.abort(),12000);
+        const r=await fetch(`/api/options?ticker=${ticker}&type=${type}&expiry=${expiryTarget||'30d'}`,{signal:ctrl.signal});
+        if(r.ok){
+            const data=await r.json();
+            if(data.best&&data.best.strike!=null&&(data.best.bid!=null||data.best.ask!=null)){
+                const parsed=_parseApiOptionsResponse(data);
+                if(parsed){
+                    console.log('[options] ✓ /api/options',ticker,type,expiryTarget,'ask=$'+(parsed.ask??'—'));
+                    return parsed;
+                }
+            }
+            console.warn('[options] /api/options ok but no valid bid/ask:',JSON.stringify(data?.best).slice(0,120));
+        } else {
+            const body=await r.text().catch(()=>'');
+            console.warn('[options] /api/options',r.status,body.slice(0,150));
         }
-    }catch(e){ console.warn('[options] Yahoo chain error:',e.message); }
+    }catch(e){ console.warn('[options] /api/options error:',e.message); }
 
-    // ── Layer 2: Black-Scholes fallback (always works) ─────────
+    // ── Layer 2: Browser-side v10/quoteSummary via allorigins proxy ──
+    // (corsproxy.io 403s Yahoo; allorigins sometimes works from browser)
+    try{
+        const now=Math.floor(Date.now()/1000);
+        const idealTs=now+days*86400;
+        for(const host of ['query2','query1']){
+            try{
+                const baseUrl=`https://${host}.finance.yahoo.com/v10/finance/quoteSummary/${ticker}?modules=optionChain`;
+                const ctrl=new AbortController(); setTimeout(()=>ctrl.abort(),9000);
+                const r=await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(baseUrl)}`,{signal:ctrl.signal});
+                if(!r.ok){ console.warn('[options] proxy v10',host,'base',r.status); continue; }
+                const text=await r.text();
+                let d; try{ d=JSON.parse(text); }catch(e){ console.warn('[options] proxy v10 parse fail:',text.slice(0,80)); continue; }
+                const oc=d?.quoteSummary?.result?.[0]?.optionChain;
+                if(!oc?.expirationDates?.length){ console.warn('[options] proxy v10',host,'no optionChain'); continue; }
+                const future=oc.expirationDates.filter(t=>t>now);
+                if(!future.length) continue;
+                const targetTs=future.reduce((a,b)=>Math.abs(b-idealTs)<Math.abs(a-idealTs)?b:a);
+                const chainUrl=`https://${host}.finance.yahoo.com/v10/finance/quoteSummary/${ticker}?modules=optionChain&date=${targetTs}`;
+                const ctrl2=new AbortController(); setTimeout(()=>ctrl2.abort(),9000);
+                const r2=await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(chainUrl)}`,{signal:ctrl2.signal});
+                if(!r2.ok){ console.warn('[options] proxy v10',host,'chain',r2.status); continue; }
+                const d2=await r2.json();
+                const oc2=d2?.quoteSummary?.result?.[0]?.optionChain;
+                if(!oc2) continue;
+                const entry=oc2.options?.find(o=>Math.abs(o.expirationDate-targetTs)<86400)||oc2.options?.[0];
+                if(!entry) continue;
+                const contracts=entry[type==='put'?'puts':'calls']||[];
+                if(!contracts.length) continue;
+                const expDateStr=new Date(targetTs*1000).toISOString().split('T')[0];
+                const ref=refPrice||(oc.quote?.regularMarketPrice||0);
+                const best=contracts.reduce((a,b)=>Math.abs(b.strike-ref)<Math.abs(a.strike-ref)?b:a);
+                console.log('[options] ✓ proxy v10',host,ticker,type,expDateStr,'ask=$'+(best.ask??'—'));
+                return{
+                    strike:best.strike, expiry:expDateStr,
+                    bid:best.bid??null, ask:best.ask??null,
+                    mid:best.bid!=null&&best.ask!=null?parseFloat(((best.bid+best.ask)/2).toFixed(2)):null,
+                    last:best.lastPrice??null, volume:best.volume??0,
+                    oi:best.openInterest??0,
+                    iv:best.impliedVolatility!=null?parseFloat((best.impliedVolatility*100).toFixed(1)):null,
+                    inTheMoney:best.inTheMoney??false, isEstimate:false
+                };
+            }catch(e){ console.warn('[options] proxy v10',host,'error:',e.message); }
+        }
+    }catch(e){ console.warn('[options] proxy layer error:',e.message); }
+
+    // ── Layer 3: Black-Scholes fallback (always works) ─────────
     if(refPrice>0){
         const est=_bsEstimate(ticker, refPrice, type, expiryTarget||'30d');
         if(est){ console.log('[options] BS fallback for',ticker,type,expiryTarget,'→ ask $'+est.ask); return est; }

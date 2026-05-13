@@ -1,12 +1,20 @@
-// Real-time options chain via Yahoo Finance — crumb auth required since 2024
+// Real-time options chain via Yahoo Finance v10/quoteSummary
+// v7/finance/options is IP-blocked on Vercel — v10 uses the same auth pattern as v8 (which works)
 // GET /api/options?ticker=NVDA&type=call&expiry=30d
 // expiry: '1w' | '30d' | '90d' | '180d' | 'YYYY-MM-DD'
-// Returns best ATM contract with real bid/ask/IV/OI
-
-// Module-level crumb cache — persists across warm Lambda invocations
-const _credCache = { crumb: null, cookie: null, expires: 0 };
 
 const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+
+const BASE_HEADERS = {
+    'User-Agent': UA,
+    'Accept': 'application/json, */*',
+    'Accept-Language': 'en-US,en;q=0.9',
+    'Referer': 'https://finance.yahoo.com/',
+    'Origin': 'https://finance.yahoo.com',
+};
+
+// Crumb cache — persists across warm Lambda invocations
+const _credCache = { crumb: null, cookie: null, expires: 0 };
 
 async function getYahooCreds() {
     const now = Date.now();
@@ -14,7 +22,6 @@ async function getYahooCreds() {
         return { crumb: _credCache.crumb, cookie: _credCache.cookie };
     }
     try {
-        // Step 1 — visit finance.yahoo.com to collect the B session cookie
         const r1 = await fetch('https://finance.yahoo.com', {
             headers: { 'User-Agent': UA, 'Accept': 'text/html' },
             redirect: 'follow',
@@ -27,40 +34,75 @@ async function getYahooCreds() {
             }
         });
         const cookieStr = cookiePairs.join('; ');
-
-        // Step 2 — exchange cookie for crumb
         const r2 = await fetch('https://query1.finance.yahoo.com/v1/test/getcrumb', {
-            headers: {
-                'User-Agent': UA,
-                'Cookie': cookieStr,
-                'Referer': 'https://finance.yahoo.com/',
-                'Accept': '*/*',
-            },
+            headers: { 'User-Agent': UA, 'Cookie': cookieStr, 'Referer': 'https://finance.yahoo.com/', 'Accept': '*/*' },
         });
-        if (!r2.ok) { console.error('[options] crumb fetch failed', r2.status); return null; }
+        if (!r2.ok) return { crumb: null, cookie: cookieStr };
         const crumb = (await r2.text()).trim();
-        if (!crumb || crumb.includes('<')) { console.error('[options] bad crumb', crumb.slice(0,30)); return null; }
-
-        _credCache.crumb  = crumb;
+        if (!crumb || crumb.includes('<')) return { crumb: null, cookie: cookieStr };
+        _credCache.crumb = crumb;
         _credCache.cookie = cookieStr;
-        _credCache.expires = now + 25 * 60 * 1000; // cache 25 min
-        console.log('[options] crumb refreshed:', crumb.slice(0, 6) + '…');
+        _credCache.expires = now + 25 * 60 * 1000;
+        console.log('[options] crumb ok:', crumb.slice(0, 6) + '…');
         return { crumb, cookie: cookieStr };
     } catch(e) {
-        console.error('[options] getYahooCreds error:', e.message);
+        console.error('[options] creds error:', e.message);
         return null;
     }
 }
 
-function yahooHeaders(creds) {
-    return {
-        'User-Agent': UA,
-        'Accept': 'application/json, */*',
-        'Accept-Language': 'en-US,en;q=0.9',
-        'Referer': 'https://finance.yahoo.com/',
-        'Origin': 'https://finance.yahoo.com',
-        ...(creds?.cookie ? { 'Cookie': creds.cookie } : {}),
-    };
+// Fetch expiry dates + current price using v10/quoteSummary
+async function fetchExpiryDates(symbol, hdrs, crumbParam) {
+    for (const host of ['query2', 'query1']) {
+        try {
+            // v10/quoteSummary with optionChain module — different endpoint from v7
+            const url = `https://${host}.finance.yahoo.com/v10/finance/quoteSummary/${symbol}?modules=optionChain${crumbParam}`;
+            const ctrl = new AbortController();
+            setTimeout(() => ctrl.abort(), 10000);
+            const r = await fetch(url, { headers: hdrs, signal: ctrl.signal });
+            if (!r.ok) {
+                const body = await r.text().catch(() => '');
+                console.error(`[options] ${host} v10 quoteSummary ${r.status}:`, body.slice(0, 200));
+                continue;
+            }
+            const data = await r.json();
+            const oc = data?.quoteSummary?.result?.[0]?.optionChain;
+            if (!oc) { console.error(`[options] ${host} v10 no optionChain in response`); continue; }
+            return {
+                currentPrice: oc.quote?.regularMarketPrice || 0,
+                expiryDates: oc.expirationDates || [],
+                host,
+            };
+        } catch(e) {
+            console.error(`[options] ${host} v10 error:`, e.message);
+        }
+    }
+    return null;
+}
+
+// Fetch option contracts for a specific expiry using v10/quoteSummary?date=
+async function fetchChain(symbol, targetTs, hdrs, crumbParam, preferredHost) {
+    const hosts = preferredHost ? [preferredHost, preferredHost === 'query2' ? 'query1' : 'query2'] : ['query2', 'query1'];
+    for (const host of hosts) {
+        try {
+            const url = `https://${host}.finance.yahoo.com/v10/finance/quoteSummary/${symbol}?modules=optionChain&date=${targetTs}${crumbParam}`;
+            const ctrl = new AbortController();
+            setTimeout(() => ctrl.abort(), 10000);
+            const r = await fetch(url, { headers: hdrs, signal: ctrl.signal });
+            if (!r.ok) {
+                const body = await r.text().catch(() => '');
+                console.error(`[options] ${host} v10 chain ${r.status}:`, body.slice(0, 200));
+                continue;
+            }
+            const data = await r.json();
+            const oc = data?.quoteSummary?.result?.[0]?.optionChain;
+            if (!oc) { console.error(`[options] ${host} v10 chain: no optionChain`); continue; }
+            return oc;
+        } catch(e) {
+            console.error(`[options] ${host} v10 chain error:`, e.message);
+        }
+    }
+    return null;
 }
 
 module.exports = async function handler(req, res) {
@@ -75,36 +117,24 @@ module.exports = async function handler(req, res) {
     const targetStrike = parseFloat(strike) || null;
 
     try {
-        // ── 1. Get crumb + cookie ──────────────────────────────
+        // ── 1. Auth ────────────────────────────────────────────────
         const creds = await getYahooCreds();
-        const hdrs  = yahooHeaders(creds);
+        const hdrs = {
+            ...BASE_HEADERS,
+            ...(creds?.cookie ? { 'Cookie': creds.cookie } : {}),
+        };
         const crumbParam = creds?.crumb ? `&crumb=${encodeURIComponent(creds.crumb)}` : '';
 
-        // ── 2. Fetch base options page (expiry dates + quote) ──
-        const ctrl1 = new AbortController();
-        setTimeout(() => ctrl1.abort(), 10000);
-
-        let baseData = null;
-        for (const host of ['query2', 'query1']) {
-            const url = `https://${host}.finance.yahoo.com/v7/finance/options/${symbol}${crumbParam ? '?' + crumbParam.slice(1) : ''}`;
-            try {
-                const r = await fetch(url, { headers: hdrs, signal: ctrl1.signal });
-                if (r.ok) { baseData = await r.json(); break; }
-                const body = await r.text().catch(() => '');
-                console.error(`[options] ${host} base ${r.status}:`, body.slice(0, 150));
-            } catch(e) { console.error(`[options] ${host} base error:`, e.message); }
+        // ── 2. Expiry dates via v10/quoteSummary ───────────────────
+        const baseInfo = await fetchExpiryDates(symbol, hdrs, crumbParam);
+        if (!baseInfo) {
+            return res.status(502).json({ error: `Yahoo Finance options unavailable for ${symbol} (v10 blocked)` });
         }
 
-        if (!baseData) return res.status(502).json({ error: `Yahoo Finance options unavailable for ${symbol}` });
-
-        const optResult = baseData?.optionChain?.result?.[0];
-        if (!optResult) return res.status(502).json({ error: 'No options result from Yahoo' });
-
-        const currentPrice = optResult.quote?.regularMarketPrice || 0;
-        const expiryDates  = optResult.expirationDates || [];
+        const { currentPrice, expiryDates, host: preferredHost } = baseInfo;
         if (!expiryDates.length) return res.status(502).json({ error: 'No expiry dates available' });
 
-        // ── 3. Pick target expiry timestamp ──────────────────
+        // ── 3. Pick target expiry ──────────────────────────────────
         const now = Math.floor(Date.now() / 1000);
         let targetTs;
 
@@ -125,36 +155,25 @@ module.exports = async function handler(req, res) {
 
         const expiryDateStr = new Date(targetTs * 1000).toISOString().split('T')[0];
 
-        // ── 4. Fetch the chain for that specific expiry ───────
-        const ctrl2 = new AbortController();
-        setTimeout(() => ctrl2.abort(), 10000);
+        // ── 4. Fetch chain for that expiry ─────────────────────────
+        const oc = await fetchChain(symbol, targetTs, hdrs, crumbParam, preferredHost);
+        if (!oc) return res.status(502).json({ error: `Chain fetch failed for ${symbol} ${expiryDateStr}` });
 
-        let chainData = null;
-        for (const host of ['query2', 'query1']) {
-            const url = `https://${host}.finance.yahoo.com/v7/finance/options/${symbol}?date=${targetTs}${crumbParam}`;
-            try {
-                const r = await fetch(url, { headers: hdrs, signal: ctrl2.signal });
-                if (r.ok) { chainData = await r.json(); break; }
-                const body = await r.text().catch(() => '');
-                console.error(`[options] ${host} chain ${r.status}:`, body.slice(0, 150));
-            } catch(e) { console.error(`[options] ${host} chain error:`, e.message); }
-        }
+        const optionsArr = oc.options || [];
+        // optionChain.options is an array of {expirationDate, calls, puts}
+        // With ?date= it usually returns 1 entry matching the requested date
+        const chainEntry = optionsArr.find(o => Math.abs(o.expirationDate - targetTs) < 86400) || optionsArr[0];
+        if (!chainEntry) return res.status(502).json({ error: 'No option entry in chain' });
 
-        if (!chainData) return res.status(502).json({ error: 'Chain fetch failed' });
-
-        const chainResult = chainData?.optionChain?.result?.[0];
-        if (!chainResult) return res.status(502).json({ error: 'No chain result' });
-
-        const contracts = chainResult.options?.[0]?.[contractType === 'call' ? 'calls' : 'puts'] || [];
+        const contracts = chainEntry[contractType === 'call' ? 'calls' : 'puts'] || [];
         if (!contracts.length) return res.status(502).json({ error: `No ${contractType}s for ${expiryDateStr}` });
 
-        // ── 5. Pick best strike (ATM or closest to requested) ─
+        // ── 5. Pick best strike ────────────────────────────────────
         const refStrike = targetStrike || currentPrice;
         const best = contracts.reduce((a, b) =>
             Math.abs(b.strike - refStrike) < Math.abs(a.strike - refStrike) ? b : a
         );
 
-        // Next OTM for comparison
         const otmContracts = contracts.filter(c =>
             contractType === 'call' ? c.strike > best.strike : c.strike < best.strike
         );
@@ -179,6 +198,8 @@ module.exports = async function handler(req, res) {
             };
         }
 
+        console.log(`[options] ✓ ${symbol} ${contractType} ${expiryDateStr} strike=$${best.strike} bid=$${best.bid} ask=$${best.ask}`);
+
         return res.status(200).json({
             ticker:           symbol,
             contractType,
@@ -192,11 +213,11 @@ module.exports = async function handler(req, res) {
             })),
             availableExpiries: expiryDates.map(ts => new Date(ts * 1000).toISOString().split('T')[0]),
             fetchedAt:        new Date().toISOString(),
-            source:           'yahoo_finance',
+            source:           'yahoo_finance_v10',
         });
 
     } catch(err) {
-        console.error('[options] handler error:', err.message);
+        console.error('[options] handler error:', err.message, err.stack?.slice(0, 300));
         return res.status(500).json({ error: err.message });
     }
 };
