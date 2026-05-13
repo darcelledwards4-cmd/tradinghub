@@ -1,20 +1,17 @@
-// Real-time options chain — Polygon.io primary (free API key required), Yahoo v10 fallback
+// Real-time options chain — Massive primary (MASSIVE_API_KEY required), Yahoo v10 fallback
 // GET /api/options?ticker=NVDA&type=call&expiry=30d
 // expiry: '1w' | '30d' | '90d' | '180d' | 'YYYY-MM-DD'
 //
 // Setup: add MASSIVE_API_KEY to Vercel environment variables
 //   https://app.vercel.com → project → Settings → Environment Variables
-//   Free key at: https://polygon.io (no credit card)
 
 const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 
-// ── Polygon.io options fetch ─────────────────────────────────────────────────
-// Free tier: 5 req/min, 15-min delayed data. One call per ticker gets all options.
-async function fetchPolygonOptions(symbol, contractType, targetDate, currentPrice, polygonKey) {
-    // We fetch a window around the target date (+/- 14 days) to find the closest expiry
-    const targetMs  = new Date(targetDate).getTime();
-    const fromDate  = new Date(targetMs - 14 * 86400 * 1000).toISOString().split('T')[0];
-    const toDate    = new Date(targetMs + 14 * 86400 * 1000).toISOString().split('T')[0];
+// ── Massive options fetch ────────────────────────────────────────────────────
+async function fetchMassiveOptions(symbol, contractType, targetDate, currentPrice, apiKey) {
+    const targetMs = new Date(targetDate).getTime();
+    const fromDate = new Date(targetMs - 14 * 86400 * 1000).toISOString().split('T')[0];
+    const toDate   = new Date(targetMs + 14 * 86400 * 1000).toISOString().split('T')[0];
 
     const url = [
         `https://api.polygon.io/v3/snapshot/options/${symbol}`,
@@ -24,7 +21,7 @@ async function fetchPolygonOptions(symbol, contractType, targetDate, currentPric
         `&limit=250`,
         `&order=asc`,
         `&sort=strike_price`,
-        `&apiKey=${polygonKey}`,
+        `&apiKey=${apiKey}`,
     ].join('');
 
     const ctrl = new AbortController();
@@ -37,13 +34,13 @@ async function fetchPolygonOptions(symbol, contractType, targetDate, currentPric
 
     if (!r.ok) {
         const body = await r.text().catch(() => '');
-        console.error(`[options] Polygon ${r.status}:`, body.slice(0, 200));
+        console.error(`[options] Massive ${r.status}:`, body.slice(0, 200));
         return null;
     }
 
     const data = await r.json();
     if (!data.results || !data.results.length) {
-        console.warn('[options] Polygon: no results for', symbol, contractType, fromDate, '–', toDate);
+        console.warn('[options] Massive: no results for', symbol, contractType, fromDate, '–', toDate);
         return null;
     }
 
@@ -56,7 +53,6 @@ async function fetchPolygonOptions(symbol, contractType, targetDate, currentPric
     const expiries = Object.keys(byExpiry).sort();
     if (!expiries.length) return null;
 
-    // Pick expiry closest to target date
     const bestExpiry = expiries.reduce((a, b) => {
         const da = Math.abs(new Date(a).getTime() - targetMs);
         const db = Math.abs(new Date(b).getTime() - targetMs);
@@ -64,8 +60,6 @@ async function fetchPolygonOptions(symbol, contractType, targetDate, currentPric
     });
 
     const contracts = byExpiry[bestExpiry];
-
-    // Pick ATM contract (closest to current price)
     const ref = currentPrice || 0;
     const best = contracts.reduce((a, b) => {
         const sa = Math.abs((a.details?.strike_price || 0) - ref);
@@ -73,39 +67,46 @@ async function fetchPolygonOptions(symbol, contractType, targetDate, currentPric
         return sb < sa ? b : a;
     });
 
-    const q = best.last_quote;
-    const bid  = q?.bid  ?? null;
-    const ask  = q?.ask  ?? null;
-    const mid  = q?.midpoint ?? (bid != null && ask != null ? (bid + ask) / 2 : null);
-    const iv   = best.implied_volatility != null ? parseFloat((best.implied_volatility * 100).toFixed(1)) : null;
-    const oi   = best.open_interest ?? 0;
-    const last = best.last_trade?.price ?? null;
+    const q          = best.last_quote;
+    const bid        = q?.bid         ?? null;
+    const ask        = q?.ask         ?? null;
+    const mid        = q?.midpoint    ?? (bid != null && ask != null ? (bid + ask) / 2 : null);
+    const iv         = best.implied_volatility != null ? parseFloat((best.implied_volatility * 100).toFixed(1)) : null;
+    const oi         = best.open_interest ?? 0;
+    const last       = best.last_trade?.price  ?? null;
+    const dayClose   = best.day?.close         ?? null;  // prev session close — always populated
+    const dayOpen    = best.day?.open          ?? null;
+    const dayVwap    = best.day?.vwap          ?? null;
 
-    if (bid == null && ask == null && last == null) {
-        console.warn('[options] Polygon: no quote data for best contract', best.details?.ticker);
+    // Accept any available price — bid/ask live during hours, day.close always available
+    if (bid == null && ask == null && last == null && dayClose == null) {
+        console.warn('[options] Massive: all price fields null for', best.details?.ticker, '— raw day:', JSON.stringify(best.day));
         return null;
     }
 
-    console.log(`[options] ✓ Polygon ${symbol} ${contractType} ${bestExpiry} strike=$${best.details?.strike_price} bid=$${bid} ask=$${ask}`);
+    // Determine price type for display
+    const priceType = (bid != null || ask != null) ? 'live'
+                    : last != null ? 'last_trade'
+                    : 'prev_close';
+
+    console.log(`[options] ✓ Massive ${symbol} ${contractType} ${bestExpiry} strike=$${best.details?.strike_price} bid=$${bid} ask=$${ask} last=$${last} close=$${dayClose} type=${priceType}`);
 
     return {
         strike:         best.details?.strike_price ?? null,
         expiry:         bestExpiry,
-        bid,
-        ask,
+        bid, ask,
         mid:            mid != null ? parseFloat(mid.toFixed(2)) : null,
-        last,
+        last:           last ?? dayClose,   // fall back to prev session close
         volume:         best.day?.volume ?? 0,
-        openInterest:   oi,
-        iv,
+        openInterest:   oi, iv,
         inTheMoney:     (contractType === 'call' ? ref > (best.details?.strike_price || 0) : ref < (best.details?.strike_price || 0)),
         contractSymbol: best.details?.ticker ?? '',
-        source:         'polygon',
+        priceType,      // 'live' | 'last_trade' | 'prev_close'
+        source:         'massive',
     };
 }
 
 // ── Yahoo Finance v10/quoteSummary fallback ──────────────────────────────────
-// Different endpoint from the blocked v7 — same auth pattern as v8 (works for quotes)
 const _credCache = { crumb: null, cookie: null, expires: 0 };
 
 async function getYahooCreds() {
@@ -143,7 +144,6 @@ async function fetchYahooV10Options(symbol, contractType, expiryDays) {
 
     for (const host of ['query2', 'query1']) {
         try {
-            // Step 1: get expiry dates
             const url1 = `https://${host}.finance.yahoo.com/v10/finance/quoteSummary/${symbol}?modules=optionChain${crumbQ}`;
             const c1 = new AbortController(); setTimeout(() => c1.abort(), 10000);
             const r1 = await fetch(url1, { headers: hdrs, signal: c1.signal });
@@ -159,7 +159,6 @@ async function fetchYahooV10Options(symbol, contractType, expiryDays) {
             const targetTs = future.reduce((a, b) => Math.abs(b - idealTs) < Math.abs(a - idealTs) ? b : a);
             const currentPrice = oc1.quote?.regularMarketPrice || 0;
 
-            // Step 2: get chain for that expiry
             const url2 = `https://${host}.finance.yahoo.com/v10/finance/quoteSummary/${symbol}?modules=optionChain&date=${targetTs}${crumbQ}`;
             const c2 = new AbortController(); setTimeout(() => c2.abort(), 10000);
             const r2 = await fetch(url2, { headers: hdrs, signal: c2.signal });
@@ -205,7 +204,6 @@ module.exports = async function handler(req, res) {
     const contractType = type.toLowerCase() === 'put' ? 'put' : 'call';
     const targetStrike = parseFloat(strike) || null;
 
-    // Compute target date string for Polygon
     const now = Math.floor(Date.now() / 1000);
     let targetDateStr;
     if (expiry.match(/^\d{4}-\d{2}-\d{2}$/)) {
@@ -216,7 +214,7 @@ module.exports = async function handler(req, res) {
     }
     const expiryDays = Math.round((new Date(targetDateStr).getTime() / 1000 - now) / 86400);
 
-    // Get current price (used for ATM strike selection)
+    // Get current price for ATM strike selection
     let currentPrice = 0;
     try {
         const qr = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?interval=1m&range=1d`, {
@@ -231,14 +229,13 @@ module.exports = async function handler(req, res) {
     const refPrice = targetStrike || currentPrice;
 
     try {
-        // ── Source 1: Polygon.io (if API key configured) ──────────────
-        const polygonKey = process.env.MASSIVE_API_KEY;
-        if (polygonKey) {
-            const result = await fetchPolygonOptions(symbol, contractType, targetDateStr, refPrice, polygonKey);
+        // ── Source 1: Massive (MASSIVE_API_KEY) ───────────────────────
+        const massiveKey = process.env.MASSIVE_API_KEY;
+        if (massiveKey) {
+            const result = await fetchMassiveOptions(symbol, contractType, targetDateStr, refPrice, massiveKey);
             if (result) {
                 return res.status(200).json({
-                    ticker: symbol, contractType,
-                    currentPrice,
+                    ticker: symbol, contractType, currentPrice,
                     targetExpiry: result.expiry,
                     best: {
                         strike: result.strike, expiry: result.expiry,
@@ -248,18 +245,17 @@ module.exports = async function handler(req, res) {
                         inTheMoney: result.inTheMoney, contractSymbol: result.contractSymbol,
                     },
                     fetchedAt: new Date().toISOString(),
-                    source: 'polygon',
+                    source: 'massive',
                 });
             }
-            console.warn('[options] Polygon failed, trying Yahoo v10 fallback');
+            console.warn('[options] Massive failed, trying Yahoo v10 fallback');
         }
 
         // ── Source 2: Yahoo Finance v10/quoteSummary ──────────────────
         const yahooResult = await fetchYahooV10Options(symbol, contractType, expiryDays);
         if (yahooResult) {
             return res.status(200).json({
-                ticker: symbol, contractType,
-                currentPrice,
+                ticker: symbol, contractType, currentPrice,
                 targetExpiry: yahooResult.expiry,
                 best: {
                     strike: yahooResult.strike, expiry: yahooResult.expiry,
@@ -274,8 +270,8 @@ module.exports = async function handler(req, res) {
         }
 
         return res.status(502).json({
-            error: `Options data unavailable for ${symbol}. Add MASSIVE_API_KEY to Vercel env for reliable data.`,
-            hint: 'Free API key at https://polygon.io — add MASSIVE_API_KEY to Vercel project settings'
+            error: `Options data unavailable for ${symbol}. MASSIVE_API_KEY not set or not working.`,
+            hint: 'Add MASSIVE_API_KEY to Vercel project Settings → Environment Variables, then redeploy'
         });
 
     } catch(err) {

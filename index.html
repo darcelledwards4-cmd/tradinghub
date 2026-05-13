@@ -1466,7 +1466,10 @@ function buildLiveOptionHTML(o, optType){
     const badge = o.isEstimate
         ? `<span style="background:rgba(210,153,34,.15);color:var(--orange);border:1px solid rgba(210,153,34,.3);border-radius:4px;padding:1px 6px;font-size:10px;font-weight:700;display:inline-block;margin-bottom:3px">~ Est (BS)</span>`
         : `<span style="background:rgba(63,185,80,.15);color:var(--green);border:1px solid rgba(63,185,80,.3);border-radius:4px;padding:1px 6px;font-size:10px;font-weight:700;display:inline-block;margin-bottom:3px">● Live</span>`;
-    const sourceLabel = o.isEstimate ? 'Black-Scholes model estimate' : 'Massive · live market data';
+    const sourceLabel = o.isEstimate ? 'Black-Scholes model estimate'
+                      : o.priceType === 'prev_close' ? 'Massive · prev session close'
+                      : o.priceType === 'last_trade' ? 'Massive · last trade'
+                      : 'Massive · live quote';
     const subNote = o.isEstimate
         ? `<div style="font-size:10px;color:var(--muted);margin-top:1px">${sourceLabel} · IV ~${o.iv||'—'}%${oiNote}</div>`
         : `<div style="font-size:10px;color:var(--muted);margin-top:1px">${sourceLabel} · mid $${midFmt}${ivNote}${oiNote}</div>`;
