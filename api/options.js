@@ -1,110 +1,199 @@
-// Real-time options chain via Yahoo Finance v10/quoteSummary
-// v7/finance/options is IP-blocked on Vercel — v10 uses the same auth pattern as v8 (which works)
+// Real-time options chain — Polygon.io primary (free API key required), Yahoo v10 fallback
 // GET /api/options?ticker=NVDA&type=call&expiry=30d
 // expiry: '1w' | '30d' | '90d' | '180d' | 'YYYY-MM-DD'
+//
+// Setup: add POLYGON_API_KEY to Vercel environment variables
+//   https://app.vercel.com → project → Settings → Environment Variables
+//   Free key at: https://polygon.io (no credit card)
 
 const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 
-const BASE_HEADERS = {
-    'User-Agent': UA,
-    'Accept': 'application/json, */*',
-    'Accept-Language': 'en-US,en;q=0.9',
-    'Referer': 'https://finance.yahoo.com/',
-    'Origin': 'https://finance.yahoo.com',
-};
+// ── Polygon.io options fetch ─────────────────────────────────────────────────
+// Free tier: 5 req/min, 15-min delayed data. One call per ticker gets all options.
+async function fetchPolygonOptions(symbol, contractType, targetDate, currentPrice, polygonKey) {
+    // We fetch a window around the target date (+/- 14 days) to find the closest expiry
+    const targetMs  = new Date(targetDate).getTime();
+    const fromDate  = new Date(targetMs - 14 * 86400 * 1000).toISOString().split('T')[0];
+    const toDate    = new Date(targetMs + 14 * 86400 * 1000).toISOString().split('T')[0];
 
-// Crumb cache — persists across warm Lambda invocations
+    const url = [
+        `https://api.polygon.io/v3/snapshot/options/${symbol}`,
+        `?contract_type=${contractType}`,
+        `&expiration_date.gte=${fromDate}`,
+        `&expiration_date.lte=${toDate}`,
+        `&limit=250`,
+        `&order=asc`,
+        `&sort=strike_price`,
+        `&apiKey=${polygonKey}`,
+    ].join('');
+
+    const ctrl = new AbortController();
+    setTimeout(() => ctrl.abort(), 12000);
+
+    const r = await fetch(url, {
+        headers: { 'User-Agent': UA, 'Accept': 'application/json' },
+        signal: ctrl.signal,
+    });
+
+    if (!r.ok) {
+        const body = await r.text().catch(() => '');
+        console.error(`[options] Polygon ${r.status}:`, body.slice(0, 200));
+        return null;
+    }
+
+    const data = await r.json();
+    if (!data.results || !data.results.length) {
+        console.warn('[options] Polygon: no results for', symbol, contractType, fromDate, '–', toDate);
+        return null;
+    }
+
+    // Group by expiration date, pick closest to target
+    const byExpiry = {};
+    for (const opt of data.results) {
+        const exp = opt.details?.expiration_date;
+        if (exp) { if (!byExpiry[exp]) byExpiry[exp] = []; byExpiry[exp].push(opt); }
+    }
+    const expiries = Object.keys(byExpiry).sort();
+    if (!expiries.length) return null;
+
+    // Pick expiry closest to target date
+    const bestExpiry = expiries.reduce((a, b) => {
+        const da = Math.abs(new Date(a).getTime() - targetMs);
+        const db = Math.abs(new Date(b).getTime() - targetMs);
+        return db < da ? b : a;
+    });
+
+    const contracts = byExpiry[bestExpiry];
+
+    // Pick ATM contract (closest to current price)
+    const ref = currentPrice || 0;
+    const best = contracts.reduce((a, b) => {
+        const sa = Math.abs((a.details?.strike_price || 0) - ref);
+        const sb = Math.abs((b.details?.strike_price || 0) - ref);
+        return sb < sa ? b : a;
+    });
+
+    const q = best.last_quote;
+    const bid  = q?.bid  ?? null;
+    const ask  = q?.ask  ?? null;
+    const mid  = q?.midpoint ?? (bid != null && ask != null ? (bid + ask) / 2 : null);
+    const iv   = best.implied_volatility != null ? parseFloat((best.implied_volatility * 100).toFixed(1)) : null;
+    const oi   = best.open_interest ?? 0;
+    const last = best.last_trade?.price ?? null;
+
+    if (bid == null && ask == null && last == null) {
+        console.warn('[options] Polygon: no quote data for best contract', best.details?.ticker);
+        return null;
+    }
+
+    console.log(`[options] ✓ Polygon ${symbol} ${contractType} ${bestExpiry} strike=$${best.details?.strike_price} bid=$${bid} ask=$${ask}`);
+
+    return {
+        strike:         best.details?.strike_price ?? null,
+        expiry:         bestExpiry,
+        bid,
+        ask,
+        mid:            mid != null ? parseFloat(mid.toFixed(2)) : null,
+        last,
+        volume:         best.day?.volume ?? 0,
+        openInterest:   oi,
+        iv,
+        inTheMoney:     (contractType === 'call' ? ref > (best.details?.strike_price || 0) : ref < (best.details?.strike_price || 0)),
+        contractSymbol: best.details?.ticker ?? '',
+        source:         'polygon',
+    };
+}
+
+// ── Yahoo Finance v10/quoteSummary fallback ──────────────────────────────────
+// Different endpoint from the blocked v7 — same auth pattern as v8 (works for quotes)
 const _credCache = { crumb: null, cookie: null, expires: 0 };
 
 async function getYahooCreds() {
     const now = Date.now();
-    if (_credCache.crumb && now < _credCache.expires) {
-        return { crumb: _credCache.crumb, cookie: _credCache.cookie };
-    }
+    if (_credCache.crumb && now < _credCache.expires) return _credCache;
     try {
         const r1 = await fetch('https://finance.yahoo.com', {
-            headers: { 'User-Agent': UA, 'Accept': 'text/html' },
-            redirect: 'follow',
+            headers: { 'User-Agent': UA, 'Accept': 'text/html' }, redirect: 'follow',
         });
-        const cookiePairs = [];
+        const pairs = [];
         r1.headers.forEach((v, k) => {
-            if (k.toLowerCase() === 'set-cookie') {
-                const pair = v.split(';')[0];
-                if (pair) cookiePairs.push(pair);
-            }
+            if (k.toLowerCase() === 'set-cookie') { const p = v.split(';')[0]; if (p) pairs.push(p); }
         });
-        const cookieStr = cookiePairs.join('; ');
+        const cookieStr = pairs.join('; ');
         const r2 = await fetch('https://query1.finance.yahoo.com/v1/test/getcrumb', {
-            headers: { 'User-Agent': UA, 'Cookie': cookieStr, 'Referer': 'https://finance.yahoo.com/', 'Accept': '*/*' },
+            headers: { 'User-Agent': UA, 'Cookie': cookieStr, 'Referer': 'https://finance.yahoo.com/' },
         });
-        if (!r2.ok) return { crumb: null, cookie: cookieStr };
-        const crumb = (await r2.text()).trim();
-        if (!crumb || crumb.includes('<')) return { crumb: null, cookie: cookieStr };
-        _credCache.crumb = crumb;
-        _credCache.cookie = cookieStr;
-        _credCache.expires = now + 25 * 60 * 1000;
-        console.log('[options] crumb ok:', crumb.slice(0, 6) + '…');
-        return { crumb, cookie: cookieStr };
-    } catch(e) {
-        console.error('[options] creds error:', e.message);
-        return null;
-    }
+        const crumb = r2.ok ? (await r2.text()).trim() : null;
+        if (crumb && !crumb.includes('<')) {
+            _credCache.crumb = crumb; _credCache.cookie = cookieStr; _credCache.expires = Date.now() + 25 * 60 * 1000;
+        }
+        return { crumb: _credCache.crumb, cookie: cookieStr };
+    } catch(e) { return null; }
 }
 
-// Fetch expiry dates + current price using v10/quoteSummary
-async function fetchExpiryDates(symbol, hdrs, crumbParam) {
+async function fetchYahooV10Options(symbol, contractType, expiryDays) {
+    const creds = await getYahooCreds();
+    const hdrs  = {
+        'User-Agent': UA, 'Accept': 'application/json, */*',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Referer': 'https://finance.yahoo.com/', 'Origin': 'https://finance.yahoo.com',
+        ...(creds?.cookie ? { 'Cookie': creds.cookie } : {}),
+    };
+    const crumbQ = creds?.crumb ? `&crumb=${encodeURIComponent(creds.crumb)}` : '';
+
     for (const host of ['query2', 'query1']) {
         try {
-            // v10/quoteSummary with optionChain module — different endpoint from v7
-            const url = `https://${host}.finance.yahoo.com/v10/finance/quoteSummary/${symbol}?modules=optionChain${crumbParam}`;
-            const ctrl = new AbortController();
-            setTimeout(() => ctrl.abort(), 10000);
-            const r = await fetch(url, { headers: hdrs, signal: ctrl.signal });
-            if (!r.ok) {
-                const body = await r.text().catch(() => '');
-                console.error(`[options] ${host} v10 quoteSummary ${r.status}:`, body.slice(0, 200));
-                continue;
-            }
-            const data = await r.json();
-            const oc = data?.quoteSummary?.result?.[0]?.optionChain;
-            if (!oc) { console.error(`[options] ${host} v10 no optionChain in response`); continue; }
+            // Step 1: get expiry dates
+            const url1 = `https://${host}.finance.yahoo.com/v10/finance/quoteSummary/${symbol}?modules=optionChain${crumbQ}`;
+            const c1 = new AbortController(); setTimeout(() => c1.abort(), 10000);
+            const r1 = await fetch(url1, { headers: hdrs, signal: c1.signal });
+            if (!r1.ok) { console.error(`[options] Yahoo v10 ${host} base ${r1.status}`); continue; }
+            const d1 = await r1.json();
+            const oc1 = d1?.quoteSummary?.result?.[0]?.optionChain;
+            if (!oc1?.expirationDates?.length) { console.error(`[options] Yahoo v10 ${host} no optionChain`); continue; }
+
+            const now = Math.floor(Date.now() / 1000);
+            const idealTs = now + expiryDays * 86400;
+            const future = oc1.expirationDates.filter(t => t > now);
+            if (!future.length) continue;
+            const targetTs = future.reduce((a, b) => Math.abs(b - idealTs) < Math.abs(a - idealTs) ? b : a);
+            const currentPrice = oc1.quote?.regularMarketPrice || 0;
+
+            // Step 2: get chain for that expiry
+            const url2 = `https://${host}.finance.yahoo.com/v10/finance/quoteSummary/${symbol}?modules=optionChain&date=${targetTs}${crumbQ}`;
+            const c2 = new AbortController(); setTimeout(() => c2.abort(), 10000);
+            const r2 = await fetch(url2, { headers: hdrs, signal: c2.signal });
+            if (!r2.ok) { console.error(`[options] Yahoo v10 ${host} chain ${r2.status}`); continue; }
+            const d2 = await r2.json();
+            const oc2 = d2?.quoteSummary?.result?.[0]?.optionChain;
+            if (!oc2) continue;
+
+            const entry = oc2.options?.find(o => Math.abs(o.expirationDate - targetTs) < 86400) || oc2.options?.[0];
+            if (!entry) continue;
+            const contracts = entry[contractType === 'put' ? 'puts' : 'calls'] || [];
+            if (!contracts.length) continue;
+
+            const expDateStr = new Date(targetTs * 1000).toISOString().split('T')[0];
+            const best = contracts.reduce((a, b) => Math.abs(b.strike - currentPrice) < Math.abs(a.strike - currentPrice) ? b : a);
+
+            console.log(`[options] ✓ Yahoo v10 ${host} ${symbol} ${contractType} ${expDateStr} strike=$${best.strike} bid=$${best.bid} ask=$${best.ask}`);
             return {
-                currentPrice: oc.quote?.regularMarketPrice || 0,
-                expiryDates: oc.expirationDates || [],
-                host,
+                strike: best.strike, expiry: expDateStr,
+                bid: best.bid ?? null, ask: best.ask ?? null,
+                mid: best.bid != null && best.ask != null ? parseFloat(((best.bid + best.ask) / 2).toFixed(2)) : null,
+                last: best.lastPrice ?? null, volume: best.volume ?? 0,
+                openInterest: best.openInterest ?? 0,
+                iv: best.impliedVolatility != null ? parseFloat((best.impliedVolatility * 100).toFixed(1)) : null,
+                inTheMoney: best.inTheMoney ?? false,
+                contractSymbol: best.contractSymbol ?? '',
+                source: 'yahoo_v10',
             };
-        } catch(e) {
-            console.error(`[options] ${host} v10 error:`, e.message);
-        }
+        } catch(e) { console.error(`[options] Yahoo v10 ${host} error:`, e.message); }
     }
     return null;
 }
 
-// Fetch option contracts for a specific expiry using v10/quoteSummary?date=
-async function fetchChain(symbol, targetTs, hdrs, crumbParam, preferredHost) {
-    const hosts = preferredHost ? [preferredHost, preferredHost === 'query2' ? 'query1' : 'query2'] : ['query2', 'query1'];
-    for (const host of hosts) {
-        try {
-            const url = `https://${host}.finance.yahoo.com/v10/finance/quoteSummary/${symbol}?modules=optionChain&date=${targetTs}${crumbParam}`;
-            const ctrl = new AbortController();
-            setTimeout(() => ctrl.abort(), 10000);
-            const r = await fetch(url, { headers: hdrs, signal: ctrl.signal });
-            if (!r.ok) {
-                const body = await r.text().catch(() => '');
-                console.error(`[options] ${host} v10 chain ${r.status}:`, body.slice(0, 200));
-                continue;
-            }
-            const data = await r.json();
-            const oc = data?.quoteSummary?.result?.[0]?.optionChain;
-            if (!oc) { console.error(`[options] ${host} v10 chain: no optionChain`); continue; }
-            return oc;
-        } catch(e) {
-            console.error(`[options] ${host} v10 chain error:`, e.message);
-        }
-    }
-    return null;
-}
-
+// ── Main handler ─────────────────────────────────────────────────────────────
 module.exports = async function handler(req, res) {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
@@ -116,108 +205,81 @@ module.exports = async function handler(req, res) {
     const contractType = type.toLowerCase() === 'put' ? 'put' : 'call';
     const targetStrike = parseFloat(strike) || null;
 
+    // Compute target date string for Polygon
+    const now = Math.floor(Date.now() / 1000);
+    let targetDateStr;
+    if (expiry.match(/^\d{4}-\d{2}-\d{2}$/)) {
+        targetDateStr = expiry;
+    } else {
+        const days = expiry === '1w' ? 7 : expiry === '90d' ? 90 : expiry === '180d' ? 180 : 30;
+        targetDateStr = new Date((now + days * 86400) * 1000).toISOString().split('T')[0];
+    }
+    const expiryDays = Math.round((new Date(targetDateStr).getTime() / 1000 - now) / 86400);
+
+    // Get current price (used for ATM strike selection)
+    let currentPrice = 0;
     try {
-        // ── 1. Auth ────────────────────────────────────────────────
-        const creds = await getYahooCreds();
-        const hdrs = {
-            ...BASE_HEADERS,
-            ...(creds?.cookie ? { 'Cookie': creds.cookie } : {}),
-        };
-        const crumbParam = creds?.crumb ? `&crumb=${encodeURIComponent(creds.crumb)}` : '';
+        const qr = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?interval=1m&range=1d`, {
+            headers: { 'User-Agent': UA, 'Accept': 'application/json', 'Referer': 'https://finance.yahoo.com/' },
+        });
+        if (qr.ok) {
+            const qd = await qr.json();
+            currentPrice = qd?.chart?.result?.[0]?.meta?.regularMarketPrice || 0;
+        }
+    } catch(e) {}
 
-        // ── 2. Expiry dates via v10/quoteSummary ───────────────────
-        const baseInfo = await fetchExpiryDates(symbol, hdrs, crumbParam);
-        if (!baseInfo) {
-            return res.status(502).json({ error: `Yahoo Finance options unavailable for ${symbol} (v10 blocked)` });
+    const refPrice = targetStrike || currentPrice;
+
+    try {
+        // ── Source 1: Polygon.io (if API key configured) ──────────────
+        const polygonKey = process.env.POLYGON_API_KEY;
+        if (polygonKey) {
+            const result = await fetchPolygonOptions(symbol, contractType, targetDateStr, refPrice, polygonKey);
+            if (result) {
+                return res.status(200).json({
+                    ticker: symbol, contractType,
+                    currentPrice,
+                    targetExpiry: result.expiry,
+                    best: {
+                        strike: result.strike, expiry: result.expiry,
+                        bid: result.bid, ask: result.ask, mid: result.mid,
+                        last: result.last, volume: result.volume,
+                        openInterest: result.openInterest, iv: result.iv,
+                        inTheMoney: result.inTheMoney, contractSymbol: result.contractSymbol,
+                    },
+                    fetchedAt: new Date().toISOString(),
+                    source: 'polygon',
+                });
+            }
+            console.warn('[options] Polygon failed, trying Yahoo v10 fallback');
         }
 
-        const { currentPrice, expiryDates, host: preferredHost } = baseInfo;
-        if (!expiryDates.length) return res.status(502).json({ error: 'No expiry dates available' });
-
-        // ── 3. Pick target expiry ──────────────────────────────────
-        const now = Math.floor(Date.now() / 1000);
-        let targetTs;
-
-        if (expiry.match(/^\d{4}-\d{2}-\d{2}$/)) {
-            const ts = Math.floor(new Date(expiry).getTime() / 1000);
-            targetTs = expiryDates.reduce((a, b) => Math.abs(b - ts) < Math.abs(a - ts) ? b : a);
-        } else if (expiry === '1w') {
-            const cutoff = now + 14 * 86400;
-            const weeklies = expiryDates.filter(d => d >= now && d <= cutoff);
-            targetTs = weeklies[0] || expiryDates.find(d => d > now) || expiryDates[0];
-        } else {
-            const days    = parseInt(expiry) || 30;
-            const idealTs = now + days * 86400;
-            const future  = expiryDates.filter(d => d > now);
-            if (!future.length) return res.status(502).json({ error: 'No future expiry dates' });
-            targetTs = future.reduce((a, b) => Math.abs(b - idealTs) < Math.abs(a - idealTs) ? b : a);
+        // ── Source 2: Yahoo Finance v10/quoteSummary ──────────────────
+        const yahooResult = await fetchYahooV10Options(symbol, contractType, expiryDays);
+        if (yahooResult) {
+            return res.status(200).json({
+                ticker: symbol, contractType,
+                currentPrice,
+                targetExpiry: yahooResult.expiry,
+                best: {
+                    strike: yahooResult.strike, expiry: yahooResult.expiry,
+                    bid: yahooResult.bid, ask: yahooResult.ask, mid: yahooResult.mid,
+                    last: yahooResult.last, volume: yahooResult.volume,
+                    openInterest: yahooResult.openInterest, iv: yahooResult.iv,
+                    inTheMoney: yahooResult.inTheMoney, contractSymbol: yahooResult.contractSymbol,
+                },
+                fetchedAt: new Date().toISOString(),
+                source: 'yahoo_v10',
+            });
         }
 
-        const expiryDateStr = new Date(targetTs * 1000).toISOString().split('T')[0];
-
-        // ── 4. Fetch chain for that expiry ─────────────────────────
-        const oc = await fetchChain(symbol, targetTs, hdrs, crumbParam, preferredHost);
-        if (!oc) return res.status(502).json({ error: `Chain fetch failed for ${symbol} ${expiryDateStr}` });
-
-        const optionsArr = oc.options || [];
-        // optionChain.options is an array of {expirationDate, calls, puts}
-        // With ?date= it usually returns 1 entry matching the requested date
-        const chainEntry = optionsArr.find(o => Math.abs(o.expirationDate - targetTs) < 86400) || optionsArr[0];
-        if (!chainEntry) return res.status(502).json({ error: 'No option entry in chain' });
-
-        const contracts = chainEntry[contractType === 'call' ? 'calls' : 'puts'] || [];
-        if (!contracts.length) return res.status(502).json({ error: `No ${contractType}s for ${expiryDateStr}` });
-
-        // ── 5. Pick best strike ────────────────────────────────────
-        const refStrike = targetStrike || currentPrice;
-        const best = contracts.reduce((a, b) =>
-            Math.abs(b.strike - refStrike) < Math.abs(a.strike - refStrike) ? b : a
-        );
-
-        const otmContracts = contracts.filter(c =>
-            contractType === 'call' ? c.strike > best.strike : c.strike < best.strike
-        );
-        const nextOtm = otmContracts.length
-            ? otmContracts.reduce((a, b) => Math.abs(b.strike - best.strike) < Math.abs(a.strike - best.strike) ? b : a)
-            : null;
-
-        function fmt(c) {
-            if (!c) return null;
-            return {
-                strike:         c.strike,
-                expiry:         expiryDateStr,
-                bid:            c.bid            ?? null,
-                ask:            c.ask            ?? null,
-                last:           c.lastPrice      ?? null,
-                mid:            (c.bid != null && c.ask != null) ? parseFloat(((c.bid + c.ask) / 2).toFixed(2)) : null,
-                volume:         c.volume         ?? 0,
-                openInterest:   c.openInterest   ?? 0,
-                iv:             c.impliedVolatility != null ? parseFloat((c.impliedVolatility * 100).toFixed(1)) : null,
-                inTheMoney:     c.inTheMoney     ?? false,
-                contractSymbol: c.contractSymbol ?? '',
-            };
-        }
-
-        console.log(`[options] ✓ ${symbol} ${contractType} ${expiryDateStr} strike=$${best.strike} bid=$${best.bid} ask=$${best.ask}`);
-
-        return res.status(200).json({
-            ticker:           symbol,
-            contractType,
-            currentPrice,
-            targetExpiry:     expiryDateStr,
-            best:             fmt(best),
-            nextOtm:          fmt(nextOtm),
-            allStrikes:       contracts.map(c => ({
-                strike: c.strike, bid: c.bid ?? null, ask: c.ask ?? null,
-                last: c.lastPrice ?? null, volume: c.volume ?? 0, oi: c.openInterest ?? 0, itm: c.inTheMoney ?? false,
-            })),
-            availableExpiries: expiryDates.map(ts => new Date(ts * 1000).toISOString().split('T')[0]),
-            fetchedAt:        new Date().toISOString(),
-            source:           'yahoo_finance_v10',
+        return res.status(502).json({
+            error: `Options data unavailable for ${symbol}. Add POLYGON_API_KEY to Vercel env for reliable data.`,
+            hint: 'Free API key at https://polygon.io — add POLYGON_API_KEY to Vercel project settings'
         });
 
     } catch(err) {
-        console.error('[options] handler error:', err.message, err.stack?.slice(0, 300));
+        console.error('[options] handler error:', err.message);
         return res.status(500).json({ error: err.message });
     }
 };
