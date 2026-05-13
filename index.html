@@ -2501,7 +2501,8 @@ ${priceData}
 ${newsEntries?'\nRecent news (cite with "Source: pub, date" if used in summary):\n'+newsEntries:''}
 IMPORTANT: All price levels must match the live prices above. $8 stock → entry near $8.
 
-Find the TOP 3 best ${isPut ? 'PUT (bearish/short) trade setups' : 'CALL (bullish) trade setups'} right now from this watchlist — one aggressive, one moderate, one conservative.${excludeTickers&&excludeTickers.length?`\nDo NOT repeat these tickers already shown: ${excludeTickers.join(', ')}. Pick different ones.`:''}
+Find the TOP 3 best ${isPut ? 'PUT (bearish/short) trade setups' : 'CALL (bullish) trade setups'} right now from this watchlist — one aggressive, one moderate, one conservative.
+CRITICAL: Each of the 3 trade ideas MUST be for a DIFFERENT ticker symbol — no duplicate stocks allowed. If your top pick is strong, use it once only; pick the next best stock for the other 2 slots.${excludeTickers&&excludeTickers.length?`\nDo NOT repeat these tickers already shown: ${excludeTickers.join(', ')}. Pick different ones.`:''}
 ${isPut ? 'Look for: stocks that are overextended, showing weakness, breaking down, bad news, sector headwinds, or strong downside momentum.' : 'Look for: stocks with bullish momentum, strong technicals, positive catalysts, or clear upside setups.'}
 
 Return ONLY a raw JSON array of exactly 3 objects. No markdown. No code fences. No explanation.
