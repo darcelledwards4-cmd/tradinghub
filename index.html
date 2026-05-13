@@ -909,26 +909,34 @@ function restoreLastSession(){
     selectFilter(lastKey);          // updates pill + button label
     renderFilterResult(lastKey, cards); // renders cards + calls refreshVisiblePrices automatically
     document.getElementById('lastScan').textContent = 'Restored — refreshing prices…';
-    // Auto-refresh prices in the background so badges flip to ● Live
+    // Auto-refresh prices + news in the background
     const tickers = [...new Set(cards.map(c=>(c.ticker||'').toUpperCase()).filter(Boolean))];
     if(tickers.length){
-        fetchQuotesCached(tickers).then(qMap=>{
-            if(!Object.keys(qMap).length) return;
+        Promise.all([
+            fetchQuotesCached(tickers),
+            fetchNewsForPromptBatch(tickers)   // re-fetch news stripped by localStorage
+        ]).then(([qMap, newsMap])=>{
             const updated = (filterAllCards[lastKey]||[]).map(c=>{
                 const k=(c.ticker||'').toUpperCase();
                 const q=qMap[k];
                 if(q&&q.c){ c={...c,current_price:q.c,price_change:q.dp||0,_priceIsLive:true}; }
+                const n=newsMap[k];
+                if(n&&n.items&&n.items.length) c={...c,_newsItems:n.items.slice(0,2)};
                 return c;
             });
             filterAllCards[lastKey]=updated;
             filterCache[lastKey]=updated;
+            // Re-render with fresh news + prices
+            renderFilterResult(lastKey, updated);
             saveCardsToStorage(lastKey, updated);
-            // refreshVisiblePrices reads from _cardData + DOM — call it to flip badges
-            refreshVisiblePrices();
             const now=new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'});
-            document.getElementById('lastScan').textContent=`Restored from last session · prices live as of ${now} — hit ⚡ to rescan`;
+            document.getElementById('lastScan').textContent=`Restored · prices & news refreshed ${now} — hit ⚡ to rescan`;
             document.getElementById('lastUpdated').textContent=`Prices live · ${now}`;
         }).catch(()=>{
+            // prices only fallback
+            fetchQuotesCached(tickers).then(qMap=>{
+                refreshVisiblePrices();
+            });
             document.getElementById('lastScan').textContent='Restored from last session — hit ⚡ to rescan';
         });
     } else {
@@ -1318,46 +1326,52 @@ function _bsEstimate(ticker, stockPrice, contractType, expiryTarget){
     };
 }
 
-// Try Yahoo Finance options chain via CORS proxies (browser-side — no Vercel needed)
+// Try Yahoo Finance options chain via CORS proxies (browser-side — bypasses Vercel IP block)
 async function _fetchYahooOptionChain(ticker, contractType, expiryDays){
+    // Try query2 + query1 hosts × corsproxy + allorigins proxies = 4 combos
+    const hosts=['query2','query1'];
     const proxyFns=[
         u=>`https://corsproxy.io/?url=${encodeURIComponent(u)}`,
         u=>`https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
     ];
-    const baseYUrl=`https://query1.finance.yahoo.com/v7/finance/options/${ticker}`;
     for(const mkProxy of proxyFns){
-        try{
-            const ctrl=new AbortController();
-            setTimeout(()=>ctrl.abort(),8000);
-            const r=await fetch(mkProxy(baseYUrl),{signal:ctrl.signal});
-            if(!r.ok) continue;
-            const d=await r.json();
-            const result=d?.optionChain?.result?.[0];
-            if(!result) continue;
-            const currentPrice=result.quote?.regularMarketPrice||0;
-            const expiryDates=result.expirationDates||[];
-            if(!expiryDates.length) continue;
-            const now=Math.floor(Date.now()/1000);
-            const ideal=now+expiryDays*86400;
-            const future=expiryDates.filter(t=>t>now);
-            if(!future.length) continue;
-            const targetTs=future.reduce((a,b)=>Math.abs(b-ideal)<Math.abs(a-ideal)?b:a);
-            // Fetch chain for that expiry
-            const ctrl2=new AbortController();
-            setTimeout(()=>ctrl2.abort(),8000);
-            const chainUrl=`https://query1.finance.yahoo.com/v7/finance/options/${ticker}?date=${targetTs}`;
-            const r2=await fetch(mkProxy(chainUrl),{signal:ctrl2.signal});
-            if(!r2.ok) continue;
-            const d2=await r2.json();
-            const cr=d2?.optionChain?.result?.[0];
-            if(!cr) continue;
-            const contracts=cr.options?.[0]?.[contractType==='put'?'puts':'calls']||[];
-            if(!contracts.length) continue;
-            const expDateStr=new Date(targetTs*1000).toISOString().split('T')[0];
-            console.log('[options] Yahoo via proxy ✓',ticker,contractType,expDateStr,'contracts:',contracts.length);
-            return{contracts, expDateStr, currentPrice};
-        }catch(e){ console.warn('[options] proxy attempt failed:',e.message); }
+        for(const host of hosts){
+            const baseYUrl=`https://${host}.finance.yahoo.com/v7/finance/options/${ticker}`;
+            try{
+                const ctrl=new AbortController();
+                setTimeout(()=>ctrl.abort(),9000);
+                const r=await fetch(mkProxy(baseYUrl),{signal:ctrl.signal});
+                if(!r.ok){ console.warn('[options]',host,'base',r.status); continue; }
+                const text=await r.text();
+                let d; try{ d=JSON.parse(text); }catch(e){ console.warn('[options] JSON parse fail, preview:',text.slice(0,120)); continue; }
+                const result=d?.optionChain?.result?.[0];
+                if(!result){ console.warn('[options]',host,'no result in response'); continue; }
+                const currentPrice=result.quote?.regularMarketPrice||0;
+                const expiryDates=result.expirationDates||[];
+                if(!expiryDates.length){ console.warn('[options]',host,'no expiry dates'); continue; }
+                const now=Math.floor(Date.now()/1000);
+                const ideal=now+expiryDays*86400;
+                const future=expiryDates.filter(t=>t>now);
+                if(!future.length) continue;
+                const targetTs=future.reduce((a,b)=>Math.abs(b-ideal)<Math.abs(a-ideal)?b:a);
+                // Fetch chain for that expiry
+                const ctrl2=new AbortController();
+                setTimeout(()=>ctrl2.abort(),9000);
+                const chainUrl=`https://${host}.finance.yahoo.com/v7/finance/options/${ticker}?date=${targetTs}`;
+                const r2=await fetch(mkProxy(chainUrl),{signal:ctrl2.signal});
+                if(!r2.ok){ console.warn('[options]',host,'chain',r2.status); continue; }
+                const d2=await r2.json();
+                const cr=d2?.optionChain?.result?.[0];
+                if(!cr) continue;
+                const contracts=cr.options?.[0]?.[contractType==='put'?'puts':'calls']||[];
+                if(!contracts.length){ console.warn('[options]',host,'empty contracts for',contractType); continue; }
+                const expDateStr=new Date(targetTs*1000).toISOString().split('T')[0];
+                console.log('[options] ✓',host,'via',mkProxy('x').split('?')[0].split('//')[1].split('/')[0],ticker,contractType,expDateStr,'contracts:',contracts.length);
+                return{contracts, expDateStr, currentPrice};
+            }catch(e){ console.warn('[options]',host,'error:',e.message); }
+        }
     }
+    console.warn('[options] all proxies failed for',ticker,'→ using Black-Scholes');
     return null;
 }
 
