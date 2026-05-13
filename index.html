@@ -835,7 +835,7 @@
             <div class="fg">
                 <label>Massive.com API Key <span style="font-weight:400;text-transform:none;letter-spacing:0">(real options contract prices — free tier)</span></label>
                 <input type="password" id="s-massive" placeholder="your-massive-api-key" style="font-family:monospace;font-size:12px" />
-                <span style="font-size:10px;color:var(--muted);margin-top:3px">Get yours free at <a href="https://massive.com" target="_blank" style="color:var(--blue)">massive.com</a> (formerly Polygon.io)</span>
+                <span style="font-size:10px;color:var(--muted);margin-top:3px">Get yours free at <a href="https://massive.com" target="_blank" style="color:var(--blue)">massive.com</a></span>
             </div>
         </div>
         <div id="s-status" style="margin-top:12px;font-size:12px;display:none"></div>
@@ -1352,14 +1352,15 @@ async function fetchRealOption(ticker, currentPrice, contractType, expiryTarget)
         const r=await fetch(`/api/options?ticker=${ticker}&type=${type}&expiry=${expiryTarget||'30d'}`,{signal:ctrl.signal});
         if(r.ok){
             const data=await r.json();
-            if(data.best&&data.best.strike!=null&&(data.best.bid!=null||data.best.ask!=null)){
+            // Accept if we have strike + any of: bid, ask, or last trade price
+            if(data.best&&data.best.strike!=null&&(data.best.bid!=null||data.best.ask!=null||data.best.last!=null)){
                 const parsed=_parseApiOptionsResponse(data);
                 if(parsed){
-                    console.log('[options] ✓ /api/options',ticker,type,expiryTarget,'ask=$'+(parsed.ask??'—'));
+                    console.log('[options] ✓ /api/options',ticker,type,expiryTarget,'bid=$'+(parsed.bid??'—'),'ask=$'+(parsed.ask??'—'),'last=$'+(parsed.last??'—'));
                     return parsed;
                 }
             }
-            console.warn('[options] /api/options ok but no valid bid/ask:',JSON.stringify(data?.best).slice(0,120));
+            console.warn('[options] /api/options ok but no price data at all:',JSON.stringify(data?.best).slice(0,150));
         } else {
             const body=await r.text().catch(()=>'');
             console.warn('[options] /api/options',r.status,body.slice(0,150));
@@ -1451,21 +1452,24 @@ function buildLiveOptionHTML(o, optType){
     const mid  = o.mid  != null ? o.mid
                  : (o.bid!=null&&o.ask!=null) ? ((o.bid+o.ask)/2) : null;
     const midFmt  = mid  != null ? mid.toFixed(2)  : '—';
-    const costPer100 = ask ? (parseFloat(ask)*100).toFixed(2) : null;
+    // Use ask as the reference price; fall back to last-trade if bid/ask unavailable
+    const refAsk = ask ?? (o.last != null ? o.last.toFixed(2) : null);
+    const costPer100 = refAsk ? (parseFloat(refAsk)*100).toFixed(2) : null;
     const bidAsk = ask && bid
         ? `Bid $${bid} · Ask $${ask}`
-        : (o.last!=null ? `Last $${o.last.toFixed(2)}` : '—');
+        : (o.last != null ? `Last $${o.last.toFixed(2)} (most recent trade)` : '—');
     const ivNote = o.iv  ? ` · IV ${o.iv}%` : '';
     const oiNote = o.oi  ? ` · OI ${o.oi.toLocaleString()}` : '';
     const costNote = costPer100
         ? `<span style="font-size:10px;color:var(--muted)"> = $${costPer100}/contract</span>`
         : '';
-    const badge=o.isEstimate
-        ?`<span style="background:rgba(210,153,34,.15);color:var(--orange);border:1px solid rgba(210,153,34,.3);border-radius:4px;padding:1px 6px;font-size:10px;font-weight:700;display:inline-block;margin-bottom:3px">~ Est (BS)</span>`
-        :`<span style="background:rgba(63,185,80,.15);color:var(--green);border:1px solid rgba(63,185,80,.3);border-radius:4px;padding:1px 6px;font-size:10px;font-weight:700;display:inline-block;margin-bottom:3px">● Live</span>`;
-    const subNote=o.isEstimate
-        ?`<div style="font-size:10px;color:var(--muted);margin-top:1px">Black-Scholes model estimate · IV ~${o.iv||'—'}%${ivNote}${oiNote}</div>`
-        :`<div style="font-size:10px;color:var(--muted);margin-top:1px">Yahoo Finance · enter at ask · mid $${midFmt}${ivNote}${oiNote}</div>`;
+    const badge = o.isEstimate
+        ? `<span style="background:rgba(210,153,34,.15);color:var(--orange);border:1px solid rgba(210,153,34,.3);border-radius:4px;padding:1px 6px;font-size:10px;font-weight:700;display:inline-block;margin-bottom:3px">~ Est (BS)</span>`
+        : `<span style="background:rgba(63,185,80,.15);color:var(--green);border:1px solid rgba(63,185,80,.3);border-radius:4px;padding:1px 6px;font-size:10px;font-weight:700;display:inline-block;margin-bottom:3px">● Live</span>`;
+    const sourceLabel = o.isEstimate ? 'Black-Scholes model estimate' : 'Massive · live market data';
+    const subNote = o.isEstimate
+        ? `<div style="font-size:10px;color:var(--muted);margin-top:1px">${sourceLabel} · IV ~${o.iv||'—'}%${oiNote}</div>`
+        : `<div style="font-size:10px;color:var(--muted);margin-top:1px">${sourceLabel} · mid $${midFmt}${ivNote}${oiNote}</div>`;
     return `${badge}
 <span style="font-weight:700;font-size:12px">$${o.strike} ${optType} · exp ${expiryFmt}</span>
 <div style="margin-top:3px;font-size:13px;font-weight:700;color:var(--text)">${bidAsk}${costNote}</div>
@@ -1509,7 +1513,7 @@ async function enrichOneCard(cardId){
     if(result){
         odElNow.innerHTML = buildLiveOptionHTML(result, optType);
         odElNow.style.lineHeight = '1.6';
-        odElNow.title = 'Live option data from Yahoo Finance';
+        odElNow.title = result.isEstimate ? 'Black-Scholes model estimate' : 'Live option data from Massive';
         // Store for journal
         const dir = cd.activeDir||'call';
         if(cd[dir]) cd[dir]._realOptionPrice = {
