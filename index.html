@@ -1305,117 +1305,115 @@ function parseExpiryRange(optDetail){
     return null;
 }
 
+// Build a display HTML string for a live option result
+function buildLiveOptionHTML(o, optType){
+    if(!o) return null;
+    const expiryFmt = o.expiry
+        ? new Date(o.expiry+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'2-digit'})
+        : '';
+    const ask  = o.ask  != null ? o.ask.toFixed(2)  : null;
+    const bid  = o.bid  != null ? o.bid.toFixed(2)  : null;
+    const mid  = o.mid  != null ? o.mid
+                 : (o.bid!=null&&o.ask!=null) ? ((o.bid+o.ask)/2) : null;
+    const midFmt  = mid  != null ? mid.toFixed(2)  : '—';
+    const costPer100 = ask ? (parseFloat(ask)*100).toFixed(2) : null;
+    const bidAsk = ask && bid
+        ? `Bid $${bid} · Ask $${ask}`
+        : (o.last!=null ? `Last $${o.last.toFixed(2)}` : '—');
+    const ivNote = o.iv  ? ` · IV ${o.iv}%` : '';
+    const oiNote = o.oi  ? ` · OI ${o.oi.toLocaleString()}` : '';
+    const costNote = costPer100
+        ? `<span style="font-size:10px;color:var(--muted)"> = $${costPer100}/contract</span>`
+        : '';
+    return `<span style="background:rgba(63,185,80,.15);color:var(--green);border:1px solid rgba(63,185,80,.3);border-radius:4px;padding:1px 6px;font-size:10px;font-weight:700;display:inline-block;margin-bottom:3px">● LIVE</span>
+<span style="font-weight:700;font-size:12px">$${o.strike} ${optType} · exp ${expiryFmt}</span>
+<div style="margin-top:3px;font-size:13px;font-weight:700;color:var(--text)">${bidAsk}${costNote}</div>
+<div style="font-size:10px;color:var(--muted);margin-top:1px">Buy at ask · mid $${midFmt}${ivNote}${oiNote}</div>`;
+}
+
 // After cards render, fetch real option prices from Yahoo Finance and update the display
 async function enrichCardsWithOptionPrices(cardIds){
+    // Tab-index → expiry target map (matches 1Mo / 3Mo / 6Mo tabs)
+    const EXPIRY_TARGETS = ['30d', '90d', '180d'];
+
     for(const cardId of cardIds){
         try{
-            const cd=window._cardData[cardId];
+            const cd = window._cardData[cardId];
             if(!cd) continue;
-            const idea=cd[cd.activeDir||'call']||cd.call||cd.put;
-            if(!idea||!idea.ticker) continue;
-            const optType=(idea.option_type||'CALL').toUpperCase();
-            const livePrice=idea.current_price||0;
+            const idea = cd[cd.activeDir||'call'] || cd.call || cd.put;
+            if(!idea || !idea.ticker) continue;
+            const optType  = (idea.option_type||'CALL').toUpperCase();
+            const livePrice = cd.current_price || idea.current_price || 0;
 
-            // Show loading state
-            const odEl=document.getElementById('od-'+cardId);
-            if(odEl){ odEl.textContent='Loading live option prices…'; odEl.style.color='var(--muted)'; }
+            // Show loading on the active option detail
+            const odEl = document.getElementById('od-'+cardId);
+            if(odEl){ odEl.innerHTML = '<span style="color:var(--muted);font-size:11px">Loading live prices…</span>'; }
 
-            // Fetch two expiry windows in parallel: short (~30d) and longer (~60d)
-            const [opt30, opt60]=await Promise.all([
-                fetchRealOption(idea.ticker, livePrice, optType, '30d'),
-                fetchRealOption(idea.ticker, livePrice, optType, '60d'),
-            ]);
+            // Fetch all 3 expiry windows in parallel
+            const [r0, r1, r2] = await Promise.all(
+                EXPIRY_TARGETS.map(t => fetchRealOption(idea.ticker, livePrice, optType, t))
+            );
+            const results = [r0, r1, r2];
 
-            const opt=opt30||opt60;
-            if(!opt){
-                if(odEl){ odEl.textContent='Option prices unavailable'; odEl.style.color='var(--muted)'; }
-                continue;
+            // Store live price on each expiry_options slot so tab switching stays live
+            if(idea.expiry_options){
+                idea.expiry_options.forEach((slot, i) => {
+                    if(results[i]) slot._livePrice = results[i];
+                });
             }
 
-            // Format price string — mid is most actionable for a beginner
-            function fmtOpt(o){
-                if(!o) return null;
-                const expiryFmt=o.expiry?new Date(o.expiry+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'2-digit'}):'';
-                const priceDisplay=o.bid!=null&&o.ask!=null
-                    ?`ask $${o.ask.toFixed(2)} / bid $${o.bid.toFixed(2)} · mid $${o.mid!=null?o.mid.toFixed(2):((o.bid+o.ask)/2).toFixed(2)}`
-                    :(o.last!=null?`last $${o.last.toFixed(2)}`:'—');
-                const ivStr=o.iv?` · IV ${o.iv}%`:'';
-                const oiStr=o.oi?` · OI ${o.oi.toLocaleString()}`:'';
-                return{
-                    strike:o.strike,
-                    expiry:expiryFmt,
-                    detail:`$${o.strike} ${optType} · exp ${expiryFmt}${ivStr}${oiStr} · ${priceDisplay}`,
-                    priceDisplay, ivStr, oiStr,
-                    raw:o
+            // Find the active tab index
+            const tabEls = document.querySelectorAll(`#etabs-${cardId} .expiry-tab`);
+            let activeIdx = 0;
+            tabEls.forEach((t,i) => { if(t.classList.contains('active')) activeIdx = i; });
+
+            // Render the active tab's live price in the detail section
+            const activeResult = results[activeIdx] || results.find(Boolean);
+            if(odEl && activeResult){
+                odEl.innerHTML = buildLiveOptionHTML(activeResult, optType);
+                odEl.style.lineHeight = '1.6';
+                odEl.title = 'Live option data from Yahoo Finance';
+            } else if(odEl){
+                odEl.innerHTML = '<span style="color:var(--muted);font-size:11px">Option prices unavailable right now</span>';
+            }
+
+            // Inject ask price badge into each expiry tab button
+            tabEls.forEach((tabEl, i) => {
+                const r = results[i];
+                const existing = tabEl.querySelector('.opt-live-price');
+                if(r && r.ask != null){
+                    const html = `<div class="opt-live-price" style="font-size:10px;font-weight:800;color:var(--green);margin-top:1px">ask $${r.ask.toFixed(2)}</div>`;
+                    if(!existing) tabEl.insertAdjacentHTML('beforeend', html);
+                    else existing.outerHTML = html;
+                } else if(existing){
+                    existing.remove();
+                }
+            });
+
+            // Store best result on card for journal
+            const best = results.find(Boolean);
+            if(best && cd[cd.activeDir||'call']){
+                cd[cd.activeDir||'call']._realOptionPrice = {
+                    bid:best.bid, ask:best.ask, mid:best.mid, last:best.last,
+                    expiry:best.expiry, strike:best.strike, iv:best.iv,
                 };
             }
 
-            const f30=fmtOpt(opt30);
-            const f60=fmtOpt(opt60);
-            const primary=f30||f60;
+            console.log('[options]', idea.ticker, optType, results.map(r=>r?`${r.expiry} ask=$${r.ask}`:'null'));
 
-            // ── Update the option contract section with REAL live prices ──
-            // The entry/stop/target rows stay as STOCK price levels (that's correct)
-            // We only update the option contract line at the bottom of the card
-
-            function fmtPrice(o){
-                if(!o) return null;
-                const expiryFmt=o.expiry?new Date(o.expiry+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'2-digit'}):'';
-                const costPer=o.ask!=null?o.ask:o.last;
-                const costPer100=costPer!=null?(costPer*100).toFixed(2):null;
-                const mid=o.mid!=null?o.mid:(o.bid!=null&&o.ask!=null?(o.bid+o.ask)/2:null);
-                return{expiryFmt,costPer,costPer100,mid,
-                    bidAsk:o.bid!=null&&o.ask!=null?`Bid $${o.bid.toFixed(2)} · Ask $${o.ask.toFixed(2)}`:(o.last!=null?`Last $${o.last.toFixed(2)}`:'—'),
-                    iv:o.iv,oi:o.oi,strike:o.strike};
-            }
-
-            const p30=fmtPrice(opt30);
-            const p60=fmtPrice(opt60);
-            const primary=p30||p60;
-
-            // Replace the option detail line with a rich live-price block
-            if(odEl&&primary){
-                const costNote=primary.costPer100?`<span style="color:var(--muted);font-size:10px"> = $${primary.costPer100} per contract (100 shares)</span>`:'';
-                const ivNote=primary.iv?`<span style="color:var(--muted);font-size:10px"> · IV ${primary.iv}%</span>`:'';
-                const oiNote=primary.oi?`<span style="color:var(--muted);font-size:10px"> · OI ${primary.oi.toLocaleString()}</span>`:'';
-                odEl.innerHTML=`
-                    <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
-                        <span style="background:rgba(63,185,80,.15);color:var(--green);border:1px solid rgba(63,185,80,.3);border-radius:4px;padding:1px 6px;font-size:10px;font-weight:700">● LIVE</span>
-                        <span style="font-weight:700">$${primary.strike} ${optType} · exp ${primary.expiryFmt}</span>
-                    </div>
-                    <div style="margin-top:4px;font-size:13px;font-weight:700;color:var(--text)">${primary.bidAsk}${costNote}</div>
-                    <div style="margin-top:2px;font-size:11px;color:var(--muted)">Enter at ask · mid $${primary.mid!=null?primary.mid.toFixed(2):'—'} · ${ivNote}${oiNote}</div>`;
-                odEl.style.lineHeight='1.5';
-                odEl.title='Live option chain data from Yahoo Finance';
-            }
-
-            // Inject real ask prices into expiry tabs
-            const tabs=document.getElementById('etabs-'+cardId);
-            if(tabs){
-                const tabEls=tabs.querySelectorAll('.expiry-tab');
-                if(tabEls[0]&&p30&&p30.costPer!=null){
-                    const existing=tabEls[0].querySelector('.opt-live-price');
-                    if(!existing) tabEls[0].insertAdjacentHTML('beforeend',`<div class="opt-live-price" style="font-size:10px;font-weight:800;color:var(--green);margin-top:2px">ask $${p30.costPer.toFixed(2)}</div>`);
-                    else existing.textContent=`ask $${p30.costPer.toFixed(2)}`;
-                }
-                if(tabEls[1]&&p60&&p60.costPer!=null){
-                    const existing=tabEls[1].querySelector('.opt-live-price');
-                    if(!existing) tabEls[1].insertAdjacentHTML('beforeend',`<div class="opt-live-price" style="font-size:10px;font-weight:800;color:var(--green);margin-top:2px">ask $${p60.costPer.toFixed(2)}</div>`);
-                    else existing.textContent=`ask $${p60.costPer.toFixed(2)}`;
-                }
-            }
-
-            // Store real prices on card data for journal logging
-            const bestOpt=opt30||opt60;
-            if(cd[cd.activeDir||'call']&&bestOpt){
-                cd[cd.activeDir||'call']._realOptionPrice={
-                    bid:bestOpt.bid, ask:bestOpt.ask, mid:bestOpt.mid, last:bestOpt.last,
-                    expiry:bestOpt.expiry, strike:bestOpt.strike, iv:bestOpt.iv,
-                };
-            }
-        }catch(e){ console.warn('[options] enrich error:',e.message); }
+        }catch(e){ console.warn('[options] enrich error:', e.message, e.stack); }
     }
 }
+
+// Debug helper — run window.testOptions('NVDA','call') from console
+window.testOptions = async function(ticker='NVDA', type='call'){
+    console.group(`[options debug] ${ticker} ${type}`);
+    for(const expiry of ['30d','90d','180d']){
+        const r = await fetchRealOption(ticker, 0, type, expiry);
+        console.log(expiry, r ? `strike=$${r.strike} bid=$${r.bid} ask=$${r.ask} exp=${r.expiry}` : 'FAILED');
+    }
+    console.groupEnd();
+};
 
 // ── LIVE PRICE INJECTION ──────────────────────────────────────
 // After Claude returns cards, overwrite prices with real Finnhub data
@@ -2010,9 +2008,18 @@ function switchCardExpiry(cardId, idx){
     if(tl && opt.target!=null)
         tl.textContent=`$${opt.target}`;
 
-    // Update option detail text
+    // Update option detail — use live price if available, else fall back to Claude estimate
     const od=document.getElementById('od-'+cardId);
-    if(od) od.textContent=opt.option_detail||'';
+    if(od){
+        const optType=(idea.option_type||'CALL').toUpperCase();
+        if(opt._livePrice){
+            od.innerHTML = buildLiveOptionHTML(opt._livePrice, optType);
+            od.style.lineHeight='1.6';
+        } else {
+            od.textContent = opt.option_detail||'';
+            od.style.lineHeight='';
+        }
+    }
 
     // Update account sizing text
     const ac=document.getElementById('ac-'+cardId);
