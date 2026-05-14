@@ -13,11 +13,19 @@ async function fetchMassiveOptions(symbol, contractType, targetDate, currentPric
     const fromDate = new Date(targetMs - 14 * 86400 * 1000).toISOString().split('T')[0];
     const toDate   = new Date(targetMs + 14 * 86400 * 1000).toISOString().split('T')[0];
 
+    // Add strike range filter: ±30% of current price keeps ATM in results even for
+    // high-priced stocks (NVDA $450+, META $700+) where near-term options have many
+    // strikes and the limit=250 sorted from lowest would miss the ATM strike.
+    const strikeMin = currentPrice > 0 ? `&strike_price.gte=${(currentPrice * 0.70).toFixed(2)}` : '';
+    const strikeMax = currentPrice > 0 ? `&strike_price.lte=${(currentPrice * 1.35).toFixed(2)}` : '';
+
     const url = [
         `https://api.polygon.io/v3/snapshot/options/${symbol}`,
         `?contract_type=${contractType}`,
         `&expiration_date.gte=${fromDate}`,
         `&expiration_date.lte=${toDate}`,
+        strikeMin,
+        strikeMax,
         `&limit=250`,
         `&order=asc`,
         `&sort=strike_price`,
@@ -25,7 +33,7 @@ async function fetchMassiveOptions(symbol, contractType, targetDate, currentPric
     ].join('');
 
     const ctrl = new AbortController();
-    setTimeout(() => ctrl.abort(), 12000);
+    setTimeout(() => ctrl.abort(), 15000); // increased from 12s — near-term options can be slower
 
     const r = await fetch(url, {
         headers: { 'User-Agent': UA, 'Accept': 'application/json' },
