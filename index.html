@@ -1454,7 +1454,7 @@ function parseExpiryRange(optDetail){
 }
 
 // Build a display HTML string for a live option result
-function buildLiveOptionHTML(o, optType){
+function buildLiveOptionHTML(o, optType, stockTarget=null){
     if(!o) return null;
     const expiryFmt = o.expiry
         ? new Date(o.expiry+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'2-digit'})
@@ -1491,13 +1491,30 @@ function buildLiveOptionHTML(o, optType){
     const subNote = o.isEstimate
         ? `<div style="font-size:10px;color:var(--muted);margin-top:1px">${sourceLabel} · IV ~${o.iv||'—'}%${oiNote}</div>`
         : `<div style="font-size:10px;color:var(--muted);margin-top:1px">${sourceLabel} · mid $${midFmt}${ivNote}${oiNote}</div>`;
-    // Option-specific stop (50% loss) and target (2× gain) based on ask/last price
+    // Option stop: 15% loss from entry (standard beginner rule)
     const refPrice = parseFloat(refAsk) || 0;
-    const optStop   = refPrice > 0 ? `$${(refPrice * 0.50).toFixed(2)}` : null;
-    const optTarget = refPrice > 0 ? `$${(refPrice * 2.00).toFixed(2)}` : null;
-    const stopTargetRow = (optStop && optTarget) ? `<div style="display:flex;gap:14px;margin-top:6px;padding-top:6px;border-top:1px solid var(--border);font-size:11px;flex-wrap:wrap">
-<div>🛑 <span style="color:var(--muted);font-weight:600">Option Stop:</span> <strong style="color:var(--red)">${optStop}</strong> <span style="color:var(--muted)">(exit −50%)</span></div>
-<div>🎯 <span style="color:var(--muted);font-weight:600">Option Target:</span> <strong style="color:var(--green)">${optTarget}</strong> <span style="color:var(--muted)">(take 2×)</span></div>
+    const optStop = refPrice > 0 ? `$${(refPrice * 0.85).toFixed(2)}` : null;
+
+    // Option target: intrinsic value when stock hits AI's price target + time value buffer
+    // For CALL: max(0, stockTarget - strike); PUT: max(0, strike - stockTarget)
+    // Then add ~20% of current option price as remaining time value buffer
+    let optTarget = null;
+    let optTargetNote = '';
+    if(refPrice > 0 && stockTarget && o.strike){
+        const intrinsicAtTarget = optType === 'PUT'
+            ? Math.max(0, o.strike - stockTarget)
+            : Math.max(0, stockTarget - o.strike);
+        const timeValueBuffer = refPrice * 0.20; // ~20% of current price as remaining time value
+        const rawTarget = intrinsicAtTarget + timeValueBuffer;
+        if(rawTarget > refPrice * 1.05){ // only show if target is realistically above current price
+            optTarget = `$${rawTarget.toFixed(2)}`;
+            optTargetNote = ` if stock → $${stockTarget}`;
+        }
+    }
+    // Fallback: if no stock target or OTM with unreachable target, skip showing target
+    const stopTargetRow = optStop ? `<div style="display:flex;gap:14px;margin-top:6px;padding-top:6px;border-top:1px solid var(--border);font-size:11px;flex-wrap:wrap">
+<div>🛑 <span style="color:var(--muted);font-weight:600">Option Stop:</span> <strong style="color:var(--red)">${optStop}</strong> <span style="color:var(--muted)">(−15% exit rule)</span></div>
+${optTarget ? `<div>🎯 <span style="color:var(--muted);font-weight:600">Option Target:</span> <strong style="color:var(--green)">${optTarget}</strong><span style="color:var(--muted);font-size:10px">${optTargetNote}</span></div>` : ''}
 </div>` : '';
     return `${badge}
 <span style="font-weight:700;font-size:12px">$${o.strike} ${optType} · exp ${expiryFmt}</span>
@@ -1543,7 +1560,8 @@ async function enrichOneCard(cardId){
     if(!odElNow) return; // card was removed from DOM
 
     if(result){
-        odElNow.innerHTML = buildLiveOptionHTML(result, optType);
+        const _activeStockTarget = idea.expiry_options?.[activeIdx]?.target || idea.target || null;
+        odElNow.innerHTML = buildLiveOptionHTML(result, optType, _activeStockTarget);
         odElNow.style.lineHeight = '1.6';
         const _tipSrc = result.source === 'twelvedata' ? 'Twelve Data' : result.source === 'finnhub' ? 'Finnhub' : result.source === 'yahoo_v10' ? 'Yahoo Finance' : 'Massive';
         odElNow.title = result.isEstimate ? 'Black-Scholes model estimate' : `Live option data from ${_tipSrc}`;
@@ -2211,7 +2229,7 @@ function switchCardExpiry(cardId, idx){
     if(od){
         const optType=(idea.option_type||'CALL').toUpperCase();
         if(opt._livePrice){
-            od.innerHTML = buildLiveOptionHTML(opt._livePrice, optType);
+            od.innerHTML = buildLiveOptionHTML(opt._livePrice, optType, opt.target||idea.target||null);
             od.style.lineHeight='1.6';
         } else {
             // No live price for this tab yet — show stale estimate and trigger background fetch
@@ -2227,7 +2245,7 @@ function switchCardExpiry(cardId, idx){
                 // Only update if this tab is still active
                 const stillActive=document.querySelectorAll(`#etabs-${cardId} .expiry-tab`)[idx]?.classList.contains('active');
                 if(odNow && stillActive){
-                    odNow.innerHTML=buildLiveOptionHTML(r, optType);
+                    odNow.innerHTML=buildLiveOptionHTML(r, optType, opt.target||idea.target||null);
                     odNow.style.lineHeight='1.6';
                 }
                 const tab=document.querySelectorAll(`#etabs-${cardId} .expiry-tab`)[idx];
@@ -2288,9 +2306,12 @@ async function switchCardDir(cardId, dir){
         const pchg  = freshQ ? freshQ.chg   : parseFloat(data.price_change||0);
         if(freshQ){ data.current_price=freshQ.price; data.price_change=freshQ.chg; }
 
-        // Fetch news alongside this direction
-        const newsResult = await fetchNewsForPrompt(data.ticker).catch(()=>({text:'',items:[]}));
-        const raw = await callClaude(singleDirPrompt(data.ticker, price, pchg, dir.toUpperCase(), newsResult.text||''));
+        // Fetch news + technicals alongside this direction
+        const [newsResult, techData] = await Promise.all([
+            fetchNewsForPrompt(data.ticker).catch(()=>({text:'',items:[]})),
+            fetchTechnicals(data.ticker).catch(()=>null)
+        ]);
+        const raw = await callClaude(singleDirPrompt(data.ticker, price, pchg, dir.toUpperCase(), newsResult.text||'', techData?.summary||''));
         const idea = JSON.parse(stripJSON(raw));
         // ✅ Force real price + news onto the Claude-returned card
         idea.current_price = price;
@@ -2311,16 +2332,17 @@ async function switchCardDir(cardId, dir){
 }
 
 // ── SINGLE-DIRECTION ANALYSIS PROMPT ─────────────────────────
-function singleDirPrompt(ticker, price, priceChange, optType, newsContext=''){
+function singleDirPrompt(ticker, price, priceChange, optType, newsContext='', techContext=''){
     const isPut = optType === 'PUT';
     const exp = getExpiryContext();
     const priceStr = (typeof price === 'number' ? price.toFixed(2) : parseFloat(price||0).toFixed(2));
     const chgStr   = (priceChange>=0?'+':'')+parseFloat(priceChange||0).toFixed(2)+'%';
-    return `You are a trading analyst helping a beginner options trader with a $500 account. Max loss per trade: $75 (15% rule). Today: ${exp.today}.
+    return `You are a trading analyst helping a beginner options trader. Today: ${exp.today}.
 
 Live data for ${ticker}: $${priceStr} (${chgStr} today)
-${newsContext?'News (cite as "Source: pub, date" in summary if used): '+newsContext:''}
-IMPORTANT: All price levels must be anchored to $${priceStr}. Analyze as a ${isPut?'PUT (bearish)':'CALL (bullish)'}.
+${techContext ? `\nREAL CHART DATA (use this to anchor all price levels):\n${techContext}\n` : ''}${newsContext?'News (cite as "Source: pub, date" in summary if used): '+newsContext:''}
+IMPORTANT: All price levels must be anchored to $${priceStr} and the technical data above. Analyze as a ${isPut?'PUT (bearish)':'CALL (bullish)'}.
+${isPut?'Use support levels for entry, resistance levels for stop, and analyst downside target or 30-day low for target.':'Use support levels for entry, previous resistance for stop reference, and analyst consensus target (or 30-day high) for target.'}
 ${isPut?'Identify downside catalysts, weak technicals, and reasons to expect a drop.':'Identify upside catalysts, strong technicals, and reasons to expect a rise.'}
 
 Return ONLY a raw JSON object. No markdown. No code fences.
@@ -2411,10 +2433,13 @@ async function loadMoreFilter(){
         let newCards=[];
 
         if(meta.type==='watchlist'){
-            const qMap=await fetchQuotesCached(WATCHLIST);
+            const [qMap, lmTechMap] = await Promise.all([
+                fetchQuotesCached(WATCHLIST),
+                fetchTechnicalsBatch(WATCHLIST)
+            ]);
             const quotes=Object.entries(qMap).map(([ticker,q])=>({ticker,price:q.c,chg:q.dp||0,closes:[q.pc,q.c],high52:q.h||q.c,low52:q.l||q.c,vol:0})).filter(q=>q.price>0);
             const priceData=quotes.length>0?quotes.map(q=>`${q.ticker}: $${q.price.toFixed(2)} (${q.chg>=0?'+':''}${q.chg.toFixed(2)}% today)`).join('\n'):WATCHLIST.join(', ');
-            const raw=await callClaude(watchlistScanPrompt(priceData,meta.optType,{},shownTickers));
+            const raw=await callClaude(watchlistScanPrompt(priceData,meta.optType,{},shownTickers,lmTechMap));
             newCards=injectLivePrices(JSON.parse(stripJSON(raw)),quotes);
             const lmTickers=[...new Set(newCards.map(s=>(s.ticker||'').toUpperCase()).filter(Boolean))];
             const newsMap=lmTickers.length?await fetchNewsForPromptBatch(lmTickers):{};
@@ -2428,9 +2453,10 @@ async function loadMoreFilter(){
             const raw=await callClaude(discoverPrompt(cat.desc,shownTickers));
             newCards=JSON.parse(stripJSON(raw)).map(s=>({...s,category:cat.label}));
             const discTickers=[...new Set(newCards.map(s=>(s.ticker||'').toUpperCase()).filter(Boolean))];
-            const [discPriceMap,discNewsMap]=await Promise.all([
+            const [discPriceMap,discNewsMap,discTechMap]=await Promise.all([
                 discTickers.length?fetchQuotesCached(discTickers):Promise.resolve({}),
-                discTickers.length?fetchNewsForPromptBatch(discTickers):Promise.resolve({})
+                discTickers.length?fetchNewsForPromptBatch(discTickers):Promise.resolve({}),
+                discTickers.length?fetchTechnicalsBatch(discTickers):Promise.resolve({})
             ]);
             newCards=newCards.map(s=>{
                 const k=(s.ticker||'').toUpperCase();
@@ -2439,6 +2465,8 @@ async function loadMoreFilter(){
                 else s._priceIsLive=false;
                 const ne=discNewsMap[k];
                 if(ne&&ne.items&&ne.items.length) s._newsItems=ne.items.slice(0,2);
+                const te=discTechMap[k];
+                if(te) s._techSummary=te.summary;
                 return s;
             });
         }
@@ -2462,16 +2490,19 @@ async function runActiveFilter(){
     try{
         let cards;
         if(meta.type==='watchlist'){
-            // Fetch prices first — no news pre-fetch for whole watchlist (rate limits)
-            const qMap = await fetchQuotesCached(WATCHLIST);
+            // Fetch prices + technicals for watchlist in parallel
+            const [qMap, rfTechMap] = await Promise.all([
+                fetchQuotesCached(WATCHLIST),
+                fetchTechnicalsBatch(WATCHLIST)
+            ]);
             const quotes=Object.entries(qMap).map(([ticker,q])=>({ticker,price:q.c,chg:q.dp||0,closes:[q.pc,q.c],high52:q.h||q.c,low52:q.l||q.c,vol:0})).filter(q=>q.price>0);
             const priceData=quotes.length>0
                 ?quotes.map(q=>`${q.ticker}: $${q.price.toFixed(2)} (${q.chg>=0?'+':''}${q.chg.toFixed(2)}% today)`).join('\n')
                 :WATCHLIST.join(', ')+' — use your latest knowledge';
-            const raw=await callClaude(watchlistScanPrompt(priceData, meta.optType, {}));
+            const raw=await callClaude(watchlistScanPrompt(priceData, meta.optType, {}, [], rfTechMap));
             cards=JSON.parse(stripJSON(raw));
             cards=injectLivePrices(cards, quotes);
-            // ✅ Fetch news ONLY for the 3 tickers Claude picked (avoids rate-limit)
+            // Fetch news ONLY for the 3 tickers Claude picked (avoids rate-limit)
             const cardTickers=[...new Set(cards.map(s=>(s.ticker||'').toUpperCase()).filter(Boolean))];
             const newsMap = cardTickers.length ? await fetchNewsForPromptBatch(cardTickers) : {};
             cards=cards.map(s=>{
@@ -2484,11 +2515,12 @@ async function runActiveFilter(){
             const raw=await callClaude(discoverPrompt(cat.desc));
             cards=JSON.parse(stripJSON(raw));
             cards=cards.map(s=>({...s, category:cat.label}));
-            // Fetch live prices + news for all discover cards, then sanitize levels
+            // Fetch live prices + news + technicals for all discover cards, then sanitize levels
             const discTickers=[...new Set(cards.map(s=>(s.ticker||'').toUpperCase()).filter(Boolean))];
-            const [discPriceMap, discNewsMap] = await Promise.all([
+            const [discPriceMap, discNewsMap, rfDiscTechMap] = await Promise.all([
                 discTickers.length ? fetchQuotesCached(discTickers) : Promise.resolve({}),
-                discTickers.length ? fetchNewsForPromptBatch(discTickers) : Promise.resolve({})
+                discTickers.length ? fetchNewsForPromptBatch(discTickers) : Promise.resolve({}),
+                discTickers.length ? fetchTechnicalsBatch(discTickers) : Promise.resolve({})
             ]);
             cards=cards.map(s=>{
                 const k=(s.ticker||'').toUpperCase();
@@ -2503,6 +2535,8 @@ async function runActiveFilter(){
                 }
                 const newsEntry=discNewsMap[k];
                 if(newsEntry&&newsEntry.items&&newsEntry.items.length) s._newsItems=newsEntry.items.slice(0,2);
+                const techEntry=rfDiscTechMap[k];
+                if(techEntry) s._techSummary=techEntry.summary;
                 return s;
             });
         }
@@ -2519,7 +2553,7 @@ async function runActiveFilter(){
 
 // ── SCAN WATCHLIST ────────────────────────────────────────────
 // Shared prompt builder for watchlist scan — pass "CALL" or "PUT"
-function watchlistScanPrompt(priceData, optionType, newsMap={}, excludeTickers=[]){
+function watchlistScanPrompt(priceData, optionType, newsMap={}, excludeTickers=[], techMap={}){
     const isPut = optionType === 'PUT';
     const exp = getExpiryContext();
     // Build a compact news block (max 8 tickers, 2 headlines each — already limited in fetchNewsForPrompt)
@@ -2528,23 +2562,30 @@ function watchlistScanPrompt(priceData, optionType, newsMap={}, excludeTickers=[
         .slice(0,8)
         .map(([t,n])=>n.text)
         .join('\n');
-    return `You are a trading analyst helping a beginner options trader with a $500 account who trades 1-3 month options on tech stocks. Her rule: never lose more than 15% of her account ($75 max) per trade.
+    const techBlock = formatTechnicalsForPrompt(techMap);
+    return `You are a trading analyst helping a beginner options trader. Today: ${exp.today}.
 
-Today's date: ${exp.today}
-Suggested expiry windows — use DIFFERENT expirations for each of the 3 trades to show varied timeframes:
-  • Aggressive/short-term: target expiry around ${exp.aggressive}
-  • Moderate: target expiry around ${exp.moderate}
-  • Conservative/longer-term: target expiry around ${exp.conservative}
-Pick a realistic options expiration Friday close to each window above. Do NOT use the same expiry date for all 3 trades.
+You have REAL chart data below — use it. Base entry zones, stop levels, and targets on actual support/resistance and analyst targets, not guesses.
 
-Live price data (use these EXACT prices for all levels — do NOT substitute your training data prices):
+Live price data (use these EXACT prices — never substitute training data):
 ${priceData}
+${techBlock ? '\nReal-time technical data (RSI, MAs, support/resistance, analyst targets, earnings):\n'+techBlock : ''}
 ${newsEntries?'\nRecent news (cite with "Source: pub, date" if used in summary):\n'+newsEntries:''}
-IMPORTANT: All price levels must match the live prices above. $8 stock → entry near $8.
+IMPORTANT: All price levels must be anchored to the live prices and technical data above.
 
-Find the TOP 3 best ${isPut ? 'PUT (bearish/short) trade setups' : 'CALL (bullish) trade setups'} right now from this watchlist — one aggressive, one moderate, one conservative.
-CRITICAL: Each of the 3 trade ideas MUST be for a DIFFERENT ticker symbol — no duplicate stocks allowed. If your top pick is strong, use it once only; pick the next best stock for the other 2 slots.${excludeTickers&&excludeTickers.length?`\nDo NOT repeat these tickers already shown: ${excludeTickers.join(', ')}. Pick different ones.`:''}
-${isPut ? 'Look for: stocks that are overextended, showing weakness, breaking down, bad news, sector headwinds, or strong downside momentum.' : 'Look for: stocks with bullish momentum, strong technicals, positive catalysts, or clear upside setups.'}
+Expiry windows — use DIFFERENT expirations for each of the 3 trades:
+  • 1-month (aggressive): around ${exp.aggressive}
+  • 3-month (moderate): around ${exp.moderate}
+  • 6-month (conservative): around ${exp.conservative}
+
+Find the TOP 3 best ${isPut ? 'PUT (bearish) trade setups' : 'CALL (bullish) trade setups'} from this watchlist — one per timeframe.
+CRITICAL: Each of the 3 ideas MUST use a DIFFERENT ticker.${excludeTickers&&excludeTickers.length?`\nDo NOT repeat: ${excludeTickers.join(', ')}.`:''}
+${isPut ? 'Look for: overextended stocks, breaking down technically (RSI overbought + below key MAs), bad news, sector weakness.' : 'Look for: bullish momentum, RSI not yet overbought, above key MAs, positive catalyst, analyst target above current price.'}
+
+For entry_low/entry_high: use recent support level (from technical data) as the buy zone.
+For stop_loss: use the level where the thesis breaks — a clear technical support below entry.
+For target: use the analyst consensus target if available; otherwise use nearest resistance (30-day high).
+For account_sizing: 1 plain sentence — WHY this specific strike and expiry makes sense given the technical setup (reference RSI, MAs, or catalyst if relevant).
 
 Return ONLY a raw JSON array of exactly 3 objects. No markdown. No code fences. No explanation.
 
@@ -2573,10 +2614,11 @@ async function scanWatchlist(){
             <div class="loading-state"><div class="spinner"></div><div class="loading-text">Finding bearish setups...</div></div>
         </div>`;
     try{
-        // Fetch live prices + news headlines for all watchlist tickers in parallel
-        const [qMap, newsMap] = await Promise.all([
+        // Fetch live prices + news + technical indicators for all watchlist tickers
+        const [qMap, newsMap, techMap] = await Promise.all([
             fetchQuotesCached(WATCHLIST),
-            fetchNewsForPromptBatch(WATCHLIST)
+            fetchNewsForPromptBatch(WATCHLIST),
+            fetchTechnicalsBatch(WATCHLIST)
         ]);
         const quotes=Object.entries(qMap).map(([ticker,q])=>({ticker,price:q.c,chg:q.dp||0,closes:[q.pc,q.c],high52:q.h||q.c,low52:q.l||q.c,vol:0})).filter(q=>q.price>0);
         const priceData=quotes.length>0
@@ -2594,7 +2636,7 @@ async function scanWatchlist(){
 
         // Run calls FIRST, render, then run puts — sequential to avoid rate-limit collisions
         try{
-            const callsRaw=await callClaude(watchlistScanPrompt(priceData,'CALL', newsMap));
+            const callsRaw=await callClaude(watchlistScanPrompt(priceData,'CALL', newsMap, [], techMap));
             const calls=attachNews(injectLivePrices(JSON.parse(stripJSON(callsRaw)), quotes));
             const _cb=_cardIdCounter;
             document.getElementById('calls-section').innerHTML=`
@@ -2608,7 +2650,7 @@ async function scanWatchlist(){
         }
 
         try{
-            const putsRaw=await callClaude(watchlistScanPrompt(priceData,'PUT', newsMap));
+            const putsRaw=await callClaude(watchlistScanPrompt(priceData,'PUT', newsMap, [], techMap));
             const puts=attachNews(injectLivePrices(JSON.parse(stripJSON(putsRaw)), quotes));
             const _pb=_cardIdCounter;
             document.getElementById('puts-section').innerHTML=`
@@ -2633,16 +2675,16 @@ async function scanWatchlist(){
 
 // ── DISCOVER: BEYOND YOUR WATCHLIST ──────────────────────────
 // Shared prompt for a single discover category — returns a JSON array of 3 stocks
-function discoverPrompt(categoryDesc, extraExclude=[]){
+function discoverPrompt(categoryDesc, extraExclude=[], techMap={}){
     const excluded=[...WATCHLIST,...extraExclude].join(', ');
     const exp=getExpiryContext();
-    return `You are a stock analyst helping a beginner options trader with a $500 account. Her max loss per trade is $75 (15% rule).
-Today's date: ${exp.today}
+    const techBlock = formatTechnicalsForPrompt(techMap);
+    return `You are a stock analyst helping a beginner options trader. Today: ${exp.today}
 
 Find exactly 3 stocks that fit this description: ${categoryDesc}
 Do NOT include any of these tickers (already shown or watched): ${excluded}
-
-CRITICAL: Set current_price to the ACTUAL stock price as of today (${exp.today}). All price levels — entry_low, entry_high, stop_loss, target — MUST be anchored to that real current price. Do not use prices from months ago.
+${techBlock ? `\nREAL CHART DATA for candidates (use to anchor price levels):\n${techBlock}\n` : ''}
+CRITICAL: Set current_price to the ACTUAL stock price as of today (${exp.today}). All price levels — entry_low, entry_high, stop_loss, target — MUST be anchored to real price. Use the chart data above: entry near support, stop below key level, target at analyst consensus or 30-day high. Do not use prices from months ago.
 
 Return ONLY a raw JSON array of exactly 3 objects. No markdown. No code fences. No explanation.
 
@@ -2672,7 +2714,7 @@ async function scanDiscover(){
             <div class="loading-state" style="padding:20px"><div class="spinner"></div><div class="loading-text">Loading...</div></div>
         </div>`).join('');
 
-    // Step 1: fire all 4 Claude calls in parallel
+    // Step 1: fire all 4 Claude calls in parallel (no tech data yet — Claude picks tickers first)
     const rawResults = await Promise.allSettled(
         cats.map(cat => callClaude(discoverPrompt(cat.desc)))
     );
@@ -2688,12 +2730,13 @@ async function scanDiscover(){
         }catch(e){ return []; }
     });
 
-    // Step 3: ONE batch price + news call for ALL tickers across all categories
+    // Step 3: ONE batch price + news + technicals for ALL tickers across all categories
     const allTickers = [...new Set(catStocks.flat().map(s=>(s.ticker||'').toUpperCase()).filter(Boolean))];
-    console.log('[Discover] Fetching live prices + news for:', allTickers);
-    const [priceMap, discoverNewsMap] = await Promise.all([
+    console.log('[Discover] Fetching live prices + news + technicals for:', allTickers);
+    const [priceMap, discoverNewsMap, discoverTechMap] = await Promise.all([
         allTickers.length ? fetchQuotes(allTickers) : Promise.resolve({}),
-        allTickers.length ? fetchNewsForPromptBatch(allTickers) : Promise.resolve({})
+        allTickers.length ? fetchNewsForPromptBatch(allTickers) : Promise.resolve({}),
+        allTickers.length ? fetchTechnicalsBatch(allTickers) : Promise.resolve({})
     ]);
     const liveCount = Object.keys(priceMap).length;
     console.log('[Discover] priceMap returned', liveCount, 'tickers:', Object.keys(priceMap));
@@ -2721,6 +2764,8 @@ async function scanDiscover(){
             }
             const newsEntry = discoverNewsMap[key];
             if(newsEntry && newsEntry.items && newsEntry.items.length) s._newsItems=newsEntry.items.slice(0,2);
+            const techEntry = discoverTechMap[key];
+            if(techEntry) s._techSummary = techEntry.summary;
             return s;
         });
         const _db=_cardIdCounter;
@@ -2740,19 +2785,21 @@ async function analyzeSingle(){
     out.style.display='block';
     out.innerHTML=`<div class="loading-state"><div class="spinner"></div><div class="loading-text">Fetching CALL & PUT analysis for ${ticker}...</div></div>`;
     try{
-        // Fetch live price + recent news in parallel
-        const [q, newsResult] = await Promise.all([
+        // Fetch live price + recent news + technicals in parallel
+        const [q, newsResult, techData] = await Promise.all([
             fetchQuote(ticker),
-            fetchNewsForPrompt(ticker)
+            fetchNewsForPrompt(ticker),
+            fetchTechnicals(ticker)
         ]);
         if(!q)throw new Error(`Couldn't find data for "${ticker}" — double-check the ticker symbol.`);
         const newsCtx = newsResult.text || '';
         const newsItems = newsResult.items || [];
+        const techCtx = techData?.summary || '';
 
-        // Fetch both CALL and PUT in parallel — with live news injected into prompts
+        // Fetch both CALL and PUT in parallel — with live news + chart data injected into prompts
         const [callRaw, putRaw] = await Promise.all([
-            callClaude(singleDirPrompt(ticker, q.price, q.chg, 'CALL', newsCtx)),
-            callClaude(singleDirPrompt(ticker, q.price, q.chg, 'PUT', newsCtx))
+            callClaude(singleDirPrompt(ticker, q.price, q.chg, 'CALL', newsCtx, techCtx)),
+            callClaude(singleDirPrompt(ticker, q.price, q.chg, 'PUT', newsCtx, techCtx))
         ]);
 
         let callIdea=null, putIdea=null;
@@ -2949,6 +2996,43 @@ async function fetchNewsForPromptBatch(tickers){
         }
     });
     return map;
+}
+
+// ── TECHNICAL DATA ENRICHMENT ─────────────────────────────────────────────
+// Fetches RSI, MAs, support/resistance, analyst targets, earnings from /api/technicals
+async function fetchTechnicals(ticker){
+    try {
+        const r = await fetch(`/api/technicals?ticker=${encodeURIComponent(ticker)}`);
+        if(!r.ok) return null;
+        return await r.json();
+    } catch(e){
+        console.warn('[technicals] failed for', ticker, e.message);
+        return null;
+    }
+}
+
+// Fetches technicals for multiple tickers in parallel (rate-limited to avoid Polygon hammering)
+async function fetchTechnicalsBatch(tickers){
+    const uniq = [...new Set(tickers.map(t=>t.toUpperCase()))];
+    // Stagger requests slightly to avoid bursting Polygon
+    const results = {};
+    for(let i = 0; i < uniq.length; i++){
+        const t = uniq[i];
+        const data = await fetchTechnicals(t);
+        if(data) results[t] = data;
+        if(i < uniq.length - 1) await new Promise(r=>setTimeout(r, 150));
+    }
+    return results;
+}
+
+// Formats technicals into a compact string for AI prompt injection
+function formatTechnicalsForPrompt(techMap){
+    const lines = [];
+    for(const [ticker, d] of Object.entries(techMap)){
+        if(!d || !d.summary) continue;
+        lines.push(`${ticker}: ${d.summary}`);
+    }
+    return lines.join('\n');
 }
 
 function renderNewsSection(articles, ticker){
