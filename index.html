@@ -1468,7 +1468,8 @@ function buildLiveOptionHTML(o, optType){
     const badge = o.isEstimate
         ? `<span style="background:rgba(210,153,34,.15);color:var(--orange);border:1px solid rgba(210,153,34,.3);border-radius:4px;padding:1px 6px;font-size:10px;font-weight:700;display:inline-block;margin-bottom:3px">~ Est (BS)</span>`
         : `<span style="background:rgba(63,185,80,.15);color:var(--green);border:1px solid rgba(63,185,80,.3);border-radius:4px;padding:1px 6px;font-size:10px;font-weight:700;display:inline-block;margin-bottom:3px">● Live</span>`;
-    const _srcName = o.source === 'twelvedata' ? 'Twelve Data'
+    const _srcName = o.source === 'tradier'     ? 'Tradier'
+                   : o.source === 'twelvedata' ? 'Twelve Data'
                    : o.source === 'finnhub'    ? 'Finnhub'
                    : o.source === 'yahoo_v10'  ? 'Yahoo Finance'
                    : 'Massive';

@@ -107,6 +107,84 @@ async function fetchMassiveOptions(symbol, contractType, targetDate, currentPric
     };
 }
 
+// ── Tradier options chain ────────────────────────────────────────────────────
+// Free developer sandbox: real bid/ask, 15-min delayed. Sign up at tradier.com/create/developer
+// Sandbox base: https://sandbox.tradier.com/v1/ (use api.tradier.com for live brokerage account)
+async function fetchTradierOptions(symbol, contractType, targetDateStr, currentPrice, apiKey) {
+    const base = 'https://sandbox.tradier.com/v1';
+    const hdrs = { 'Authorization': `Bearer ${apiKey}`, 'Accept': 'application/json', 'User-Agent': UA };
+
+    // Step 1: Get available expiration dates
+    const ctrl1 = new AbortController();
+    setTimeout(() => ctrl1.abort(), 10000);
+    let expirations = [];
+    try {
+        const r1 = await fetch(`${base}/markets/options/expirations?symbol=${symbol}`, { headers: hdrs, signal: ctrl1.signal });
+        if (!r1.ok) { console.error(`[options] Tradier expirations ${r1.status}`); return null; }
+        const d1 = await r1.json();
+        expirations = d1?.expirations?.date ?? [];
+        if (!Array.isArray(expirations)) expirations = expirations ? [expirations] : [];
+    } catch(e) { console.error('[options] Tradier expirations error:', e.message); return null; }
+
+    if (!expirations.length) { console.error('[options] Tradier: no expirations for', symbol); return null; }
+
+    // Pick expiry closest to target
+    const targetMs = new Date(targetDateStr).getTime();
+    const bestExpiry = expirations.reduce((a, b) => {
+        const da = Math.abs(new Date(a).getTime() - targetMs);
+        const db = Math.abs(new Date(b).getTime() - targetMs);
+        return db < da ? b : a;
+    });
+
+    // Step 2: Get options chain for that expiry
+    const ctrl2 = new AbortController();
+    setTimeout(() => ctrl2.abort(), 12000);
+    let contracts = [];
+    try {
+        const r2 = await fetch(`${base}/markets/options/chains?symbol=${symbol}&expiration=${bestExpiry}&greeks=false`, { headers: hdrs, signal: ctrl2.signal });
+        if (!r2.ok) { console.error(`[options] Tradier chain ${r2.status}`); return null; }
+        const d2 = await r2.json();
+        const all = d2?.options?.option ?? [];
+        contracts = all.filter(o => o.option_type === contractType);
+    } catch(e) { console.error('[options] Tradier chain error:', e.message); return null; }
+
+    if (!contracts.length) { console.error('[options] Tradier: no', contractType, 'contracts for', symbol, bestExpiry); return null; }
+
+    // Find ATM contract
+    const ref = currentPrice || 0;
+    const best = contracts.reduce((a, b) => {
+        const sa = Math.abs((parseFloat(a.strike) || 0) - ref);
+        const sb = Math.abs((parseFloat(b.strike) || 0) - ref);
+        return sb < sa ? b : a;
+    });
+
+    const bid  = best.bid  != null && best.bid  !== 0 ? parseFloat(best.bid)  : null;
+    const ask  = best.ask  != null && best.ask  !== 0 ? parseFloat(best.ask)  : null;
+    const last = best.last != null && best.last !== 0 ? parseFloat(best.last) : null;
+    const iv   = best.greeks?.smv_vol != null ? parseFloat((best.greeks.smv_vol * 100).toFixed(1))
+               : best.implied_volatility != null ? parseFloat((best.implied_volatility * 100).toFixed(1)) : null;
+
+    const priceType = (bid != null || ask != null) ? 'live' : last != null ? 'last_trade' : null;
+    if (priceType == null) { console.error('[options] Tradier: no price for best contract', best.symbol); return null; }
+
+    console.log(`[options] ✓ Tradier ${symbol} ${contractType} ${bestExpiry} strike=${best.strike} bid=${bid} ask=${ask} last=${last}`);
+
+    return {
+        strike:         parseFloat(best.strike),
+        expiry:         bestExpiry,
+        bid, ask,
+        mid:            bid != null && ask != null ? parseFloat(((bid + ask) / 2).toFixed(2)) : null,
+        last,
+        volume:         parseInt(best.volume) || 0,
+        openInterest:   parseInt(best.open_interest) || 0,
+        iv,
+        inTheMoney:     best.in_the_money === 'true' || best.in_the_money === true,
+        contractSymbol: best.symbol ?? '',
+        priceType,
+        source:         'tradier',
+    };
+}
+
 // ── Twelve Data options chain ────────────────────────────────────────────────
 // Free tier: 800 credits/day, 8 req/min. Options chain included on free plan.
 async function fetchTwelvedataOptions(symbol, contractType, targetDateStr, currentPrice, apiKey) {
@@ -437,10 +515,34 @@ module.exports = async function handler(req, res) {
                     source: 'massive',
                 });
             }
-            console.warn('[options] Massive failed, trying Twelve Data');
+            console.warn('[options] Massive failed, trying Tradier');
         }
 
-        // ── Source 2: Twelve Data (TWELVEDATA_API_KEY) ────────────────
+        // ── Source 2: Tradier (TRADIER_API_KEY) ───────────────────────
+        // Free sandbox at tradier.com/create/developer — real bid/ask, 15-min delayed
+        const tradierKey = process.env.TRADIER_API_KEY;
+        if (tradierKey) {
+            const result = await fetchTradierOptions(symbol, contractType, targetDateStr, refPrice, tradierKey);
+            if (result) {
+                return res.status(200).json({
+                    ticker: symbol, contractType, currentPrice,
+                    targetExpiry: result.expiry,
+                    best: {
+                        strike: result.strike, expiry: result.expiry,
+                        bid: result.bid, ask: result.ask, mid: result.mid,
+                        last: result.last, volume: result.volume,
+                        openInterest: result.openInterest, iv: result.iv,
+                        inTheMoney: result.inTheMoney, contractSymbol: result.contractSymbol,
+                        priceType: result.priceType,
+                    },
+                    fetchedAt: new Date().toISOString(),
+                    source: 'tradier',
+                });
+            }
+            console.warn('[options] Tradier failed, trying Twelve Data');
+        }
+
+        // ── Source 3: Twelve Data (TWELVEDATA_API_KEY) ────────────────
         const twelvedataKey = process.env.TWELVEDATA_API_KEY;
         if (twelvedataKey) {
             const result = await fetchTwelvedataOptions(symbol, contractType, targetDateStr, refPrice, twelvedataKey);
@@ -505,7 +607,7 @@ module.exports = async function handler(req, res) {
         }
 
         return res.status(502).json({
-            error: `Options data unavailable for ${symbol}. All 4 sources failed (Polygon, Twelve Data, Finnhub, Yahoo).`,
+            error: `Options data unavailable for ${symbol}. All sources failed (Polygon, Tradier, Twelve Data, Finnhub, Yahoo).`,
             hint: 'Check Vercel logs for source-specific errors. Polygon free tier does not include options — upgrade or use another source.'
         });
 
