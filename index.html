@@ -1342,16 +1342,26 @@ function _parseApiOptionsResponse(data){
     };
 }
 
-async function fetchRealOption(ticker, currentPrice, contractType, expiryTarget){
+// Extract AI-recommended strike from option_detail string: "$600 CALL · Expires Jun 20..."
+function _parseStrikeFromDetail(optDetail){
+    if(!optDetail) return null;
+    const m = optDetail.match(/\$(\d+(?:\.\d+)?)\s+(?:CALL|PUT)/i);
+    return m ? parseFloat(m[1]) : null;
+}
+
+// recommendedStrike: if provided (from AI's option_detail), pass to API so Polygon anchors
+// its ATM search to the exact strike the AI recommended instead of pure current-price ATM.
+async function fetchRealOption(ticker, currentPrice, contractType, expiryTarget, recommendedStrike=null){
     const type    =contractType.toLowerCase()==='put'?'put':'call';
     const days    =expiryTarget==='1w'?7:expiryTarget==='90d'?90:expiryTarget==='180d'?180:30;
     const refPrice=currentPrice>0?currentPrice:0;
+    const strikeParam = recommendedStrike ? `&strike=${recommendedStrike}` : '';
 
     // ── Layer 1: Vercel serverless /api/options (v10/quoteSummary — not IP-blocked) ──
     try{
         const ctrl=new AbortController();
-        setTimeout(()=>ctrl.abort(),12000);
-        const r=await fetch(`/api/options?ticker=${ticker}&type=${type}&expiry=${expiryTarget||'30d'}`,{signal:ctrl.signal});
+        setTimeout(()=>ctrl.abort(),15000);
+        const r=await fetch(`/api/options?ticker=${ticker}&type=${type}&expiry=${expiryTarget||'30d'}${strikeParam}`,{signal:ctrl.signal});
         if(r.ok){
             const data=await r.json();
             // Accept if we have strike + any of: bid, ask, or last trade price
@@ -1507,8 +1517,11 @@ async function enrichOneCard(cardId){
     tabEls.forEach((t,i) => { if(t.classList.contains('active')) activeIdx = i; });
     const activeExpiry = EXPIRY_TARGETS[activeIdx] || '30d';
 
-    // Fetch ONLY the active tab first — prevents hammering Yahoo with 3N requests
-    const result = await fetchRealOption(idea.ticker, livePrice, optType, activeExpiry);
+    // Get AI-recommended strike for each tab (anchors Polygon search to the right contract)
+    const _recStrike = (idx) => _parseStrikeFromDetail(idea.expiry_options?.[idx]?.option_detail);
+
+    // Fetch ONLY the active tab first — prevents hammering Polygon with 3N simultaneous requests
+    const result = await fetchRealOption(idea.ticker, livePrice, optType, activeExpiry, _recStrike(activeIdx));
 
     // Store on the idea object for this tab slot
     if(idea.expiry_options && idea.expiry_options[activeIdx]){
@@ -1548,7 +1561,7 @@ async function enrichOneCard(cardId){
     // Lazily fetch remaining 2 expiry tabs in background without blocking display
     EXPIRY_TARGETS.forEach((expiry, i) => {
         if(i === activeIdx) return; // already fetched
-        fetchRealOption(idea.ticker, livePrice, optType, expiry).then(r => {
+        fetchRealOption(idea.ticker, livePrice, optType, expiry, _recStrike(i)).then(r => {
             if(!r) return;
             if(idea.expiry_options && idea.expiry_options[i]) idea.expiry_options[i]._livePrice = r;
             // Update tab button ask price if still in DOM
@@ -2189,7 +2202,8 @@ function switchCardExpiry(cardId, idx){
             od.style.lineHeight='';
             const EXPIRY_TARGETS = ['30d','90d','180d'];
             const livePrice = cardData.current_price || idea.current_price || 0;
-            fetchRealOption(idea.ticker, livePrice, optType, EXPIRY_TARGETS[idx]||'30d').then(r=>{
+            const recStrike = _parseStrikeFromDetail(opt.option_detail);
+            fetchRealOption(idea.ticker, livePrice, optType, EXPIRY_TARGETS[idx]||'30d', recStrike).then(r=>{
                 if(!r) return;
                 opt._livePrice = r;
                 const odNow=document.getElementById('od-'+cardId);
