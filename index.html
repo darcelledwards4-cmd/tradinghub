@@ -1491,10 +1491,18 @@ function buildLiveOptionHTML(o, optType){
     const subNote = o.isEstimate
         ? `<div style="font-size:10px;color:var(--muted);margin-top:1px">${sourceLabel} · IV ~${o.iv||'—'}%${oiNote}</div>`
         : `<div style="font-size:10px;color:var(--muted);margin-top:1px">${sourceLabel} · mid $${midFmt}${ivNote}${oiNote}</div>`;
+    // Option-specific stop (50% loss) and target (2× gain) based on ask/last price
+    const refPrice = parseFloat(refAsk) || 0;
+    const optStop   = refPrice > 0 ? `$${(refPrice * 0.50).toFixed(2)}` : null;
+    const optTarget = refPrice > 0 ? `$${(refPrice * 2.00).toFixed(2)}` : null;
+    const stopTargetRow = (optStop && optTarget) ? `<div style="display:flex;gap:14px;margin-top:6px;padding-top:6px;border-top:1px solid var(--border);font-size:11px;flex-wrap:wrap">
+<div>🛑 <span style="color:var(--muted);font-weight:600">Option Stop:</span> <strong style="color:var(--red)">${optStop}</strong> <span style="color:var(--muted)">(exit −50%)</span></div>
+<div>🎯 <span style="color:var(--muted);font-weight:600">Option Target:</span> <strong style="color:var(--green)">${optTarget}</strong> <span style="color:var(--muted)">(take 2×)</span></div>
+</div>` : '';
     return `${badge}
 <span style="font-weight:700;font-size:12px">$${o.strike} ${optType} · exp ${expiryFmt}</span>
 <div style="margin-top:3px;font-size:13px;font-weight:700;color:var(--text)">${buyRange}${costNote}</div>
-${subNote}`;
+${subNote}${stopTargetRow}`;
 }
 
 // Enrich ONE card with live option price — separated so switchCardDir can call it too
@@ -1905,7 +1913,16 @@ function buildCard(idea, existingCardId=null){
     const e0 = hasExpiry ? idea.expiry_options[0] : null;
     const initPot        = e0 ? (e0.potential     || idea.potential     || 'moderate')                : (idea.potential     || 'moderate');
     const initOptDetail  = e0 ? (e0.option_detail  || idea.option_detail  || '')                      : (idea.option_detail  || '');
-    const initAcct       = e0 ? (e0.account_sizing || idea.account_sizing || 'Keep it to 1 contract max') : (idea.account_sizing || 'Keep it to 1 contract max');
+    // Strip legacy "$500 account" sizing text — new scans generate proper rationale
+    const _cleanAcct = (txt) => {
+        if(!txt) return null;
+        // Detect old sizing language and replace with re-scan prompt
+        if(/\$500|risk budget|\$75|max.?loss|vertical spread|full size|1 contract max/i.test(txt))
+            return '💡 Re-scan this ticker to see trade rationale for this timeframe.';
+        return txt;
+    };
+    const initAcct = _cleanAcct(e0 ? (e0.account_sizing || idea.account_sizing) : idea.account_sizing)
+                     || 'Re-scan to see trade rationale.';
     const initEntryLow   = e0 && e0.entry_low   != null ? e0.entry_low   : idea.entry_low;
     const initEntryHigh  = e0 && e0.entry_high  != null ? e0.entry_high  : idea.entry_high;
     const initStop       = e0 && e0.stop_loss   != null ? e0.stop_loss   : idea.stop_loss;
@@ -1966,15 +1983,15 @@ function buildCard(idea, existingCardId=null){
         ${pcSection}
         <div class="card-levels">
             <div class="level-row">
-                <div class="level-left"><div class="level-icon">📥</div><div><div class="level-lbl">Enter Between</div><div class="level-hint">Buy when price reaches this zone</div></div></div>
+                <div class="level-left"><div class="level-icon">📥</div><div><div class="level-lbl">Enter Between</div><div class="level-hint">Buy the option when stock enters this zone</div></div></div>
                 <div class="level-val ev" id="el-${cardId}">$${initEntryLow} – $${initEntryHigh}</div>
             </div>
             <div class="level-row">
-                <div class="level-left"><div class="level-icon">🛑</div><div><div class="level-lbl">Get Out If It Drops Below</div><div class="level-hint">15% max loss rule — exit here</div></div></div>
+                <div class="level-left"><div class="level-icon">🛑</div><div><div class="level-lbl">Get Out If It Drops Below</div><div class="level-hint">Stock stop — exit option if stock hits here</div></div></div>
                 <div class="level-val sv" id="sl-${cardId}">$${initStop}</div>
             </div>
             <div class="level-row">
-                <div class="level-left"><div class="level-icon">🎯</div><div><div class="level-lbl">Take Profit At</div><div class="level-hint">This is your win zone — consider selling here</div></div></div>
+                <div class="level-left"><div class="level-icon">🎯</div><div><div class="level-lbl">Take Profit At</div><div class="level-hint">Stock target — consider selling option here</div></div></div>
                 <div class="level-val tv" id="tl-${cardId}">$${initTarget}</div>
             </div>
         </div>
@@ -2223,9 +2240,14 @@ function switchCardExpiry(cardId, idx){
         }
     }
 
-    // Update account sizing text
+    // Update account sizing text — strip legacy $500 sizing language
     const ac=document.getElementById('ac-'+cardId);
-    if(ac) ac.textContent=opt.account_sizing||idea.account_sizing||'';
+    if(ac){
+        const raw=opt.account_sizing||idea.account_sizing||'';
+        ac.textContent=/\$500|risk budget|\$75|max.?loss|vertical spread|full size|1 contract max/i.test(raw)
+            ? '💡 Re-scan this ticker to see trade rationale for this timeframe.'
+            : (raw || 'Re-scan to see trade rationale.');
+    }
 
     // Update potential badge
     const pb=document.getElementById('pb-'+cardId);
