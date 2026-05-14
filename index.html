@@ -1005,7 +1005,7 @@ const FILTER_META = {
 };
 
 const DISCOVER_CATS = [
-    {key:'gems',      label:'💎 Cheap Gems — Solid Companies at Good Prices',     desc:'cheap stocks under $60/share that are historically strong companies currently undervalued or recovering. Return option_type as CALL and direction as bullish'},
+    {key:'gems',      label:'💎 Cheap Gems — Solid Companies at Good Prices',     desc:'cheap stocks under $60/share that are historically strong companies currently undervalued or recovering. Return option_type as CALL and direction as bullish. CRITICAL: option premiums must be under $3.00/share (under $300/contract) — pick strikes accordingly (ATM or slightly OTM on low-priced stocks). If a stock is priced such that any reasonable CALL option would exceed $300/contract, do not include it.'},
     {key:'momentum',  label:'🚀 Momentum Movers — High Upside Right Now',          desc:'stocks showing strong bullish momentum, high upside potential, and a clear upward trend. Return option_type as CALL and direction as bullish'},
     {key:'community', label:'🔥 Community Favorites — What People Are Buying',     desc:'stocks that retail traders and investing communities are actively buying and discussing right now. Return option_type as CALL and direction as bullish'},
     {key:'putplays',  label:'📉 Put Plays — Companies Showing Weakness',           desc:'stocks showing significant weakness, breaking down technically, facing bad news or headwinds, or overextended and due for a drop. PUT setups — stocks to go DOWN. Return option_type as PUT and direction as bearish. For entry_low/entry_high use the stock price zone to enter the put. For stop set the price if stock bounces above. For target set the downside price target.'},
@@ -1560,6 +1560,18 @@ async function enrichOneCard(cardId){
     if(!odElNow) return; // card was removed from DOM
 
     if(result){
+        // Cheap Gems: hide card if real option price > $300/contract
+        const isGems = (idea.category||'').includes('Cheap Gems');
+        const contractCost = result.ask != null ? result.ask * 100 : (result.last != null ? result.last * 100 : null);
+        if(isGems && contractCost != null && contractCost > 300){
+            const cardEl = document.getElementById('cwrap-'+cardId) || document.querySelector(`[data-card-id="${cardId}"]`);
+            if(cardEl){
+                cardEl.style.display = 'none';
+                console.log('[gems] hiding card', idea.ticker, '— option cost $'+contractCost.toFixed(0)+' exceeds $300 limit');
+            }
+            return;
+        }
+
         const _activeStockTarget = idea.expiry_options?.[activeIdx]?.target || idea.target || null;
         odElNow.innerHTML = buildLiveOptionHTML(result, optType, _activeStockTarget);
         odElNow.style.lineHeight = '1.6';
@@ -2715,7 +2727,7 @@ async function scanDiscover(){
     document.getElementById('discoverSection').style.display='block';
     // Show 3 loading placeholders immediately
     const cats=[
-        {key:'gems',      label:'💎 Cheap Gems — Solid Companies at Good Prices',       desc:'cheap stocks under $60/share that are historically strong companies currently undervalued or recovering. Return option_type as CALL and direction as bullish'},
+        {key:'gems',      label:'💎 Cheap Gems — Solid Companies at Good Prices',       desc:'cheap stocks under $60/share that are historically strong companies currently undervalued or recovering. Return option_type as CALL and direction as bullish. CRITICAL: option premiums must be under $3.00/share (under $300/contract) — pick strikes accordingly (ATM or slightly OTM on low-priced stocks). If a stock is priced such that any reasonable CALL option would exceed $300/contract, do not include it.'},
         {key:'momentum',  label:'🚀 Momentum Movers — High Upside Right Now',            desc:'stocks showing strong bullish momentum, high upside potential, and a clear upward trend. Return option_type as CALL and direction as bullish'},
         {key:'community', label:'🔥 Community Favorites — What People Are Buying',       desc:'stocks that retail traders and investing communities are actively buying and discussing right now. Return option_type as CALL and direction as bullish'},
         {key:'puts',      label:'📉 Put Plays — Companies Showing Weakness',             desc:'stocks that are showing significant weakness, breaking down technically, facing bad news or headwinds, or are overextended and due for a drop. These are PUT trade setups — looking for stocks to go DOWN. Return option_type as PUT and direction as bearish. For entry_low/entry_high put the stock price zone to enter the put. For stop set the price if stock bounces above. For target set the downside price target.'},
@@ -2916,9 +2928,18 @@ window.testNews = async function(ticker='NVDA'){
     console.groupEnd();
 };
 
-// Fetch recent news articles from Finnhub (always direct — Vercel proxy is unreliable)
+// Fetch recent news articles — server-side Vercel endpoint first (reliable), proxy fallback
 async function fetchNewsArticles(ticker){
-    // ── Try Finnhub direct (needs valid key) ──
+    // ── Primary: /api/news (server-side Finnhub via Vercel env var) ──
+    try{
+        const r=await fetch(`/api/news?ticker=${encodeURIComponent(ticker)}`);
+        if(r.ok){
+            const d=await r.json();
+            if(d.articles&&d.articles.length>0) return d.articles.slice(0,6);
+        }
+    }catch(e){ console.warn('[news] /api/news failed for',ticker,e.message); }
+
+    // ── Secondary: Finnhub direct (if key available in browser — local dev) ──
     const fhKey=getFinnhubKey();
     if(fhKey){
         try{
@@ -2932,16 +2953,11 @@ async function fetchNewsArticles(ticker){
             }
         }catch(e){}
     }
-    // ── Fallback: try multiple proxy+source combos until one works ──
+
+    // ── Last resort: RSS proxy fallback (flaky, may be down) ──
     const newsProxyCandidates = [
-        // Yahoo Finance RSS (most reliable — structured feed, always returns items)
         `https://api.allorigins.win/raw?url=${encodeURIComponent(`https://feeds.finance.yahoo.com/rss/2.0/headline?s=${encodeURIComponent(ticker)}&region=US&lang=en-US`)}`,
-        // allorigins.win + Google News
         `https://api.allorigins.win/raw?url=${encodeURIComponent(`https://news.google.com/rss/search?q=${encodeURIComponent(ticker+' stock')}&hl=en-US&gl=US&ceid=US:en`)}`,
-        // corsproxy.io + Bing News RSS
-        `https://corsproxy.io/?url=${encodeURIComponent(`https://www.bing.com/news/search?q=${encodeURIComponent(ticker+' stock')}&format=RSS`)}`,
-        // allorigins.win + Bing News RSS
-        `https://api.allorigins.win/raw?url=${encodeURIComponent(`https://www.bing.com/news/search?q=${encodeURIComponent(ticker+' stock')}&format=RSS`)}`,
     ];
 
     function parseRssXml(xmlText, sourceName){
