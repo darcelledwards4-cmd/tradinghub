@@ -482,16 +482,36 @@ module.exports = async function handler(req, res) {
     const expiryDays = Math.round((new Date(targetDateStr).getTime() / 1000 - now) / 86400);
 
     // Get current price for ATM strike selection
+    // Try Polygon snapshot first (reliable from Vercel), fall back to Yahoo
     let currentPrice = 0;
-    try {
-        const qr = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?interval=1m&range=1d`, {
-            headers: { 'User-Agent': UA, 'Accept': 'application/json', 'Referer': 'https://finance.yahoo.com/' },
-        });
-        if (qr.ok) {
-            const qd = await qr.json();
-            currentPrice = qd?.chart?.result?.[0]?.meta?.regularMarketPrice || 0;
-        }
-    } catch(e) {}
+    const _priceKey = process.env.MASSIVE_API_KEY;
+    if (_priceKey) {
+        try {
+            const snapR = await fetch(
+                `https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/tickers/${symbol}?apiKey=${_priceKey}`,
+                { headers: { 'User-Agent': UA, 'Accept': 'application/json' } }
+            );
+            if (snapR.ok) {
+                const snapD = await snapR.json();
+                const t = snapD?.ticker;
+                currentPrice = t?.day?.c || t?.lastTrade?.p || t?.prevDay?.c || 0;
+                if (currentPrice) console.log(`[options] price from Polygon snapshot: ${symbol} = $${currentPrice}`);
+            }
+        } catch(e) {}
+    }
+    if (!currentPrice) {
+        try {
+            const qr = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?interval=1m&range=1d`, {
+                headers: { 'User-Agent': UA, 'Accept': 'application/json', 'Referer': 'https://finance.yahoo.com/' },
+            });
+            if (qr.ok) {
+                const qd = await qr.json();
+                currentPrice = qd?.chart?.result?.[0]?.meta?.regularMarketPrice || 0;
+                if (currentPrice) console.log(`[options] price from Yahoo fallback: ${symbol} = $${currentPrice}`);
+            }
+        } catch(e) {}
+    }
+    if (!currentPrice) console.error(`[options] WARNING: could not get current price for ${symbol} — ATM selection will be wrong`);
 
     const refPrice = targetStrike || currentPrice;
 
