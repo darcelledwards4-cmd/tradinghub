@@ -218,6 +218,83 @@ async function fetchTwelvedataOptions(symbol, contractType, targetDateStr, curre
     };
 }
 
+// ── Finnhub options chain ────────────────────────────────────────────────────
+// Free tier: 60 req/min. /stock/option-chain returns bid/ask/last per contract.
+async function fetchFinnhubOptions(symbol, contractType, targetDateStr, currentPrice, apiKey) {
+    const url = `https://finnhub.io/api/v1/stock/option-chain?symbol=${symbol}&token=${apiKey}`;
+    const ctrl = new AbortController();
+    setTimeout(() => ctrl.abort(), 12000);
+
+    let data;
+    try {
+        const r = await fetch(url, { headers: { 'User-Agent': UA, 'Accept': 'application/json' }, signal: ctrl.signal });
+        if (!r.ok) {
+            console.error(`[options] Finnhub ${r.status}`);
+            return null;
+        }
+        data = await r.json();
+    } catch(e) {
+        console.error('[options] Finnhub fetch error:', e.message);
+        return null;
+    }
+
+    if (!data.data || !data.data.length) {
+        console.error('[options] Finnhub: no option data for', symbol);
+        return null;
+    }
+
+    // Pick expiry closest to target date
+    const targetMs = new Date(targetDateStr).getTime();
+    const bestExpiry = data.data.reduce((a, b) => {
+        const da = Math.abs(new Date(a.expirationDate).getTime() - targetMs);
+        const db = Math.abs(new Date(b.expirationDate).getTime() - targetMs);
+        return db < da ? b : a;
+    });
+
+    const key = contractType === 'put' ? 'PUT' : 'CALL';
+    const contracts = bestExpiry.options?.[key] ?? [];
+    if (!contracts.length) {
+        console.error('[options] Finnhub: no', key, 'contracts for', symbol, bestExpiry.expirationDate);
+        return null;
+    }
+
+    // Find ATM contract
+    const ref = currentPrice || 0;
+    const best = contracts.reduce((a, b) => {
+        const sa = Math.abs((a.strike || 0) - ref);
+        const sb = Math.abs((b.strike || 0) - ref);
+        return sb < sa ? b : a;
+    });
+
+    const bid  = best.bid  != null ? parseFloat(best.bid)  : null;
+    const ask  = best.ask  != null ? parseFloat(best.ask)  : null;
+    const last = best.lastPrice != null ? parseFloat(best.lastPrice) : null;
+    const iv   = best.impliedVolatility != null ? parseFloat((best.impliedVolatility * 100).toFixed(1)) : null;
+
+    const priceType = (bid != null || ask != null) ? 'live' : last != null ? 'last_trade' : null;
+    if (priceType == null) {
+        console.error('[options] Finnhub: no price data for best contract strike', best.strike);
+        return null;
+    }
+
+    console.log(`[options] ✓ Finnhub ${symbol} ${key} ${bestExpiry.expirationDate} strike=${best.strike} bid=${bid} ask=${ask} last=${last}`);
+
+    return {
+        strike:         parseFloat(best.strike),
+        expiry:         bestExpiry.expirationDate,
+        bid, ask,
+        mid:            bid != null && ask != null ? parseFloat(((bid + ask) / 2).toFixed(2)) : null,
+        last,
+        volume:         parseInt(best.volume) || 0,
+        openInterest:   parseInt(best.openInterest) || 0,
+        iv,
+        inTheMoney:     best.inTheMoney ?? false,
+        contractSymbol: best.contractName ?? '',
+        priceType,
+        source:         'finnhub',
+    };
+}
+
 // ── Yahoo Finance v10/quoteSummary fallback ──────────────────────────────────
 const _credCache = { crumb: null, cookie: null, expires: 0 };
 
@@ -386,7 +463,30 @@ module.exports = async function handler(req, res) {
             console.warn('[options] TwelveData failed, trying Yahoo v10 fallback');
         }
 
-        // ── Source 3: Yahoo Finance v10/quoteSummary ──────────────────
+        // ── Source 3: Finnhub (FINNHUB_API_KEY) ───────────────────────
+        const finnhubKey = process.env.FINNHUB_API_KEY;
+        if (finnhubKey) {
+            const result = await fetchFinnhubOptions(symbol, contractType, targetDateStr, refPrice, finnhubKey);
+            if (result) {
+                return res.status(200).json({
+                    ticker: symbol, contractType, currentPrice,
+                    targetExpiry: result.expiry,
+                    best: {
+                        strike: result.strike, expiry: result.expiry,
+                        bid: result.bid, ask: result.ask, mid: result.mid,
+                        last: result.last, volume: result.volume,
+                        openInterest: result.openInterest, iv: result.iv,
+                        inTheMoney: result.inTheMoney, contractSymbol: result.contractSymbol,
+                        priceType: result.priceType,
+                    },
+                    fetchedAt: new Date().toISOString(),
+                    source: 'finnhub',
+                });
+            }
+            console.warn('[options] Finnhub failed, trying Yahoo v10 fallback');
+        }
+
+        // ── Source 4: Yahoo Finance v10/quoteSummary ──────────────────
         const yahooResult = await fetchYahooV10Options(symbol, contractType, expiryDays);
         if (yahooResult) {
             return res.status(200).json({
@@ -405,8 +505,8 @@ module.exports = async function handler(req, res) {
         }
 
         return res.status(502).json({
-            error: `Options data unavailable for ${symbol}. MASSIVE_API_KEY not set or not working.`,
-            hint: 'Add MASSIVE_API_KEY to Vercel project Settings → Environment Variables, then redeploy'
+            error: `Options data unavailable for ${symbol}. All 4 sources failed (Polygon, Twelve Data, Finnhub, Yahoo).`,
+            hint: 'Check Vercel logs for source-specific errors. Polygon free tier does not include options — upgrade or use another source.'
         });
 
     } catch(err) {
