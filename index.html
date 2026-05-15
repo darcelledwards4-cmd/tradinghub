@@ -1596,32 +1596,51 @@ async function enrichOneCard(cardId){
         console.warn('[options] enrichOneCard failed for', idea.ticker, optType, activeExpiry);
     }
 
-    // Lazily fetch remaining 2 expiry tabs in background without blocking display
-    EXPIRY_TARGETS.forEach((expiry, i) => {
-        if(i === activeIdx) return; // already fetched
-        fetchRealOption(idea.ticker, livePrice, optType, expiry, _recStrike(i)).then(r => {
-            if(!r) return;
-            if(idea.expiry_options && idea.expiry_options[i]) idea.expiry_options[i]._livePrice = r;
-            // Update tab button ask price if still in DOM
-            const tab = document.querySelectorAll(`#etabs-${cardId} .expiry-tab`)[i];
-            if(tab && r.ask != null){
-                const existing = tab.querySelector('.opt-live-price');
-                const html = `<div class="opt-live-price" style="font-size:10px;font-weight:800;color:var(--green);margin-top:1px">ask $${r.ask.toFixed(2)}</div>`;
-                if(!existing) tab.insertAdjacentHTML('beforeend', html);
-                else existing.outerHTML = html;
-            }
-        }).catch(()=>{});
-    });
+    // Fetch remaining 2 expiry tabs sequentially in background — staggered, not simultaneous.
+    // Simultaneous fires overload the API; sequential with delay keeps the queue clear.
+    (async () => {
+        for(let i = 0; i < EXPIRY_TARGETS.length; i++){
+            if(i === activeIdx) continue; // already fetched above
+            await new Promise(r => setTimeout(r, 700)); // stagger between background tabs
+            try{
+                const r = await fetchRealOption(idea.ticker, livePrice, optType, EXPIRY_TARGETS[i], _recStrike(i));
+                if(!r) continue;
+                if(idea.expiry_options && idea.expiry_options[i]) idea.expiry_options[i]._livePrice = r;
+                // Update tab button ask price if still in DOM
+                const tab = document.querySelectorAll(`#etabs-${cardId} .expiry-tab`)[i];
+                if(tab && r.ask != null){
+                    const existing = tab.querySelector('.opt-live-price');
+                    const html = `<div class="opt-live-price" style="font-size:10px;font-weight:800;color:var(--green);margin-top:1px">ask $${r.ask.toFixed(2)}</div>`;
+                    if(!existing) tab.insertAdjacentHTML('beforeend', html);
+                    else existing.outerHTML = html;
+                }
+            }catch(e){}
+        }
+    })();
 }
 
-// Enrich a batch of cards — fully sequential to avoid Polygon rate limits.
-// Each card awaits before the next starts, so we never fire 2+ simultaneous Polygon calls.
-async function enrichCardsWithOptionPrices(cardIds){
-    for(let i = 0; i < cardIds.length; i++){
-        await enrichOneCard(cardIds[i]).catch(e => console.warn('[options] batch error:', e.message));
-        // Small gap between cards for extra breathing room
-        if(i < cardIds.length - 1) await new Promise(r => setTimeout(r, 400));
+// ── Global option-enrichment queue ───────────────────────────────────────────
+// All enrichCardsWithOptionPrices calls feed into one shared FIFO queue so that
+// calls-section, puts-section, and discover don't fire simultaneously.
+const _enrichQueue = [];
+let   _enrichRunning = false;
+
+async function _runEnrichQueue(){
+    if(_enrichRunning) return;
+    _enrichRunning = true;
+    while(_enrichQueue.length){
+        const cardId = _enrichQueue.shift();
+        // Skip if card was removed from DOM since it was queued
+        if(!document.getElementById('cwrap-'+cardId)) continue;
+        await enrichOneCard(cardId).catch(e => console.warn('[options] queue error:', e.message));
+        if(_enrichQueue.length) await new Promise(r => setTimeout(r, 500));
     }
+    _enrichRunning = false;
+}
+
+function enrichCardsWithOptionPrices(cardIds){
+    cardIds.forEach(id => { if(!_enrichQueue.includes(id)) _enrichQueue.push(id); });
+    _runEnrichQueue(); // start draining if not already running (no await — fire and forget)
 }
 
 // Debug helper — run window.testOptions('NVDA','call') from console
