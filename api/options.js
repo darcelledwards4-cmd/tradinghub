@@ -7,6 +7,20 @@
 
 const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 
+// ── In-memory cache (survives warm Vercel instances, 8-min TTL) ──────────────
+const _optCache = new Map();
+const OPT_TTL = 8 * 60 * 1000; // 8 minutes
+function _cacheKey(symbol, contractType, targetDateStr) {
+    return `${symbol}|${contractType}|${targetDateStr}`;
+}
+function _cacheGet(key) {
+    const entry = _optCache.get(key);
+    if (!entry) return null;
+    if (Date.now() - entry.ts > OPT_TTL) { _optCache.delete(key); return null; }
+    return entry.data;
+}
+function _cacheSet(key, data) { _optCache.set(key, { data, ts: Date.now() }); }
+
 // ── Massive options fetch ────────────────────────────────────────────────────
 async function fetchMassiveOptions(symbol, contractType, targetDate, currentPrice, apiKey) {
     const targetMs = new Date(targetDate).getTime();
@@ -523,50 +537,48 @@ module.exports = async function handler(req, res) {
 
     const refPrice = targetStrike || currentPrice;
 
+    // ── Cache check ───────────────────────────────────────────────────
+    const cKey = _cacheKey(symbol, contractType, targetDateStr);
+    const cached = _cacheGet(cKey);
+    if (cached) {
+        console.log(`[options] cache hit for ${symbol} ${contractType} ${targetDateStr}`);
+        return res.status(200).json({ ...cached, fromCache: true });
+    }
+
     try {
-        // ── Source 1: Massive (MASSIVE_API_KEY) ───────────────────────
+        // Helper to build, cache, and return a successful response
+        const respond = (result, source) => {
+            const payload = {
+                ticker: symbol, contractType, currentPrice,
+                targetExpiry: result.expiry,
+                best: {
+                    strike: result.strike, expiry: result.expiry,
+                    bid: result.bid, ask: result.ask, mid: result.mid,
+                    last: result.last, volume: result.volume,
+                    openInterest: result.openInterest ?? result.oi, iv: result.iv,
+                    inTheMoney: result.inTheMoney, contractSymbol: result.contractSymbol ?? result.ticker ?? '',
+                    priceType: result.priceType,
+                },
+                fetchedAt: new Date().toISOString(),
+                source,
+            };
+            _cacheSet(cKey, payload);
+            return res.status(200).json(payload);
+        };
+
+        // ── Source 1: Massive (Polygon — MASSIVE_API_KEY) ────────────
         const massiveKey = process.env.MASSIVE_API_KEY;
         if (massiveKey) {
             const result = await fetchMassiveOptions(symbol, contractType, targetDateStr, refPrice, massiveKey);
-            if (result) {
-                return res.status(200).json({
-                    ticker: symbol, contractType, currentPrice,
-                    targetExpiry: result.expiry,
-                    best: {
-                        strike: result.strike, expiry: result.expiry,
-                        bid: result.bid, ask: result.ask, mid: result.mid,
-                        last: result.last, volume: result.volume,
-                        openInterest: result.openInterest, iv: result.iv,
-                        inTheMoney: result.inTheMoney, contractSymbol: result.contractSymbol,
-                    },
-                    fetchedAt: new Date().toISOString(),
-                    source: 'massive',
-                });
-            }
+            if (result) return respond(result, 'massive');
             console.warn('[options] Massive failed, trying Tradier');
         }
 
         // ── Source 2: Tradier (TRADIER_API_KEY) ───────────────────────
-        // Free sandbox at tradier.com/create/developer — real bid/ask, 15-min delayed
         const tradierKey = process.env.TRADIER_API_KEY;
         if (tradierKey) {
             const result = await fetchTradierOptions(symbol, contractType, targetDateStr, refPrice, tradierKey);
-            if (result) {
-                return res.status(200).json({
-                    ticker: symbol, contractType, currentPrice,
-                    targetExpiry: result.expiry,
-                    best: {
-                        strike: result.strike, expiry: result.expiry,
-                        bid: result.bid, ask: result.ask, mid: result.mid,
-                        last: result.last, volume: result.volume,
-                        openInterest: result.openInterest, iv: result.iv,
-                        inTheMoney: result.inTheMoney, contractSymbol: result.contractSymbol,
-                        priceType: result.priceType,
-                    },
-                    fetchedAt: new Date().toISOString(),
-                    source: 'tradier',
-                });
-            }
+            if (result) return respond(result, 'tradier');
             console.warn('[options] Tradier failed, trying Twelve Data');
         }
 
@@ -574,65 +586,21 @@ module.exports = async function handler(req, res) {
         const twelvedataKey = process.env.TWELVEDATA_API_KEY;
         if (twelvedataKey) {
             const result = await fetchTwelvedataOptions(symbol, contractType, targetDateStr, refPrice, twelvedataKey);
-            if (result) {
-                return res.status(200).json({
-                    ticker: symbol, contractType, currentPrice,
-                    targetExpiry: result.expiry,
-                    best: {
-                        strike: result.strike, expiry: result.expiry,
-                        bid: result.bid, ask: result.ask, mid: result.mid,
-                        last: result.last, volume: result.volume,
-                        openInterest: result.openInterest, iv: result.iv,
-                        inTheMoney: result.inTheMoney, contractSymbol: result.contractSymbol,
-                        priceType: result.priceType,
-                    },
-                    fetchedAt: new Date().toISOString(),
-                    source: 'twelvedata',
-                });
-            }
-            console.warn('[options] TwelveData failed, trying Yahoo v10 fallback');
+            if (result) return respond(result, 'twelvedata');
+            console.warn('[options] TwelveData failed, trying Finnhub');
         }
 
-        // ── Source 3: Finnhub (FINNHUB_API_KEY) ───────────────────────
+        // ── Source 4: Finnhub (FINNHUB_API_KEY) ───────────────────────
         const finnhubKey = process.env.FINNHUB_API_KEY;
         if (finnhubKey) {
             const result = await fetchFinnhubOptions(symbol, contractType, targetDateStr, refPrice, finnhubKey);
-            if (result) {
-                return res.status(200).json({
-                    ticker: symbol, contractType, currentPrice,
-                    targetExpiry: result.expiry,
-                    best: {
-                        strike: result.strike, expiry: result.expiry,
-                        bid: result.bid, ask: result.ask, mid: result.mid,
-                        last: result.last, volume: result.volume,
-                        openInterest: result.openInterest, iv: result.iv,
-                        inTheMoney: result.inTheMoney, contractSymbol: result.contractSymbol,
-                        priceType: result.priceType,
-                    },
-                    fetchedAt: new Date().toISOString(),
-                    source: 'finnhub',
-                });
-            }
+            if (result) return respond(result, 'finnhub');
             console.warn('[options] Finnhub failed, trying Yahoo v10 fallback');
         }
 
-        // ── Source 4: Yahoo Finance v10/quoteSummary ──────────────────
+        // ── Source 5: Yahoo Finance v10/quoteSummary (no key needed) ─
         const yahooResult = await fetchYahooV10Options(symbol, contractType, expiryDays);
-        if (yahooResult) {
-            return res.status(200).json({
-                ticker: symbol, contractType, currentPrice,
-                targetExpiry: yahooResult.expiry,
-                best: {
-                    strike: yahooResult.strike, expiry: yahooResult.expiry,
-                    bid: yahooResult.bid, ask: yahooResult.ask, mid: yahooResult.mid,
-                    last: yahooResult.last, volume: yahooResult.volume,
-                    openInterest: yahooResult.openInterest, iv: yahooResult.iv,
-                    inTheMoney: yahooResult.inTheMoney, contractSymbol: yahooResult.contractSymbol,
-                },
-                fetchedAt: new Date().toISOString(),
-                source: 'yahoo_v10',
-            });
-        }
+        if (yahooResult) return respond(yahooResult, 'yahoo_v10');
 
         return res.status(502).json({
             error: `Options data unavailable for ${symbol}. All sources failed (Polygon, Tradier, Twelve Data, Finnhub, Yahoo).`,

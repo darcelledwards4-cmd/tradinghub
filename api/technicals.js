@@ -11,12 +11,31 @@
  * Requires: MASSIVE_API_KEY (Polygon), FINNHUB_API_KEY (optional but recommended)
  */
 
+// ── In-memory cache (1-hour TTL — technicals don't change minute to minute) ──
+const _techCache = new Map();
+const TECH_TTL = 60 * 60 * 1000; // 1 hour
+function _techCacheGet(sym) {
+    const e = _techCache.get(sym);
+    if (!e) return null;
+    if (Date.now() - e.ts > TECH_TTL) { _techCache.delete(sym); return null; }
+    return e.data;
+}
+function _techCacheSet(sym, data) { _techCache.set(sym, { data, ts: Date.now() }); }
+
 module.exports = async function handler(req, res) {
     res.setHeader('Access-Control-Allow-Origin', '*');
     const { ticker } = req.query;
     if (!ticker) return res.status(400).json({ error: 'ticker required' });
 
-    const sym     = ticker.toUpperCase().trim();
+    const sym = ticker.toUpperCase().trim();
+
+    // Cache hit — return immediately, no API calls needed
+    const cached = _techCacheGet(sym);
+    if (cached) {
+        console.log(`[technicals] cache hit for ${sym}`);
+        return res.status(200).json({ ...cached, fromCache: true });
+    }
+
     const polyKey = process.env.MASSIVE_API_KEY;
     const fhKey   = process.env.FINNHUB_API_KEY;
 
@@ -108,7 +127,7 @@ module.exports = async function handler(req, res) {
 
     const summary = parts.length ? parts.join('; ') : 'No technical data available';
 
-    return res.status(200).json({
+    const payload = {
         ticker: sym,
         currentClose: currentClose ? round2(currentClose) : null,
         rsi:   rsi   ? round1(rsi)   : null,
@@ -120,8 +139,11 @@ module.exports = async function handler(req, res) {
         vol10Avg: vol10Avg ? Math.round(vol10Avg) : null,
         analystTarget, analystHigh, analystLow, analystCount,
         nextEarnings, daysToEarnings,
-        summary,   // ready-to-use string for AI prompts
-    });
+        summary,
+    };
+
+    _techCacheSet(sym, payload);   // cache for 1 hour
+    return res.status(200).json(payload);
 };
 
 // ── RSI(14) using Wilder's smoothing ───────────────────────────────────────

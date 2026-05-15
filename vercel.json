@@ -1,5 +1,13 @@
 {
   "rewrites": [
     { "source": "/((?!api/).*)", "destination": "/index.html" }
-  ]
+  ],
+  "functions": {
+    "api/options.js":    { "maxDuration": 45 },
+    "api/technicals.js": { "maxDuration": 30 },
+    "api/news.js":       { "maxDuration": 20 },
+    "api/claude.js":     { "maxDuration": 55 },
+    "api/quotes.js":     { "maxDuration": 15 },
+    "api/quote.js":      { "maxDuration": 15 }
+  }
 }
