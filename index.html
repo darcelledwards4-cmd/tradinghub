@@ -897,8 +897,8 @@
             <div class="fg"><label>Strike Price ($)</label><input type="number" id="m-strike" placeholder="130" /></div>
             <div class="fg"><label>Expiration Date</label><input type="date" id="m-exp" /></div>
             <div class="fg"><label>Number of Contracts</label><input type="number" id="m-qty" value="1" min="1" /></div>
-            <div class="fg"><label>What I Paid Per Contract ($)</label><input type="number" id="m-entry" placeholder="2.50" step="0.01" /></div>
-            <div class="fg"><label>What I Sold For (leave blank if still open)</label><input type="number" id="m-exit" placeholder="—" step="0.01" /></div>
+            <div class="fg"><label>Option Price I Paid (per contract, e.g. $2.50 = $250 total)</label><input type="number" id="m-entry" placeholder="2.50" step="0.01" /></div>
+            <div class="fg"><label>Option Price I Sold At (leave blank if still open)</label><input type="number" id="m-exit" placeholder="—" step="0.01" /></div>
             <div class="fg span2"><label>Why I Took This Trade</label><textarea id="m-thesis" placeholder="e.g. NVDA bouncing off $120 support, big call flow, strong sector momentum..."></textarea></div>
         </div>
         <div class="mactions">
@@ -920,11 +920,11 @@
             <div class="fg"><label>Strike Price ($)</label><input type="number" id="e-strike" placeholder="130" /></div>
             <div class="fg"><label>Expiration Date</label><input type="date" id="e-exp" /></div>
             <div class="fg"><label>Number of Contracts</label><input type="number" id="e-qty" value="1" min="1" /></div>
-            <div class="fg"><label>What I Paid Per Contract ($) — your actual entry</label><input type="number" id="e-entry" placeholder="2.50" step="0.01" /></div>
+            <div class="fg"><label>Option Price I Paid (per contract, e.g. $2.50 = $250 total)</label><input type="number" id="e-entry" placeholder="2.50" step="0.01" /></div>
             <div class="fg"><label>Stock Price When I Entered ($)</label><input type="number" id="e-stock-entry" placeholder="143.00" step="0.01" /></div>
-            <div class="fg"><label>Stop Loss — stock price ($)</label><input type="number" id="e-stop" placeholder="138.00" step="0.01" /></div>
-            <div class="fg"><label>Price Target — stock price ($)</label><input type="number" id="e-target" placeholder="155.00" step="0.01" /></div>
-            <div class="fg"><label>What I Sold For (leave blank if still open)</label><input type="number" id="e-exit" placeholder="—" step="0.01" /></div>
+            <div class="fg"><label>Stop Loss — option contract price ($) · e.g. exit if option drops to $1.25</label><input type="number" id="e-stop" placeholder="1.25" step="0.01" /></div>
+            <div class="fg"><label>Take Profit Target — option contract price ($) · e.g. sell if option hits $5.00</label><input type="number" id="e-target" placeholder="5.00" step="0.01" /></div>
+            <div class="fg"><label>Option Price I Sold At (leave blank if still open)</label><input type="number" id="e-exit" placeholder="—" step="0.01" /></div>
             <div class="fg"><label>Status</label><select id="e-status"><option value="Open">Open</option><option value="Closed">Closed</option></select></div>
             <div class="fg span2"><label>Why I Took This Trade</label><textarea id="e-thesis" placeholder="e.g. bouncing off support, strong momentum..."></textarea></div>
         </div>
@@ -3953,7 +3953,7 @@ function buildJournalCard(trade){
     const chg=parseFloat(trade.price_change||0);
     const lastChecked=trade.last_checked?'Updated '+new Date(trade.last_checked).toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'}):'Tap ⟳ Refresh Analysis to check';
     const analyzingHtml=trade._analyzing?`<div class="j-analyzing-row"><div class="spinner" style="width:11px;height:11px;border-width:2px"></div>Analyzing with live prices &amp; news...</div>`:'';
-    const hasLevels=trade.entry_low||trade.stop_loss||trade.target;
+    const hasLevels=trade.entry||trade.stop_loss||trade.target;
     return`<div class="j-trade-card">
         <div class="j-rec-banner ${bannerCls}">
             <span>${bannerIcon}</span>
@@ -3971,9 +3971,9 @@ function buildJournalCard(trade){
                 </div>
             </div>
             ${hasLevels?`<div class="j-lvl-row">
-                <div class="j-lvl"><div class="j-lvl-lbl">Entry Zone</div><div class="j-lvl-val" style="font-size:11px">$${trade.entry_low||'?'}–$${trade.entry_high||'?'}</div></div>
-                <div class="j-lvl"><div class="j-lvl-lbl">Stop Loss</div><div class="j-lvl-val" style="color:var(--red)">$${trade.stop_loss||'?'}</div></div>
-                <div class="j-lvl"><div class="j-lvl-lbl">Target</div><div class="j-lvl-val" style="color:var(--green)">$${trade.target||'?'}</div></div>
+                <div class="j-lvl"><div class="j-lvl-lbl">Paid / Contract</div><div class="j-lvl-val">$${parseFloat(trade.entry||0).toFixed(2)}</div></div>
+                <div class="j-lvl"><div class="j-lvl-lbl">Contract Stop</div><div class="j-lvl-val" style="color:var(--red)">${trade.stop_loss?'$'+trade.stop_loss:'—'}</div></div>
+                <div class="j-lvl"><div class="j-lvl-lbl">Contract Target</div><div class="j-lvl-val" style="color:var(--green)">${trade.target?'$'+trade.target:'—'}</div></div>
             </div>`:''}
             ${trade.option_summary?`<div class="j-action-box" style="border-left-color:var(--blue)">📊 ${trade.option_summary}</div>`:''}
             ${trade.action?`<div class="j-action-box">💡 ${trade.action}</div>`:''}
@@ -3999,21 +3999,36 @@ function journalAnalysisPrompt(trade,currentPrice,priceChange,newsText,optData){
     const target=parseFloat(trade.target)||0;
     const entryPrice=parseFloat(trade.stock_price_at_entry)||0;
 
-    // Compute factual price relationships so Claude cannot get them wrong
-    const priceVsStop = stopLoss>0
-        ? (isCall
-            ? (currentPrice>stopLoss ? `ABOVE stop ($${stopLoss}) — thesis intact` : `BELOW stop ($${stopLoss}) — stop triggered, consider exit`)
-            : (currentPrice<stopLoss ? `BELOW stop ($${stopLoss}) — thesis intact` : `ABOVE stop ($${stopLoss}) — stop triggered, consider exit`))
-        : 'Stop level not set';
-    const priceVsTarget = target>0
-        ? (isCall
-            ? (currentPrice>=target ? `AT or ABOVE target ($${target}) — consider taking profit` : `Below target ($${target}), $${(target-currentPrice).toFixed(2)} to go`)
-            : (currentPrice<=target ? `AT or BELOW target ($${target}) — consider taking profit` : `Above target ($${target}), $${(currentPrice-target).toFixed(2)} to go`))
-        : 'Target not set';
-    const priceVsEntry = entryPrice>0
+    // stop_loss and target are NOW option contract prices (not stock prices)
+    // Compare them against the live option price from optData
+    const liveOptPrice = optData ? parseFloat(optData.ask ?? optData.mid ?? optData.last ?? 0) : 0;
+    const optEntryPrice = parseFloat(trade.entry||0); // what was paid per contract
+
+    // Option P&L vs entry
+    const optPnLPct = optEntryPrice>0 && liveOptPrice>0
+        ? ((liveOptPrice-optEntryPrice)/optEntryPrice*100).toFixed(1)
+        : null;
+
+    // Stop/target vs current option price
+    const priceVsStop = stopLoss>0 && liveOptPrice>0
+        ? (liveOptPrice > stopLoss
+            ? `Option at $${liveOptPrice.toFixed(2)} is ABOVE stop ($${stopLoss}) — still in range`
+            : `Option at $${liveOptPrice.toFixed(2)} is AT OR BELOW stop ($${stopLoss}) — stop triggered, exit recommended`)
+        : stopLoss>0 ? `Stop set at $${stopLoss}/contract — live option price not available`
+        : 'No contract stop set';
+
+    const priceVsTarget = target>0 && liveOptPrice>0
+        ? (liveOptPrice >= target
+            ? `Option at $${liveOptPrice.toFixed(2)} has REACHED target ($${target}) — consider taking profit`
+            : `Option at $${liveOptPrice.toFixed(2)}, needs to reach $${target} ($${(target-liveOptPrice).toFixed(2)} to go)`)
+        : target>0 ? `Target set at $${target}/contract — live option price not available`
+        : 'No contract target set';
+
+    // Stock price movement context
+    const stockVsEntry = entryPrice>0
         ? (currentPrice>entryPrice
-            ? `Up $${(currentPrice-entryPrice).toFixed(2)} from entry ($${entryPrice})`
-            : `Down $${(entryPrice-currentPrice).toFixed(2)} from entry ($${entryPrice})`)
+            ? `Stock up $${(currentPrice-entryPrice).toFixed(2)} from when trade was entered ($${entryPrice})`
+            : `Stock down $${(entryPrice-currentPrice).toFixed(2)} from when trade was entered ($${entryPrice})`)
         : '';
 
     // Build live option data block
@@ -4046,27 +4061,29 @@ INTERPRETING THE GREEKS FOR YOUR RECOMMENDATION:
 - Use Greeks to explain the urgency or lack thereof in your recommendation.`;
     }
 
-    return `You are monitoring an active options trade.
+    return `You are monitoring an active options trade for a beginner trader.
 
 Trade: ${trade.ticker} ${dir}
-Strike: $${trade.strike||'?'}, Expires: ${trade.exp||'?'}
-Stop loss: $${trade.stop_loss||'?'} | Target: $${trade.target||'?'}
-Original thesis: "${trade.thesis||'Not recorded'}"
+Option contract: $${trade.strike||'?'} strike · Expires ${trade.exp||'?'}
+Contracts held: ${trade.qty||1} × $${optEntryPrice.toFixed(2)} paid = $${(optEntryPrice*(trade.qty||1)*100).toFixed(0)} total cost
 
-CURRENT FACTS (use these exactly — do not contradict them):
-- Current stock price: $${currentPrice} (${priceChange>=0?'+':''}${parseFloat(priceChange||0).toFixed(2)}% today)
-- vs stop: ${priceVsStop}
-- vs target: ${priceVsTarget}
-${priceVsEntry?'- vs entry: '+priceVsEntry:''}
+CURRENT FACTS — use these exactly, do not contradict them:
+- Stock price now: $${currentPrice} (${priceChange>=0?'+':''}${parseFloat(priceChange||0).toFixed(2)}% today)
+${stockVsEntry?'- Stock vs entry: '+stockVsEntry:''}
+- Option contract now: ${liveOptPrice>0?'$'+liveOptPrice.toFixed(2)+' per contract':'price not available'}
+${optPnLPct!=null?'- Option P&L: '+optPnLPct+'% vs entry price of $'+optEntryPrice.toFixed(2):''}
+- vs contract stop ($${stopLoss||'not set'}): ${priceVsStop}
+- vs contract target ($${target||'not set'}): ${priceVsTarget}
 ${optBlock}
 ${newsText?'\nRecent news:\n'+newsText:'No recent news available.'}
 
-Based on ALL the facts above — including option Greeks if provided — assess whether to hold, adjust, or exit.
-Your reason MUST be consistent with the numbers. Do not say price is "above stop" if it is below stop.
-If Greeks are available, factor them into the recommendation (e.g. high theta = time pressure, low delta = needs big move).
+Based on ALL the facts above, assess whether to hold, adjust, or exit.
+CRITICAL: base stop/target assessment on the OPTION CONTRACT PRICE, not the stock price.
+Do not contradict the numbers. If stop is triggered, recommend exit.
+If Greeks are available, use them to explain urgency (theta decay, delta proximity, IV risk).
 
 Return ONLY this JSON (no markdown):
-{"recommendation":"hold","reason":"2-3 sentences — cite specific price vs stop/target AND at least one Greek if available","rating":"moderate","action":"1 specific sentence: what to do right now (e.g. hold, set a price alert, exit if theta decay outpaces the move)","option_summary":"1 sentence plain-English summary of the option health based on price + Greeks"}
+{"recommendation":"hold","reason":"2-3 sentences — reference the actual option price vs stop/target AND at least one Greek if available","rating":"moderate","action":"1 specific actionable sentence (e.g. 'Hold — set an alert to exit if option drops below $1.50')","option_summary":"1 plain-English sentence summarizing option health: current price, P&L%, and key Greek insight"}
 
 recommendation: "hold", "adjust", or "exit" only
 rating: "high" (trade working well), "moderate" (mixed), "low" (struggling), or "exit" (stop hit or thesis broken)`;
@@ -4076,23 +4093,28 @@ async function fetchLiveOptionData(trade){
     if(!trade.ticker||!trade.exp) return null;
     try{
         const type=(trade.type||'CALL').toLowerCase();
-        const url=`/api/options?ticker=${encodeURIComponent(trade.ticker)}&type=${type}&expiry=${encodeURIComponent(trade.exp)}`;
+        // Pass the actual logged strike so Polygon finds this specific contract, not just ATM
+        const strikeParam = trade.strike ? `&strike=${encodeURIComponent(trade.strike)}` : '';
+        const url=`/api/options?ticker=${encodeURIComponent(trade.ticker)}&type=${type}&expiry=${encodeURIComponent(trade.exp)}${strikeParam}`;
         const r=await fetch(url);
         if(!r.ok) return null;
         const data=await r.json();
         // If Greeks are null (free Polygon tier) but we have IV, estimate via Black-Scholes
         if(data && data.iv != null && data.delta == null){
-            const S = parseFloat(trade.current_price||trade.stock_price_at_entry||0);
+            // Use current price from the running analysis, or fall back to stock_price_at_entry
+            const S = parseFloat(trade._liveStockPrice||trade.current_price||trade.stock_price_at_entry||0);
             const K = parseFloat(data.strike||trade.strike||0);
             const expDate = new Date(data.expiry||trade.exp);
             const T = Math.max(0.003, (expDate-Date.now())/(365*24*60*60*1000));
-            const iv = data.iv/100; // convert from % to decimal
+            const iv = data.iv/100;
             const isCall = (trade.type||'CALL')==='CALL';
-            const est = estimateGreeks(S,K,T,iv,isCall);
-            if(est){
-                data.delta=est.delta; data.gamma=est.gamma;
-                data.theta=est.theta; data.vega=est.vega;
-                data._greeksEstimated=true;
+            if(S>0 && K>0){
+                const est = estimateGreeks(S,K,T,iv,isCall);
+                if(est){
+                    data.delta=est.delta; data.gamma=est.gamma;
+                    data.theta=est.theta; data.vega=est.vega;
+                    data._greeksEstimated=true;
+                }
             }
         }
         return data;
@@ -4120,6 +4142,8 @@ async function analyzeOpenTrades(){
                 const newsEntry=newsMap[(trade.ticker||'').toUpperCase()];
                 const newsText=newsEntry?.text||'';
                 // Fetch live option data + Greeks for this specific contract
+                // Attach live stock price so Black-Scholes fallback has it
+                trade._liveStockPrice = currentPrice;
                 const optData=await fetchLiveOptionData(trade);
                 const raw=await callClaude(journalAnalysisPrompt(trade,currentPrice,priceChange,newsText,optData));
                 const result=JSON.parse(stripJSON(raw));
