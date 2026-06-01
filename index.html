@@ -3634,8 +3634,11 @@ async function initSupabase(){
             console.warn('[supabase] SUPABASE_URL looks wrong — expected https://xxxxx.supabase.co, got:', cfg.url.slice(0,40));
             return;
         }
-        const sbUrl = cfg.url.trim().replace(/\/+$/, ''); // strip trailing slashes
-        _sbClient = window.supabase.createClient(sbUrl, cfg.anonKey.trim());
+        // Clean URL: strip whitespace, quotes, and trailing slashes
+        const sbUrl    = cfg.url.trim().replace(/['"]/g,'').replace(/\/+$/,'');
+        const sbAnonKey = cfg.anonKey.trim().replace(/['"]/g,'');
+        console.log('[supabase] initializing with URL:', sbUrl.slice(0,40)+'...');
+        _sbClient = window.supabase.createClient(sbUrl, sbAnonKey);
         // Listen for auth state changes
         _sbClient.auth.onAuthStateChange(async (event, session) => {
             _sbUser = session?.user || null;
@@ -3823,7 +3826,8 @@ async function handleAuthSubmit(){
             result = await _sbClient.auth.signInWithPassword({ email, password });
         }
         if(result.error){
-            errEl.textContent = result.error.message;
+            console.error('[supabase] auth error:', result.error);
+            errEl.textContent = result.error.message + (result.error.status ? ` (${result.error.status})` : '');
             errEl.style.display = '';
         } else if(_authMode === 'signup' && !result.data?.session){
             // Email confirmation required
@@ -4051,13 +4055,13 @@ function journalAnalysisPrompt(trade,currentPrice,priceChange,newsText,optData){
         const optPnl   = optEntry>0 && optPrice!=null
             ? ((optPrice - optEntry)/optEntry*100).toFixed(1)+'%'
             : 'unknown';
+        const greeksLabel = optData._greeksEstimated ? 'estimated via Black-Scholes' : 'live from API';
         const greeksLines = [];
         if(optData.delta!=null) greeksLines.push(`Delta: ${optData.delta} (option moves ~$${Math.abs(optData.delta).toFixed(2)} per $1 stock move) [${greeksLabel}]`);
         if(optData.gamma!=null) greeksLines.push(`Gamma: ${optData.gamma} (rate of delta change — higher near expiry)`);
         if(optData.theta!=null) greeksLines.push(`Theta: ${optData.theta} (time decay — option loses ~$${Math.abs(optData.theta).toFixed(2)}/day)`);
         if(optData.vega!=null)  greeksLines.push(`Vega:  ${optData.vega} (option gains/loses ~$${Math.abs(optData.vega).toFixed(2)} per 1% IV move)`);
         if(optData.iv!=null)    greeksLines.push(`IV: ${optData.iv}% implied volatility`);
-        const greeksLabel = optData._greeksEstimated ? 'estimated via Black-Scholes' : 'live from API';
         optBlock = `
 LIVE OPTION DATA (${optData.source||'API'}, as of now):
 - Contract: ${trade.ticker} $${optData.strike||trade.strike} ${(trade.type||'CALL')} exp ${optData.expiry||trade.exp}
