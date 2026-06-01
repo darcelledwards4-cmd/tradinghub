@@ -112,7 +112,14 @@ async function fetchMassiveOptions(symbol, contractType, targetDate, currentPric
                     : last != null ? 'last_trade'
                     : 'prev_close';
 
-    console.log(`[options] ✓ Massive ${symbol} ${contractType} ${bestExpiry} strike=$${best.details?.strike_price} bid=$${bid} ask=$${ask} last=$${last} close=$${dayClose} type=${priceType}`);
+    // Extract Greeks if available (Polygon paid plan)
+    const greeks     = best.greeks ?? null;
+    const delta      = greeks?.delta  != null ? parseFloat(greeks.delta.toFixed(3))  : null;
+    const gamma      = greeks?.gamma  != null ? parseFloat(greeks.gamma.toFixed(4))  : null;
+    const theta      = greeks?.theta  != null ? parseFloat(greeks.theta.toFixed(4))  : null;
+    const vega       = greeks?.vega   != null ? parseFloat(greeks.vega.toFixed(4))   : null;
+
+    console.log(`[options] ✓ Massive ${symbol} ${contractType} ${bestExpiry} strike=$${best.details?.strike_price} bid=$${bid} ask=$${ask} last=$${last} close=$${dayClose} type=${priceType} delta=${delta}`);
 
     return {
         strike:         best.details?.strike_price ?? null,
@@ -126,6 +133,7 @@ async function fetchMassiveOptions(symbol, contractType, targetDate, currentPric
         contractSymbol: best.details?.ticker ?? '',
         priceType,      // 'live' | 'last_trade' | 'prev_close'
         source:         'massive',
+        delta, gamma, theta, vega,  // Greeks (null if not on paid Polygon plan)
     };
 }
 
@@ -163,7 +171,7 @@ async function fetchTradierOptions(symbol, contractType, targetDateStr, currentP
     setTimeout(() => ctrl2.abort(), 12000);
     let contracts = [];
     try {
-        const r2 = await fetch(`${base}/markets/options/chains?symbol=${symbol}&expiration=${bestExpiry}&greeks=false`, { headers: hdrs, signal: ctrl2.signal });
+        const r2 = await fetch(`${base}/markets/options/chains?symbol=${symbol}&expiration=${bestExpiry}&greeks=true`, { headers: hdrs, signal: ctrl2.signal });
         if (!r2.ok) { console.error(`[options] Tradier chain ${r2.status}`); return null; }
         const d2 = await r2.json();
         const all = d2?.options?.option ?? [];
@@ -185,11 +193,16 @@ async function fetchTradierOptions(symbol, contractType, targetDateStr, currentP
     const last = best.last != null && best.last !== 0 ? parseFloat(best.last) : null;
     const iv   = best.greeks?.smv_vol != null ? parseFloat((best.greeks.smv_vol * 100).toFixed(1))
                : best.implied_volatility != null ? parseFloat((best.implied_volatility * 100).toFixed(1)) : null;
+    // Tradier greeks: delta, gamma, theta, vega (from greeks=true)
+    const delta = best.greeks?.delta != null ? parseFloat(best.greeks.delta.toFixed(3)) : null;
+    const gamma = best.greeks?.gamma != null ? parseFloat(best.greeks.gamma.toFixed(4)) : null;
+    const theta = best.greeks?.theta != null ? parseFloat(best.greeks.theta.toFixed(4)) : null;
+    const vega  = best.greeks?.vega  != null ? parseFloat(best.greeks.vega.toFixed(4))  : null;
 
     const priceType = (bid != null || ask != null) ? 'live' : last != null ? 'last_trade' : null;
     if (priceType == null) { console.error('[options] Tradier: no price for best contract', best.symbol); return null; }
 
-    console.log(`[options] ✓ Tradier ${symbol} ${contractType} ${bestExpiry} strike=${best.strike} bid=${bid} ask=${ask} last=${last}`);
+    console.log(`[options] ✓ Tradier ${symbol} ${contractType} ${bestExpiry} strike=${best.strike} bid=${bid} ask=${ask} last=${last} delta=${delta}`);
 
     return {
         strike:         parseFloat(best.strike),
@@ -204,6 +217,7 @@ async function fetchTradierOptions(symbol, contractType, targetDateStr, currentP
         contractSymbol: best.symbol ?? '',
         priceType,
         source:         'tradier',
+        delta, gamma, theta, vega,
     };
 }
 

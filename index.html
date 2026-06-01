@@ -6,6 +6,8 @@
     <title>Trading Hub — Darcell</title>
     <!-- config.js is local-dev only (gitignored). On Vercel all keys are server-side. -->
     <script>try{var _s=document.createElement('script');_s.src='config.js';document.head.appendChild(_s);}catch(e){}</script>
+    <!-- Supabase JS client (for cross-device journal sync) -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
     <style>
         :root {
             --bg: #0d1117;
@@ -791,10 +793,15 @@
             <div class="journal-inner">
                 <div class="j-top">
                     <div class="j-title">📒 My Trade Journal</div>
-                    <div style="display:flex;gap:8px">
+                    <div style="display:flex;gap:8px;align-items:center">
                         <button class="j-refresh-btn" onclick="analyzeOpenTrades()" id="analyzeBtn" title="Re-check all open trades with live prices + news">⟳ Refresh Analysis</button>
                         <button class="j-add" onclick="openModal()">+ Log a Trade</button>
                     </div>
+                </div>
+                <!-- Auth sync banner — shown/hidden by JS -->
+                <div id="journalSyncBanner" style="display:none;margin-bottom:14px;padding:10px 14px;border-radius:8px;border:1px solid var(--border);background:var(--bg2);font-size:12px;display:flex;align-items:center;gap:10px;justify-content:space-between">
+                    <span id="journalSyncMsg" style="color:var(--muted)">🔒 Sign in to sync your journal across all devices</span>
+                    <button id="journalSyncBtn" onclick="openAuthModal()" style="background:var(--blue);color:#000;border:none;border-radius:5px;padding:5px 12px;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap">Sign In</button>
                 </div>
                 <div class="stats">
                     <div class="stat"><div class="stat-lbl">Total Trades</div><div class="stat-val" id="s-total">0</div></div>
@@ -842,6 +849,37 @@
         <div class="mactions">
             <button class="btn-cancel" onclick="closeSettings()">Cancel</button>
             <button class="btn-save" onclick="saveSettings()">Save Keys</button>
+        </div>
+    </div>
+</div>
+
+<!-- Journal Auth Modal -->
+<div class="overlay" id="authModal">
+    <div class="modal" style="width:400px;max-width:95vw">
+        <div class="modal-title" id="authModalTitle">🔐 Sign In to Journal</div>
+        <p style="font-size:12px;color:var(--muted);margin-bottom:18px;line-height:1.6" id="authModalDesc">Sign in to sync your trade journal across all your devices — phone, laptop, anywhere.</p>
+        <div style="display:flex;flex-direction:column;gap:12px">
+            <div class="fg">
+                <label>Email</label>
+                <input type="email" id="auth-email" placeholder="you@example.com" autocomplete="email" />
+            </div>
+            <div class="fg">
+                <label>Password</label>
+                <input type="password" id="auth-password" placeholder="••••••••" autocomplete="current-password" />
+            </div>
+            <div class="fg" id="auth-confirm-wrap" style="display:none">
+                <label>Confirm Password</label>
+                <input type="password" id="auth-confirm" placeholder="••••••••" autocomplete="new-password" />
+            </div>
+        </div>
+        <div id="auth-error" style="margin-top:10px;font-size:12px;color:var(--red);display:none"></div>
+        <div class="mactions" style="margin-top:18px">
+            <button class="btn-cancel" onclick="closeAuthModal()">Cancel</button>
+            <button class="btn-save" id="authSubmitBtn" onclick="handleAuthSubmit()">Sign In</button>
+        </div>
+        <div style="text-align:center;margin-top:14px;font-size:12px;color:var(--muted)">
+            <span id="authToggleText">Don't have an account?</span>
+            <a href="#" style="color:var(--blue);margin-left:4px" onclick="toggleAuthMode(event)" id="authToggleLink">Create one</a>
         </div>
     </div>
 </div>
@@ -3510,6 +3548,223 @@ function loadNews(id){
 function switchTick(btn,sym){document.querySelectorAll('.tick-btn').forEach(b=>b.classList.remove('active'));btn.classList.add('active');curTicker=sym;loadChart(sym);}
 function goTicker(){const v=document.getElementById('chartSearch').value.trim().toUpperCase();if(!v)return;document.querySelectorAll('.tick-btn').forEach(b=>b.classList.remove('active'));curTicker=v;loadChart(v);}
 
+// ── SUPABASE AUTH + SYNC ──────────────────────────────────────
+let _sbClient = null;
+let _sbUser   = null;
+let _authMode = 'signin'; // 'signin' | 'signup'
+
+async function initSupabase(){
+    try{
+        const r = await fetch('/api/supabase-config');
+        if(!r.ok) return;
+        const cfg = await r.json();
+        if(!cfg.configured || !cfg.url || !cfg.anonKey) return;
+        _sbClient = window.supabase.createClient(cfg.url, cfg.anonKey);
+        // Listen for auth state changes
+        _sbClient.auth.onAuthStateChange(async (event, session) => {
+            _sbUser = session?.user || null;
+            _updateAuthBanner();
+            if(_sbUser){
+                await _loadTradesFromSupabase();
+            }
+        });
+        // Restore existing session
+        const { data: { session } } = await _sbClient.auth.getSession();
+        _sbUser = session?.user || null;
+        _updateAuthBanner();
+        if(_sbUser) await _loadTradesFromSupabase();
+        else _updateAuthBanner(); // show "sign in" state even if no Supabase user
+    } catch(e){ console.warn('[supabase] init failed:', e.message); }
+}
+
+function _updateAuthBanner(){
+    const banner = document.getElementById('journalSyncBanner');
+    const msg    = document.getElementById('journalSyncMsg');
+    const btn    = document.getElementById('journalSyncBtn');
+    if(!banner) return;
+    banner.style.display = 'flex';
+    if(_sbUser){
+        msg.textContent  = `✅ Synced · ${_sbUser.email}`;
+        msg.style.color  = 'var(--green)';
+        btn.textContent  = 'Sign Out';
+        btn.style.background = 'var(--bg3)';
+        btn.style.color  = 'var(--text)';
+        btn.onclick      = signOutSupabase;
+    } else if(_sbClient){
+        msg.textContent  = '🔒 Sign in to sync your journal across all devices';
+        msg.style.color  = 'var(--muted)';
+        btn.textContent  = 'Sign In';
+        btn.style.background = 'var(--blue)';
+        btn.style.color  = '#000';
+        btn.onclick      = openAuthModal;
+    } else {
+        // Supabase not configured — hide banner entirely
+        banner.style.display = 'none';
+    }
+}
+
+// ── Supabase CRUD helpers ──────────────────────────────────────
+function _tradeToRow(t){
+    return {
+        id: t.id,
+        user_id: _sbUser.id,
+        date: t.date||null,
+        ticker: t.ticker||null,
+        type: t.type||'CALL',
+        strike: t.strike||null,
+        exp: t.exp||null,
+        qty: t.qty||1,
+        entry: t.entry||null,
+        exit: t.exit||null,
+        status: t.status||'Open',
+        thesis: t.thesis||null,
+        recommendation: t.recommendation||null,
+        recommendation_reason: t.recommendation_reason||null,
+        rating: t.rating||null,
+        action: t.action||null,
+        current_price: t.current_price||null,
+        price_change: t.price_change||null,
+        news_summary: t.news_summary||null,
+        last_checked: t.last_checked||null,
+        entry_low: t.entry_low||null,
+        entry_high: t.entry_high||null,
+        stop_loss: t.stop_loss||null,
+        target: t.target||null,
+        option_detail: t.option_detail||null,
+        account_sizing: t.account_sizing||null,
+        stock_price_at_entry: t.stock_price_at_entry||null,
+        option_type: t.option_type||null,
+    };
+}
+function _rowToTrade(row){
+    // Convert Supabase row back to the local trade object shape
+    const t = {...row};
+    // Ensure numeric fields are numbers (not strings)
+    ['entry','exit','qty','strike','current_price','price_change',
+     'entry_low','entry_high','stop_loss','target','stock_price_at_entry'].forEach(k=>{
+        if(t[k]!=null) t[k]=parseFloat(t[k]);
+    });
+    t.qty = parseInt(t.qty)||1;
+    return t;
+}
+
+async function _sbUpsertTrade(trade){
+    if(!_sbClient||!_sbUser) return;
+    try{
+        const { error } = await _sbClient.from('journal_entries').upsert(_tradeToRow(trade), {onConflict:'id'});
+        if(error) console.warn('[supabase] upsert error:', error.message);
+    } catch(e){ console.warn('[supabase] upsert failed:', e.message); }
+}
+
+async function _sbDeleteTrade(id){
+    if(!_sbClient||!_sbUser) return;
+    try{
+        const { error } = await _sbClient.from('journal_entries').delete().eq('id', id).eq('user_id', _sbUser.id);
+        if(error) console.warn('[supabase] delete error:', error.message);
+    } catch(e){ console.warn('[supabase] delete failed:', e.message); }
+}
+
+async function _loadTradesFromSupabase(){
+    if(!_sbClient||!_sbUser) return;
+    try{
+        const { data, error } = await _sbClient
+            .from('journal_entries')
+            .select('*')
+            .eq('user_id', _sbUser.id)
+            .order('created_at', {ascending:false});
+        if(error){ console.warn('[supabase] load error:', error.message); return; }
+        if(data && data.length > 0){
+            // Supabase is the source of truth when logged in
+            trades = data.map(_rowToTrade);
+            localStorage.setItem('darcell_v2_trades', JSON.stringify(trades));
+            renderJournal();
+        } else {
+            // No Supabase trades yet — migrate local trades up
+            const local = JSON.parse(localStorage.getItem('darcell_v2_trades')||'[]');
+            if(local.length > 0){
+                trades = local;
+                for(const t of trades){ await _sbUpsertTrade(t); }
+                renderJournal();
+            }
+        }
+    } catch(e){ console.warn('[supabase] load failed:', e.message); }
+}
+
+// ── Auth modal ─────────────────────────────────────────────────
+function openAuthModal(){
+    _authMode = 'signin';
+    _applyAuthMode();
+    document.getElementById('auth-email').value = '';
+    document.getElementById('auth-password').value = '';
+    document.getElementById('auth-confirm').value = '';
+    document.getElementById('auth-error').style.display = 'none';
+    document.getElementById('authModal').classList.add('open');
+}
+function closeAuthModal(){
+    document.getElementById('authModal').classList.remove('open');
+}
+function toggleAuthMode(e){
+    e.preventDefault();
+    _authMode = _authMode === 'signin' ? 'signup' : 'signin';
+    _applyAuthMode();
+}
+function _applyAuthMode(){
+    const isSignup = _authMode === 'signup';
+    document.getElementById('authModalTitle').textContent   = isSignup ? '🔐 Create Account' : '🔐 Sign In to Journal';
+    document.getElementById('authModalDesc').textContent    = isSignup
+        ? 'Create a free account to sync your trade journal across all devices.'
+        : 'Sign in to sync your trade journal across all devices — phone, laptop, anywhere.';
+    document.getElementById('authSubmitBtn').textContent    = isSignup ? 'Create Account' : 'Sign In';
+    document.getElementById('authToggleText').textContent   = isSignup ? 'Already have an account?' : "Don't have an account?";
+    document.getElementById('authToggleLink').textContent   = isSignup ? 'Sign in' : 'Create one';
+    document.getElementById('auth-confirm-wrap').style.display = isSignup ? '' : 'none';
+    document.getElementById('auth-error').style.display = 'none';
+}
+async function handleAuthSubmit(){
+    if(!_sbClient){ alert('Journal sync is not configured yet.'); return; }
+    const email    = document.getElementById('auth-email').value.trim();
+    const password = document.getElementById('auth-password').value;
+    const confirm  = document.getElementById('auth-confirm').value;
+    const errEl    = document.getElementById('auth-error');
+    const btn      = document.getElementById('authSubmitBtn');
+    errEl.style.display = 'none';
+    if(!email || !password){ errEl.textContent = 'Email and password are required.'; errEl.style.display=''; return; }
+    if(_authMode === 'signup' && password !== confirm){ errEl.textContent = 'Passwords do not match.'; errEl.style.display=''; return; }
+    if(_authMode === 'signup' && password.length < 6){ errEl.textContent = 'Password must be at least 6 characters.'; errEl.style.display=''; return; }
+    btn.disabled = true;
+    btn.textContent = _authMode === 'signup' ? 'Creating...' : 'Signing in...';
+    try{
+        let result;
+        if(_authMode === 'signup'){
+            result = await _sbClient.auth.signUp({ email, password });
+        } else {
+            result = await _sbClient.auth.signInWithPassword({ email, password });
+        }
+        if(result.error){
+            errEl.textContent = result.error.message;
+            errEl.style.display = '';
+        } else if(_authMode === 'signup' && !result.data?.session){
+            // Email confirmation required
+            errEl.style.color = 'var(--green)';
+            errEl.textContent = '✅ Check your email for a confirmation link, then sign in.';
+            errEl.style.display = '';
+        } else {
+            closeAuthModal();
+        }
+    } catch(e){
+        errEl.textContent = e.message || 'Auth failed. Try again.';
+        errEl.style.display = '';
+    }
+    btn.disabled = false;
+    btn.textContent = _authMode === 'signup' ? 'Create Account' : 'Sign In';
+}
+async function signOutSupabase(){
+    if(!_sbClient) return;
+    await _sbClient.auth.signOut();
+    _sbUser = null;
+    _updateAuthBanner();
+}
+
 // ── JOURNAL ───────────────────────────────────────────────────
 let trades=JSON.parse(localStorage.getItem('darcell_v2_trades')||'[]');
 function openModal(){document.getElementById('m-date').value=new Date().toISOString().split('T')[0];document.getElementById('modal').classList.add('open');}
@@ -3519,10 +3774,10 @@ function saveTrade(){
     t.status=t.exit!==null?'Closed':'Open';
     if(!t.ticker||!t.entry){alert('Ticker and entry price are required.');return;}
     if(window._pendingCardData){Object.assign(t,window._pendingCardData);window._pendingCardData=null;}
-    trades.unshift(t);localStorage.setItem('darcell_v2_trades',JSON.stringify(trades));renderJournal();closeModal();
+    trades.unshift(t);localStorage.setItem('darcell_v2_trades',JSON.stringify(trades));renderJournal();closeModal();_sbUpsertTrade(t);
     ['m-ticker','m-strike','m-entry','m-exit','m-thesis'].forEach(id=>document.getElementById(id).value='');document.getElementById('m-exp').value='';
 }
-function deleteTrade(id){if(!confirm('Delete this trade?'))return;trades=trades.filter(t=>t.id!==id);localStorage.setItem('darcell_v2_trades',JSON.stringify(trades));renderJournal();}
+function deleteTrade(id){if(!confirm('Delete this trade?'))return;trades=trades.filter(t=>t.id!==id);localStorage.setItem('darcell_v2_trades',JSON.stringify(trades));renderJournal();_sbDeleteTrade(id);}
 function closeTrade(id){
     const ep=prompt('What price did you close/sell at (per contract $)? Leave blank to just mark closed.');
     if(ep===null)return;
@@ -3533,6 +3788,7 @@ function closeTrade(id){
     if(!isNaN(v)&&v>0)trades[idx].exit=v;
     localStorage.setItem('darcell_v2_trades',JSON.stringify(trades));
     renderJournal();
+    _sbUpsertTrade(trades[idx]);
 }
 function logTradeFromCard(cardId){
     const cd=window._cardData[cardId];
@@ -3599,6 +3855,7 @@ function buildJournalCard(trade){
                 <div class="j-lvl"><div class="j-lvl-lbl">Stop Loss</div><div class="j-lvl-val" style="color:var(--red)">$${trade.stop_loss||'?'}</div></div>
                 <div class="j-lvl"><div class="j-lvl-lbl">Target</div><div class="j-lvl-val" style="color:var(--green)">$${trade.target||'?'}</div></div>
             </div>`:''}
+            ${trade.option_summary?`<div class="j-action-box" style="border-left-color:var(--blue)">📊 ${trade.option_summary}</div>`:''}
             ${trade.action?`<div class="j-action-box">💡 ${trade.action}</div>`:''}
             ${trade.news_summary?`<div class="j-news-line">📰 ${trade.news_summary.slice(0,140)}${trade.news_summary.length>140?'…':''}</div>`:''}
             <div class="j-card-ftr">
@@ -3614,7 +3871,7 @@ function buildJournalCard(trade){
         </div>
     </div>`;
 }
-function journalAnalysisPrompt(trade,currentPrice,priceChange,newsText){
+function journalAnalysisPrompt(trade,currentPrice,priceChange,newsText,optData){
     const isCall=(trade.type||'CALL')==='CALL';
     const dir=isCall?'CALL (bullish — profit if stock goes UP)':'PUT (bearish — profit if stock goes DOWN)';
     const stopLoss=parseFloat(trade.stop_loss)||0;
@@ -3638,6 +3895,35 @@ function journalAnalysisPrompt(trade,currentPrice,priceChange,newsText){
             : `Down $${(entryPrice-currentPrice).toFixed(2)} from entry ($${entryPrice})`)
         : '';
 
+    // Build live option data block
+    let optBlock = '';
+    if(optData && !optData.error){
+        const optPrice = optData.ask ?? optData.mid ?? optData.last;
+        const optEntry = parseFloat(trade.entry||0);
+        const optPnl   = optEntry>0 && optPrice!=null
+            ? ((optPrice - optEntry)/optEntry*100).toFixed(1)+'%'
+            : 'unknown';
+        const greeksLines = [];
+        if(optData.delta!=null) greeksLines.push(`Delta: ${optData.delta} (option moves ~$${Math.abs(optData.delta).toFixed(2)} per $1 stock move)`);
+        if(optData.gamma!=null) greeksLines.push(`Gamma: ${optData.gamma} (rate of delta change — higher near expiry)`);
+        if(optData.theta!=null) greeksLines.push(`Theta: ${optData.theta} (time decay — option loses ~$${Math.abs(optData.theta).toFixed(2)}/day)`);
+        if(optData.vega!=null)  greeksLines.push(`Vega:  ${optData.vega} (option gains/loses ~$${Math.abs(optData.vega).toFixed(2)} per 1% IV move)`);
+        if(optData.iv!=null)    greeksLines.push(`IV: ${optData.iv}% implied volatility`);
+        optBlock = `
+LIVE OPTION DATA (${optData.source||'API'}, as of now):
+- Contract: ${trade.ticker} $${optData.strike||trade.strike} ${(trade.type||'CALL')} exp ${optData.expiry||trade.exp}
+- Current option price: $${optPrice!=null?parseFloat(optPrice).toFixed(2):'unavailable'} (bid $${optData.bid??'—'} / ask $${optData.ask??'—'})
+- Entry cost: $${optEntry.toFixed(2)} per contract → current option P&L: ${optPnl}
+- Volume today: ${optData.volume||0} contracts | Open Interest: ${optData.openInterest||0}
+${greeksLines.length?greeksLines.join('\n'):'Greeks: not available'}
+
+INTERPRETING THE GREEKS FOR YOUR RECOMMENDATION:
+- Delta near 0 = far OTM, needs big move. Delta 0.4–0.6 = near ATM.
+- Theta tells you daily bleed — if theta is high and stock is not moving, the option is decaying fast.
+- High Vega means the option is sensitive to volatility changes — if IV is elevated, consider if a crush could hurt the position.
+- Use Greeks to explain the urgency or lack thereof in your recommendation.`;
+    }
+
     return `You are monitoring an active options trade.
 
 Trade: ${trade.ticker} ${dir}
@@ -3650,17 +3936,31 @@ CURRENT FACTS (use these exactly — do not contradict them):
 - vs stop: ${priceVsStop}
 - vs target: ${priceVsTarget}
 ${priceVsEntry?'- vs entry: '+priceVsEntry:''}
+${optBlock}
 ${newsText?'\nRecent news:\n'+newsText:'No recent news available.'}
 
-Based ONLY on the facts above, assess whether to hold, adjust, or exit.
-Your reason MUST be consistent with the numbers — do not say price is "above stop" if it is below stop, or "below target" if it has reached target.
+Based on ALL the facts above — including option Greeks if provided — assess whether to hold, adjust, or exit.
+Your reason MUST be consistent with the numbers. Do not say price is "above stop" if it is below stop.
+If Greeks are available, factor them into the recommendation (e.g. high theta = time pressure, low delta = needs big move).
 
 Return ONLY this JSON (no markdown):
-{"recommendation":"hold","reason":"2 sentences grounded in the actual price vs stop/target numbers above","rating":"moderate","action":"1 specific sentence: what to do right now (e.g. set a price alert, hold until X, exit if price drops to Y)"}
+{"recommendation":"hold","reason":"2-3 sentences — cite specific price vs stop/target AND at least one Greek if available","rating":"moderate","action":"1 specific sentence: what to do right now (e.g. hold, set a price alert, exit if theta decay outpaces the move)","option_summary":"1 sentence plain-English summary of the option health based on price + Greeks"}
 
 recommendation: "hold", "adjust", or "exit" only
 rating: "high" (trade working well), "moderate" (mixed), "low" (struggling), or "exit" (stop hit or thesis broken)`;
 }
+// Fetch live option price + Greeks for a specific logged trade
+async function fetchLiveOptionData(trade){
+    if(!trade.ticker||!trade.exp) return null;
+    try{
+        const type=(trade.type||'CALL').toLowerCase();
+        const url=`/api/options?ticker=${encodeURIComponent(trade.ticker)}&type=${type}&expiry=${encodeURIComponent(trade.exp)}`;
+        const r=await fetch(url);
+        if(!r.ok) return null;
+        return await r.json();
+    }catch(e){ return null; }
+}
+
 async function analyzeOpenTrades(){
     const open=trades.filter(t=>t.status==='Open');
     if(!open.length)return;
@@ -3681,7 +3981,9 @@ async function analyzeOpenTrades(){
                 const priceChange=q?.dp||0;
                 const newsEntry=newsMap[(trade.ticker||'').toUpperCase()];
                 const newsText=newsEntry?.text||'';
-                const raw=await callClaude(journalAnalysisPrompt(trade,currentPrice,priceChange,newsText));
+                // Fetch live option data + Greeks for this specific contract
+                const optData=await fetchLiveOptionData(trade);
+                const raw=await callClaude(journalAnalysisPrompt(trade,currentPrice,priceChange,newsText,optData));
                 const result=JSON.parse(stripJSON(raw));
                 const idx=trades.findIndex(t=>t.id===trade.id);
                 if(idx>=0){
@@ -3689,6 +3991,7 @@ async function analyzeOpenTrades(){
                     trades[idx].recommendation_reason=result.reason||'';
                     trades[idx].rating=result.rating||'moderate';
                     trades[idx].action=result.action||'';
+                    trades[idx].option_summary=result.option_summary||'';
                     trades[idx].current_price=currentPrice;
                     trades[idx].price_change=priceChange;
                     trades[idx].news_summary=newsText.replace(/\n/g,' ').slice(0,200);
@@ -3704,6 +4007,8 @@ async function analyzeOpenTrades(){
     localStorage.setItem('darcell_v2_trades',JSON.stringify(trades));
     renderJournal();
     if(btn){btn.disabled=false;btn.textContent='⟳ Refresh Analysis';}
+    // Sync updated analysis results to Supabase
+    if(_sbUser) trades.filter(t=>t.status==='Open').forEach(t=>_sbUpsertTrade(t));
 }
 function fmt(d){if(!d)return'—';return new Date(d+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'2-digit'});}
 function renderJournal(){
@@ -3738,11 +4043,14 @@ function renderJournal(){
 function isMarketHours(){const et=new Date(new Date().toLocaleString('en-US',{timeZone:'America/New_York'}));const dow=et.getDay(),h=et.getHours(),m=et.getMinutes();return dow>0&&dow<6&&h*100+m>=930&&h*100+m<1600;}
 setInterval(()=>{if(document.getElementById('tab-journal')?.classList.contains('active')&&isMarketHours())analyzeOpenTrades();},30*60*1000);
 document.getElementById('modal').addEventListener('click',e=>{if(e.target.id==='modal')closeModal();});
+document.getElementById('authModal').addEventListener('click',e=>{if(e.target.id==='authModal')closeAuthModal();});
 window.addEventListener('load',()=>{
     loadTape(); loadChart(curTicker); renderJournal();
     updateSettingsBtn();
     // Restore last session's trade ideas and auto-refresh prices
     restoreLastSession();
+    // Initialize Supabase for cross-device journal sync
+    initSupabase();
 });
 </script>
 </body>
