@@ -414,6 +414,8 @@
         .j-close-trade-btn:hover{background:rgba(63,185,80,.1)}
         .j-del-btn{background:none;border:1px solid var(--border);color:var(--muted);border-radius:5px;padding:4px 9px;font-size:11px;cursor:pointer;transition:all .15s}
         .j-del-btn:hover{background:rgba(248,81,73,.1);color:var(--red);border-color:rgba(248,81,73,.3)}
+        .j-edit-btn{background:none;border:1px solid rgba(88,166,255,.3);color:var(--blue);border-radius:5px;padding:4px 10px;font-size:11px;cursor:pointer;margin-right:6px;transition:all .15s}
+        .j-edit-btn:hover{background:rgba(88,166,255,.1)}
         .j-analyzing-row{display:flex;align-items:center;gap:7px;font-size:11px;color:var(--muted);padding:7px 14px;border-bottom:1px solid var(--border)}
         .log-trade-btn{width:100%;margin-top:10px;padding:9px;background:rgba(139,92,246,.1);border:1px solid rgba(139,92,246,.22);color:#a78bfa;border-radius:7px;font-size:12px;font-weight:700;cursor:pointer;transition:all .15s;letter-spacing:.3px}
         .log-trade-btn:hover{background:rgba(139,92,246,.22);border-color:rgba(139,92,246,.45)}
@@ -902,6 +904,33 @@
         <div class="mactions">
             <button class="btn-cancel" onclick="closeModal()">Cancel</button>
             <button class="btn-save" onclick="saveTrade()">Save Trade</button>
+        </div>
+    </div>
+</div>
+
+<!-- Edit Trade Modal -->
+<div class="overlay" id="editModal">
+    <div class="modal">
+        <div class="modal-title">✏️ Edit Trade</div>
+        <input type="hidden" id="e-id" />
+        <div class="mgrid">
+            <div class="fg"><label>Ticker</label><input type="text" id="e-ticker" placeholder="NVDA" /></div>
+            <div class="fg"><label>Date Entered</label><input type="date" id="e-date" /></div>
+            <div class="fg"><label>Call or Put?</label><select id="e-type"><option value="CALL">CALL (betting it goes up)</option><option value="PUT">PUT (betting it goes down)</option></select></div>
+            <div class="fg"><label>Strike Price ($)</label><input type="number" id="e-strike" placeholder="130" /></div>
+            <div class="fg"><label>Expiration Date</label><input type="date" id="e-exp" /></div>
+            <div class="fg"><label>Number of Contracts</label><input type="number" id="e-qty" value="1" min="1" /></div>
+            <div class="fg"><label>What I Paid Per Contract ($) — your actual entry</label><input type="number" id="e-entry" placeholder="2.50" step="0.01" /></div>
+            <div class="fg"><label>Stock Price When I Entered ($)</label><input type="number" id="e-stock-entry" placeholder="143.00" step="0.01" /></div>
+            <div class="fg"><label>Stop Loss — stock price ($)</label><input type="number" id="e-stop" placeholder="138.00" step="0.01" /></div>
+            <div class="fg"><label>Price Target — stock price ($)</label><input type="number" id="e-target" placeholder="155.00" step="0.01" /></div>
+            <div class="fg"><label>What I Sold For (leave blank if still open)</label><input type="number" id="e-exit" placeholder="—" step="0.01" /></div>
+            <div class="fg"><label>Status</label><select id="e-status"><option value="Open">Open</option><option value="Closed">Closed</option></select></div>
+            <div class="fg span2"><label>Why I Took This Trade</label><textarea id="e-thesis" placeholder="e.g. bouncing off support, strong momentum..."></textarea></div>
+        </div>
+        <div class="mactions">
+            <button class="btn-cancel" onclick="closeEditModal()">Cancel</button>
+            <button class="btn-save" onclick="saveEditTrade()">Save Changes</button>
         </div>
     </div>
 </div>
@@ -3831,6 +3860,56 @@ function closeTrade(id){
     renderJournal();
     _sbUpsertTrade(trades[idx]);
 }
+function openEditModal(id){
+    const trade=trades.find(t=>t.id===id);
+    if(!trade) return;
+    document.getElementById('e-id').value=id;
+    document.getElementById('e-ticker').value=trade.ticker||'';
+    document.getElementById('e-date').value=trade.date||'';
+    document.getElementById('e-type').value=trade.type||'CALL';
+    document.getElementById('e-strike').value=trade.strike||'';
+    document.getElementById('e-exp').value=trade.exp||'';
+    document.getElementById('e-qty').value=trade.qty||1;
+    document.getElementById('e-entry').value=trade.entry!=null?trade.entry:'';
+    document.getElementById('e-stock-entry').value=trade.stock_price_at_entry!=null?trade.stock_price_at_entry:'';
+    document.getElementById('e-stop').value=trade.stop_loss!=null?trade.stop_loss:'';
+    document.getElementById('e-target').value=trade.target!=null?trade.target:'';
+    document.getElementById('e-exit').value=trade.exit!=null?trade.exit:'';
+    document.getElementById('e-status').value=trade.status||'Open';
+    document.getElementById('e-thesis').value=trade.thesis||'';
+    document.getElementById('editModal').classList.add('open');
+}
+function closeEditModal(){ document.getElementById('editModal').classList.remove('open'); }
+function saveEditTrade(){
+    const id=parseInt(document.getElementById('e-id').value);
+    const idx=trades.findIndex(t=>t.id===id);
+    if(idx<0) return;
+    const exitVal=document.getElementById('e-exit').value;
+    const stopVal=document.getElementById('e-stop').value;
+    const targetVal=document.getElementById('e-target').value;
+    const stockEntryVal=document.getElementById('e-stock-entry').value;
+    trades[idx]={
+        ...trades[idx],
+        ticker:   document.getElementById('e-ticker').value.toUpperCase().trim(),
+        date:     document.getElementById('e-date').value,
+        type:     document.getElementById('e-type').value,
+        strike:   document.getElementById('e-strike').value,
+        exp:      document.getElementById('e-exp').value,
+        qty:      parseInt(document.getElementById('e-qty').value)||1,
+        entry:    parseFloat(document.getElementById('e-entry').value)||trades[idx].entry||0,
+        stock_price_at_entry: stockEntryVal ? parseFloat(stockEntryVal) : trades[idx].stock_price_at_entry,
+        stop_loss:  stopVal   ? parseFloat(stopVal)   : trades[idx].stop_loss,
+        target:     targetVal ? parseFloat(targetVal) : trades[idx].target,
+        exit:       exitVal   ? parseFloat(exitVal)   : null,
+        status:   document.getElementById('e-status').value,
+        thesis:   document.getElementById('e-thesis').value.trim(),
+    };
+    localStorage.setItem('darcell_v2_trades',JSON.stringify(trades));
+    _sbUpsertTrade(trades[idx]);
+    renderJournal();
+    closeEditModal();
+}
+
 function logTradeFromCard(cardId){
     const cd=window._cardData[cardId];
     if(!cd)return;
@@ -3905,6 +3984,7 @@ function buildJournalCard(trade){
                     <div>${lastChecked}</div>
                 </div>
                 <div>
+                    <button class="j-edit-btn" onclick="openEditModal(${trade.id})">✏️ Edit</button>
                     <button class="j-close-trade-btn" onclick="closeTrade(${trade.id})">Mark Closed</button>
                     <button class="j-del-btn" onclick="deleteTrade(${trade.id})">×</button>
                 </div>
@@ -4092,7 +4172,7 @@ function renderJournal(){
         html+=closed.map(t=>{
             const p=t.exit!=null?(t.exit-t.entry)*t.qty*100:null;
             const ph=p!=null?`<span class="${p>=0?'pos':'neg'}">${p>=0?'+':'-'}$${Math.abs(p).toFixed(0)}</span>`:'—';
-            return`<tr><td style="color:var(--muted);white-space:nowrap">${fmt(t.date)}</td><td><strong>${t.ticker}</strong></td><td><span class="badge ${(t.type||'CALL')==='CALL'?'bc':'bp'}">${t.type||'CALL'}</span></td><td>$${t.strike||'?'}</td><td style="color:var(--muted)">${fmt(t.exp)}</td><td>${t.qty}</td><td>$${parseFloat(t.entry||0).toFixed(2)}</td><td>${t.exit!=null?'$'+t.exit.toFixed(2):'—'}</td><td>${ph}</td><td style="max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:11px">${t.thesis||'—'}</td><td><button class="del" onclick="deleteTrade(${t.id})">×</button></td></tr>`;
+            return`<tr><td style="color:var(--muted);white-space:nowrap">${fmt(t.date)}</td><td><strong>${t.ticker}</strong></td><td><span class="badge ${(t.type||'CALL')==='CALL'?'bc':'bp'}">${t.type||'CALL'}</span></td><td>$${t.strike||'?'}</td><td style="color:var(--muted)">${fmt(t.exp)}</td><td>${t.qty}</td><td>$${parseFloat(t.entry||0).toFixed(2)}</td><td>${t.exit!=null?'$'+t.exit.toFixed(2):'—'}</td><td>${ph}</td><td style="max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:11px">${t.thesis||'—'}</td><td style="white-space:nowrap"><button class="j-edit-btn" style="padding:3px 8px;margin-right:4px" onclick="openEditModal(${t.id})">✏️</button><button class="del" onclick="deleteTrade(${t.id})">×</button></td></tr>`;
         }).join('');
         html+=`</tbody></table></div>`;
     }
@@ -4102,6 +4182,7 @@ function isMarketHours(){const et=new Date(new Date().toLocaleString('en-US',{ti
 setInterval(()=>{if(document.getElementById('tab-journal')?.classList.contains('active')&&isMarketHours())analyzeOpenTrades();},30*60*1000);
 document.getElementById('modal').addEventListener('click',e=>{if(e.target.id==='modal')closeModal();});
 document.getElementById('authModal').addEventListener('click',e=>{if(e.target.id==='authModal')closeAuthModal();});
+document.getElementById('editModal').addEventListener('click',e=>{if(e.target.id==='editModal')closeEditModal();});
 window.addEventListener('load',()=>{
     loadTape(); loadChart(curTicker); renderJournal();
     updateSettingsBtn();
