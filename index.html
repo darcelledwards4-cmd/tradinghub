@@ -946,6 +946,43 @@ function getVarietySeed(){
     return themes[week % themes.length];
 }
 
+// ── Black-Scholes Greeks estimation (fallback when API doesn't return them) ──
+// Used when Polygon free tier returns null greeks but does return IV
+function _normCDF(x){
+    const t=1/(1+0.2316419*Math.abs(x));
+    const d=0.3989422820*Math.exp(-x*x/2);
+    const p=d*t*(0.3193815+t*(-0.3565638+t*(1.7814779+t*(-1.8212560+t*1.3302744))));
+    return x>=0?1-p:p;
+}
+function _normPDF(x){ return Math.exp(-x*x/2)/Math.sqrt(2*Math.PI); }
+
+function estimateGreeks(S, K, T, iv, isCall){
+    // S=stock price, K=strike, T=years to expiry, iv=decimal (0.35=35%), isCall=bool
+    if(!S||!K||!T||!iv||T<=0) return null;
+    const r=0.045; // approximate risk-free rate
+    const sigma=iv;
+    const sqrtT=Math.sqrt(T);
+    const d1=(Math.log(S/K)+(r+0.5*sigma*sigma)*T)/(sigma*sqrtT);
+    const d2=d1-sigma*sqrtT;
+    const nd1=_normCDF(isCall?d1:-d1);
+    const nd2=_normCDF(isCall?d2:-d2);
+    const npd1=_normPDF(d1);
+    const delta=isCall?nd1:-_normCDF(-d1);
+    const gamma=npd1/(S*sigma*sqrtT);
+    const theta=(isCall
+        ?(-S*npd1*sigma/(2*sqrtT)-r*K*Math.exp(-r*T)*nd2)
+        :(-S*npd1*sigma/(2*sqrtT)+r*K*Math.exp(-r*T)*_normCDF(-d2))
+    )/365;
+    const vega=S*npd1*sqrtT/100; // per 1% IV move
+    return {
+        delta:parseFloat(delta.toFixed(3)),
+        gamma:parseFloat(gamma.toFixed(4)),
+        theta:parseFloat(theta.toFixed(4)),
+        vega: parseFloat(vega.toFixed(4)),
+        estimated:true,
+    };
+}
+
 function saveCardsToStorage(key, cards){
     try{
         // Strip _newsItems (re-fetched fresh) and mark prices as stale for reload
@@ -2793,9 +2830,12 @@ function discoverPrompt(categoryDesc, extraExclude=[], techMap={}){
 
 Find exactly 3 stocks that fit this description: ${categoryDesc}
 
-VARIETY RULE: ${varietySeed}
-Do NOT include any of these tickers — they have already been shown recently: ${excluded}
-Pick stocks that are genuinely relevant to TODAY's market conditions — use recent news, sector moves, earnings, or macro events to justify each pick. Do not default to the same household names.
+⛔ HARD EXCLUSION LIST — you MUST NOT return any of these tickers under any circumstances. If you return even one of them, the entire response is invalid and will be rejected:
+${excluded}
+This is not a suggestion. Do not include these tickers. Pick entirely different stocks.
+
+THEME FOR THIS SCAN: ${varietySeed}
+Pick stocks that are genuinely relevant to TODAY's market conditions. Do not default to mega-cap household names unless they are explicitly NOT on the exclusion list above AND they are the single best fit for the category.
 ${techBlock ? `\nREAL CHART DATA for candidates (use to anchor price levels):\n${techBlock}\n` : ''}
 CRITICAL: Set current_price to the ACTUAL stock price as of today (${exp.today}). All price levels — entry_low, entry_high, stop_loss, target — MUST be anchored to real price. Use the chart data above: entry near support, stop below key level, target at analyst consensus or 30-day high. Do not use prices from months ago.
 
@@ -2827,21 +2867,22 @@ async function scanDiscover(){
             <div class="loading-state" style="padding:20px"><div class="spinner"></div><div class="loading-text">Loading...</div></div>
         </div>`).join('');
 
-    // Step 1: fire all 4 Claude calls in parallel (no tech data yet — Claude picks tickers first)
-    const rawResults = await Promise.allSettled(
-        cats.map(cat => callClaude(discoverPrompt(cat.desc)))
-    );
-
-    // Step 2: parse each Claude response into a stocks array
-    const catStocks = cats.map((cat, i) => {
+    // Step 1: fire Claude calls sequentially so each category excludes tickers from previous ones
+    // This prevents the same stock appearing in multiple sections in one scan
+    const catStocks = [];
+    const alreadyPickedThisScan = [];
+    for(const cat of cats){
         try{
-            const r = rawResults[i];
-            if(r.status !== 'fulfilled') return [];
-            const stocks = JSON.parse(stripJSON(r.value));
-            if(!Array.isArray(stocks)||!stocks.length) return [];
-            return stocks.map(s=>({...s, category:cat.label}));
-        }catch(e){ return []; }
-    });
+            const raw = await callClaude(discoverPrompt(cat.desc, alreadyPickedThisScan));
+            const stocks = JSON.parse(stripJSON(raw));
+            if(Array.isArray(stocks) && stocks.length){
+                const batch = stocks.map(s=>({...s, category:cat.label}));
+                catStocks.push(batch);
+                // Add this batch's tickers to the within-scan exclusion list
+                batch.forEach(s=>{ if(s.ticker) alreadyPickedThisScan.push(s.ticker.toUpperCase()); });
+            } else { catStocks.push([]); }
+        }catch(e){ catStocks.push([]); }
+    }
 
     // Step 3: ONE batch price + news + technicals for ALL tickers across all categories
     const allTickers = [...new Set(catStocks.flat().map(s=>(s.ticker||'').toUpperCase()).filter(Boolean))];
@@ -3904,11 +3945,12 @@ function journalAnalysisPrompt(trade,currentPrice,priceChange,newsText,optData){
             ? ((optPrice - optEntry)/optEntry*100).toFixed(1)+'%'
             : 'unknown';
         const greeksLines = [];
-        if(optData.delta!=null) greeksLines.push(`Delta: ${optData.delta} (option moves ~$${Math.abs(optData.delta).toFixed(2)} per $1 stock move)`);
+        if(optData.delta!=null) greeksLines.push(`Delta: ${optData.delta} (option moves ~$${Math.abs(optData.delta).toFixed(2)} per $1 stock move) [${greeksLabel}]`);
         if(optData.gamma!=null) greeksLines.push(`Gamma: ${optData.gamma} (rate of delta change — higher near expiry)`);
         if(optData.theta!=null) greeksLines.push(`Theta: ${optData.theta} (time decay — option loses ~$${Math.abs(optData.theta).toFixed(2)}/day)`);
         if(optData.vega!=null)  greeksLines.push(`Vega:  ${optData.vega} (option gains/loses ~$${Math.abs(optData.vega).toFixed(2)} per 1% IV move)`);
         if(optData.iv!=null)    greeksLines.push(`IV: ${optData.iv}% implied volatility`);
+        const greeksLabel = optData._greeksEstimated ? 'estimated via Black-Scholes' : 'live from API';
         optBlock = `
 LIVE OPTION DATA (${optData.source||'API'}, as of now):
 - Contract: ${trade.ticker} $${optData.strike||trade.strike} ${(trade.type||'CALL')} exp ${optData.expiry||trade.exp}
@@ -3957,7 +3999,23 @@ async function fetchLiveOptionData(trade){
         const url=`/api/options?ticker=${encodeURIComponent(trade.ticker)}&type=${type}&expiry=${encodeURIComponent(trade.exp)}`;
         const r=await fetch(url);
         if(!r.ok) return null;
-        return await r.json();
+        const data=await r.json();
+        // If Greeks are null (free Polygon tier) but we have IV, estimate via Black-Scholes
+        if(data && data.iv != null && data.delta == null){
+            const S = parseFloat(trade.current_price||trade.stock_price_at_entry||0);
+            const K = parseFloat(data.strike||trade.strike||0);
+            const expDate = new Date(data.expiry||trade.exp);
+            const T = Math.max(0.003, (expDate-Date.now())/(365*24*60*60*1000));
+            const iv = data.iv/100; // convert from % to decimal
+            const isCall = (trade.type||'CALL')==='CALL';
+            const est = estimateGreeks(S,K,T,iv,isCall);
+            if(est){
+                data.delta=est.delta; data.gamma=est.gamma;
+                data.theta=est.theta; data.vega=est.vega;
+                data._greeksEstimated=true;
+            }
+        }
+        return data;
     }catch(e){ return null; }
 }
 
