@@ -22,16 +22,22 @@ function _cacheGet(key) {
 function _cacheSet(key, data) { _optCache.set(key, { data, ts: Date.now() }); }
 
 // ── Massive options fetch ────────────────────────────────────────────────────
-async function fetchMassiveOptions(symbol, contractType, targetDate, currentPrice, apiKey) {
+async function fetchMassiveOptions(symbol, contractType, targetDate, currentPrice, apiKey, specificStrike = null) {
     const targetMs = new Date(targetDate).getTime();
     const fromDate = new Date(targetMs - 14 * 86400 * 1000).toISOString().split('T')[0];
     const toDate   = new Date(targetMs + 14 * 86400 * 1000).toISOString().split('T')[0];
 
-    // Add strike range filter: ±30% of current price keeps ATM in results even for
-    // high-priced stocks (NVDA $450+, META $700+) where near-term options have many
-    // strikes and the limit=250 sorted from lowest would miss the ATM strike.
-    const strikeMin = currentPrice > 0 ? `&strike_price.gte=${(currentPrice * 0.70).toFixed(2)}` : '';
-    const strikeMax = currentPrice > 0 ? `&strike_price.lte=${(currentPrice * 1.35).toFixed(2)}` : '';
+    // When looking up a specific logged strike, pin to ±5% of that strike so we always
+    // find the right contract regardless of where the stock has moved since entry.
+    // For ATM discovery, use ±30% of current price to cover normal scan use-cases.
+    let strikeMin = '', strikeMax = '';
+    if (specificStrike && specificStrike > 0) {
+        strikeMin = `&strike_price.gte=${(specificStrike * 0.95).toFixed(2)}`;
+        strikeMax = `&strike_price.lte=${(specificStrike * 1.05).toFixed(2)}`;
+    } else if (currentPrice > 0) {
+        strikeMin = `&strike_price.gte=${(currentPrice * 0.70).toFixed(2)}`;
+        strikeMax = `&strike_price.lte=${(currentPrice * 1.35).toFixed(2)}`;
+    }
 
     const url = [
         `https://api.polygon.io/v3/snapshot/options/${symbol}`,
@@ -118,6 +124,13 @@ async function fetchMassiveOptions(symbol, contractType, targetDate, currentPric
     const gamma      = greeks?.gamma  != null ? parseFloat(greeks.gamma.toFixed(4))  : null;
     const theta      = greeks?.theta  != null ? parseFloat(greeks.theta.toFixed(4))  : null;
     const vega       = greeks?.vega   != null ? parseFloat(greeks.vega.toFixed(4))   : null;
+
+    // Debug: log the full greeks object so we can verify Polygon is returning them
+    if (greeks) {
+        console.log(`[options] ✓ Greeks from Polygon for ${symbol}: delta=${delta} gamma=${gamma} theta=${theta} vega=${vega} (raw: ${JSON.stringify(greeks)})`);
+    } else {
+        console.log(`[options] ⚠ No greeks field in Polygon response for ${symbol} ${contractType} — raw keys: ${Object.keys(best).join(', ')}`);
+    }
 
     console.log(`[options] ✓ Massive ${symbol} ${contractType} ${bestExpiry} strike=$${best.details?.strike_price} bid=$${bid} ask=$${ask} last=$${last} close=$${dayClose} type=${priceType} delta=${delta}`);
 
@@ -583,7 +596,7 @@ module.exports = async function handler(req, res) {
         // ── Source 1: Massive (Polygon — MASSIVE_API_KEY) ────────────
         const massiveKey = process.env.MASSIVE_API_KEY;
         if (massiveKey) {
-            const result = await fetchMassiveOptions(symbol, contractType, targetDateStr, refPrice, massiveKey);
+            const result = await fetchMassiveOptions(symbol, contractType, targetDateStr, refPrice, massiveKey, targetStrike);
             if (result) return respond(result, 'massive');
             console.warn('[options] Massive failed, trying Tradier');
         }

@@ -801,7 +801,7 @@
                     </div>
                 </div>
                 <!-- Auth sync banner — shown/hidden by JS -->
-                <div id="journalSyncBanner" style="display:none;margin-bottom:14px;padding:10px 14px;border-radius:8px;border:1px solid var(--border);background:var(--bg2);font-size:12px;display:flex;align-items:center;gap:10px;justify-content:space-between">
+                <div id="journalSyncBanner" style="display:none;margin-bottom:14px;padding:10px 14px;border-radius:8px;border:1px solid var(--border);background:var(--bg2);font-size:12px;align-items:center;gap:10px;justify-content:space-between">
                     <span id="journalSyncMsg" style="color:var(--muted)">🔒 Sign in to sync your journal across all devices</span>
                     <button id="journalSyncBtn" onclick="openAuthModal()" style="background:var(--blue);color:#000;border:none;border-radius:5px;padding:5px 12px;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap">Sign In</button>
                 </div>
@@ -3629,7 +3629,12 @@ async function initSupabase(){
         if(!r.ok) return;
         const cfg = await r.json();
         if(!cfg.configured || !cfg.url || !cfg.anonKey) return;
-        _sbClient = window.supabase.createClient(cfg.url, cfg.anonKey);
+        // Validate URL looks like a Supabase project URL
+        if(!cfg.url.startsWith('https://') || !cfg.url.includes('supabase.co')){
+            console.warn('[supabase] SUPABASE_URL looks wrong — expected https://xxxxx.supabase.co, got:', cfg.url.slice(0,40));
+            return;
+        }
+        _sbClient = window.supabase.createClient(cfg.url.trim(), cfg.anonKey.trim());
         // Listen for auth state changes
         _sbClient.auth.onAuthStateChange(async (event, session) => {
             _sbUser = session?.user || null;
@@ -3791,7 +3796,13 @@ function _applyAuthMode(){
     document.getElementById('auth-error').style.display = 'none';
 }
 async function handleAuthSubmit(){
-    if(!_sbClient){ alert('Journal sync is not configured yet.'); return; }
+    if(!_sbClient){
+        const errEl=document.getElementById('auth-error');
+        errEl.style.color='var(--red)';
+        errEl.textContent='Journal sync is not set up yet. Add SUPABASE_URL and SUPABASE_ANON_KEY to your Vercel environment variables, then redeploy.';
+        errEl.style.display='';
+        return;
+    }
     const email    = document.getElementById('auth-email').value.trim();
     const password = document.getElementById('auth-password').value;
     const confirm  = document.getElementById('auth-confirm').value;
