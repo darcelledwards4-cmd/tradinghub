@@ -3634,7 +3634,8 @@ async function initSupabase(){
             console.warn('[supabase] SUPABASE_URL looks wrong — expected https://xxxxx.supabase.co, got:', cfg.url.slice(0,40));
             return;
         }
-        _sbClient = window.supabase.createClient(cfg.url.trim(), cfg.anonKey.trim());
+        const sbUrl = cfg.url.trim().replace(/\/+$/, ''); // strip trailing slashes
+        _sbClient = window.supabase.createClient(sbUrl, cfg.anonKey.trim());
         // Listen for auth state changes
         _sbClient.auth.onAuthStateChange(async (event, session) => {
             _sbUser = session?.user || null;
@@ -4110,25 +4111,46 @@ async function fetchLiveOptionData(trade){
         const r=await fetch(url);
         if(!r.ok) return null;
         const data=await r.json();
-        // If Greeks are null (free Polygon tier) but we have IV, estimate via Black-Scholes
-        if(data && data.iv != null && data.delta == null){
-            // Use current price from the running analysis, or fall back to stock_price_at_entry
+        // Normalise: flatten data.best fields to top level for easy access downstream
+        // The /api/options response wraps everything in data.best
+        const b = data?.best || {};
+        const flat = {
+            strike:         b.strike   ?? null,
+            expiry:         b.expiry   ?? data.targetExpiry ?? null,
+            bid:            b.bid      ?? null,
+            ask:            b.ask      ?? null,
+            mid:            b.mid      ?? null,
+            last:           b.last     ?? null,
+            iv:             b.iv       ?? null,
+            volume:         b.volume   ?? 0,
+            openInterest:   b.openInterest ?? 0,
+            inTheMoney:     b.inTheMoney ?? false,
+            contractSymbol: b.contractSymbol ?? '',
+            priceType:      b.priceType ?? null,
+            delta:          b.delta    ?? null,
+            gamma:          b.gamma    ?? null,
+            theta:          b.theta    ?? null,
+            vega:           b.vega     ?? null,
+            source:         data.source ?? null,
+        };
+        // If Greeks still null (free Polygon tier) but we have IV, estimate via Black-Scholes
+        if(flat.iv != null && flat.delta == null){
             const S = parseFloat(trade._liveStockPrice||trade.current_price||trade.stock_price_at_entry||0);
-            const K = parseFloat(data.strike||trade.strike||0);
-            const expDate = new Date(data.expiry||trade.exp);
+            const K = parseFloat(flat.strike||trade.strike||0);
+            const expDate = new Date(flat.expiry||trade.exp);
             const T = Math.max(0.003, (expDate-Date.now())/(365*24*60*60*1000));
-            const iv = data.iv/100;
+            const iv = flat.iv/100;
             const isCall = (trade.type||'CALL')==='CALL';
             if(S>0 && K>0){
                 const est = estimateGreeks(S,K,T,iv,isCall);
                 if(est){
-                    data.delta=est.delta; data.gamma=est.gamma;
-                    data.theta=est.theta; data.vega=est.vega;
-                    data._greeksEstimated=true;
+                    flat.delta=est.delta; flat.gamma=est.gamma;
+                    flat.theta=est.theta; flat.vega=est.vega;
+                    flat._greeksEstimated=true;
                 }
             }
         }
-        return data;
+        return flat;
     }catch(e){ return null; }
 }
 

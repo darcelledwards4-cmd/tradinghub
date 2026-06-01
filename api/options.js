@@ -585,6 +585,11 @@ module.exports = async function handler(req, res) {
                     openInterest: result.openInterest ?? result.oi, iv: result.iv,
                     inTheMoney: result.inTheMoney, contractSymbol: result.contractSymbol ?? result.ticker ?? '',
                     priceType: result.priceType,
+                    // Greeks — included here so frontend can access them at data.best.delta etc.
+                    delta: result.delta ?? null,
+                    gamma: result.gamma ?? null,
+                    theta: result.theta ?? null,
+                    vega:  result.vega  ?? null,
                 },
                 fetchedAt: new Date().toISOString(),
                 source,
