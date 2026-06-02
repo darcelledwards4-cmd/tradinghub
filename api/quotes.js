@@ -1,4 +1,4 @@
-// Batch real-time quotes — Twelve Data primary, Yahoo Finance fallback
+// Batch real-time quotes — Polygon primary (paid), Twelve Data secondary, Yahoo Finance fallback
 // GET /api/quotes?symbols=NVDA,AAPL,SPY (up to 20 symbols)
 // Returns: { prices: { NVDA: { c, pc, dp, h, l }, ... }, fetched_at, source }
 module.exports = async function handler(req, res) {
@@ -10,7 +10,129 @@ module.exports = async function handler(req, res) {
 
     const tickers = [...new Set(raw.split(',').map(s => s.trim()).filter(Boolean))].slice(0, 20);
 
-    // ── Try Twelve Data first (TWELVEDATA_API_KEY in Vercel env) ──
+    // ── Source 1: Polygon batch snapshot (MASSIVE_API_KEY) — paid plan, most reliable ──
+    const polyKey = process.env.MASSIVE_API_KEY;
+    if (polyKey) {
+        try {
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), 10000);
+            const url = `https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/tickers?tickers=${tickers.join(',')}&apiKey=${polyKey}`;
+            const r = await fetch(url, {
+                headers: { 'Accept': 'application/json' },
+                signal: controller.signal,
+            });
+            clearTimeout(timer);
+
+            if (r.ok) {
+                const data = await r.json();
+
+                // Check for Polygon auth/error responses (200 but error body)
+                if (data.status === 'NOT_AUTHORIZED' || data.status === 'ERROR') {
+                    console.error('[quotes] Polygon error status:', data.status, data.error || data.message || '');
+                    // fall through to next source
+                } else {
+                    const priceMap = {};
+                    for (const t of (data.tickers || [])) {
+                        // Price priority:
+                        //   1. lastTrade.p — most recent actual trade (best during market hours)
+                        //   2. day.c — current session close/last (updates intraday)
+                        //   3. min.c — last minute bar close
+                        //   4. prevDay.c — previous session close (always available)
+                        const price = t.lastTrade?.p || t.day?.c || t.min?.c || t.prevDay?.c;
+                        const prev  = t.prevDay?.c || t.day?.c || price;
+                        if (price && price > 0) {
+                            // todaysChangePerc is computed against prevDay, which is what we want
+                            const dpRaw = t.todaysChangePerc != null
+                                ? t.todaysChangePerc
+                                : (prev && prev > 0 ? ((price - prev) / prev * 100) : 0);
+                            priceMap[t.ticker] = {
+                                c:  parseFloat(price),
+                                pc: parseFloat(prev || price),
+                                dp: parseFloat(dpRaw.toFixed(2)),
+                                h:  parseFloat(t.day?.h || t.prevDay?.h || price),
+                                l:  parseFloat(t.day?.l || t.prevDay?.l || price),
+                            };
+                        }
+                    }
+
+                    if (Object.keys(priceMap).length > 0) {
+                        console.log('[quotes] Polygon ✓', Object.keys(priceMap).length, '/', tickers.length, 'tickers');
+                        return res.status(200).json({
+                            prices: priceMap,
+                            fetched_at: new Date().toISOString(),
+                            count: Object.keys(priceMap).length,
+                            requested: tickers.length,
+                            source: 'polygon',
+                        });
+                    } else {
+                        console.warn('[quotes] Polygon returned 0 tickers from snapshot. status=', data.status, 'count=', data.count);
+                    }
+                }
+            } else {
+                console.warn('[quotes] Polygon HTTP', r.status);
+            }
+        } catch (e) {
+            console.error('[quotes] Polygon error:', e.message);
+        }
+    }
+
+    // ── Source 2: Polygon prev-close batch (fallback — always has data, even on weekends) ──
+    // Uses the /v2/aggs/grouped/locale/us/market/stocks/{date} endpoint
+    if (polyKey) {
+        try {
+            // Get last 2 trading day dates to find the most recent available
+            const today = new Date();
+            const dates = [];
+            for (let i = 0; i < 5; i++) {
+                const d = new Date(today);
+                d.setDate(d.getDate() - i);
+                const day = d.getDay();
+                if (day !== 0 && day !== 6) { // skip weekends
+                    dates.push(d.toISOString().split('T')[0]);
+                    if (dates.length >= 2) break;
+                }
+            }
+
+            // Try prev-close for each ticker via /v2/aggs/ticker/{t}/prev
+            const results = await Promise.allSettled(
+                tickers.map(async ticker => {
+                    const url = `https://api.polygon.io/v2/aggs/ticker/${ticker}/prev?adjusted=true&apiKey=${polyKey}`;
+                    const r = await fetch(url, {
+                        headers: { 'Accept': 'application/json' },
+                        signal: AbortSignal.timeout(6000),
+                    });
+                    if (!r.ok) return null;
+                    const d = await r.json();
+                    const result = d.results?.[0];
+                    if (!result || !result.c) return null;
+                    return { ticker, c: result.c, o: result.o, h: result.h, l: result.l };
+                })
+            );
+
+            const priceMap = {};
+            results.forEach((r, i) => {
+                if (r.status === 'fulfilled' && r.value) {
+                    const { ticker, c, h, l } = r.value;
+                    priceMap[ticker] = { c, pc: c, dp: 0, h: h || c, l: l || c };
+                }
+            });
+
+            if (Object.keys(priceMap).length > 0) {
+                console.log('[quotes] Polygon prev-close ✓', Object.keys(priceMap).length, '/', tickers.length, 'tickers');
+                return res.status(200).json({
+                    prices: priceMap,
+                    fetched_at: new Date().toISOString(),
+                    count: Object.keys(priceMap).length,
+                    requested: tickers.length,
+                    source: 'polygon_prev',
+                });
+            }
+        } catch (e) {
+            console.error('[quotes] Polygon prev-close error:', e.message);
+        }
+    }
+
+    // ── Source 3: Twelve Data (TWELVEDATA_API_KEY in Vercel env) ──────────────
     const tdKey = process.env.TWELVEDATA_API_KEY;
     if (tdKey) {
         try {
@@ -47,6 +169,7 @@ module.exports = async function handler(req, res) {
                     }
 
                     if (Object.keys(priceMap).length > 0) {
+                        console.log('[quotes] Twelve Data ✓', Object.keys(priceMap).length, '/', tickers.length);
                         return res.status(200).json({
                             prices: priceMap,
                             fetched_at: new Date().toISOString(),
@@ -58,54 +181,11 @@ module.exports = async function handler(req, res) {
                 }
             }
         } catch (e) {
-            // fall through to Polygon
+            console.error('[quotes] Twelve Data error:', e.message);
         }
     }
 
-    // ── Source 2: Polygon batch snapshot (MASSIVE_API_KEY) ────────────────────
-    const polyKey = process.env.MASSIVE_API_KEY;
-    if (polyKey) {
-        try {
-            const controller = new AbortController();
-            const timer = setTimeout(() => controller.abort(), 8000);
-            const url = `https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/tickers?tickers=${tickers.join(',')}&apiKey=${polyKey}`;
-            const r = await fetch(url, {
-                headers: { 'Accept': 'application/json' },
-                signal: controller.signal,
-            });
-            clearTimeout(timer);
-            if (r.ok) {
-                const data = await r.json();
-                const priceMap = {};
-                for (const t of (data.tickers || [])) {
-                    const price = t.day?.c || t.lastTrade?.p || t.prevDay?.c;
-                    const prev  = t.prevDay?.c || price;
-                    if (price && price > 0) {
-                        priceMap[t.ticker] = {
-                            c:  parseFloat(price),
-                            pc: parseFloat(prev || price),
-                            dp: t.todaysChangePerc != null ? parseFloat(t.todaysChangePerc.toFixed(2)) : (prev ? parseFloat(((price - prev) / prev * 100).toFixed(2)) : 0),
-                            h:  parseFloat(t.day?.h || price),
-                            l:  parseFloat(t.day?.l || price),
-                        };
-                    }
-                }
-                if (Object.keys(priceMap).length > 0) {
-                    return res.status(200).json({
-                        prices: priceMap,
-                        fetched_at: new Date().toISOString(),
-                        count: Object.keys(priceMap).length,
-                        requested: tickers.length,
-                        source: 'polygon',
-                    });
-                }
-            }
-        } catch (e) {
-            // fall through to Yahoo Finance
-        }
-    }
-
-    // ── Source 3: Yahoo Finance (no key needed) ────────────────
+    // ── Source 4: Yahoo Finance (no key needed) ────────────────────────────────
     async function fetchOne(ticker) {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), 7000);
@@ -143,6 +223,7 @@ module.exports = async function handler(req, res) {
         if (r.status === 'fulfilled' && r.value) priceMap[ticker] = r.value;
     });
 
+    console.log('[quotes] Yahoo ✓', Object.keys(priceMap).length, '/', tickers.length);
     return res.status(200).json({
         prices: priceMap,
         fetched_at: new Date().toISOString(),
