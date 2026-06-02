@@ -963,16 +963,24 @@ function addSeenDiscoverTickers(tickers){
 // Sector rotation seed — cycles through market themes by week so prompts feel fresh
 function getVarietySeed(){
     const themes = [
-        'Focus on mid-cap and small-cap names (not mega-cap tech like AAPL/MSFT/NVDA/GOOGL/META/AMZN). Think $2B–$20B market cap.',
-        'Focus on sector leaders outside of tech — consider healthcare, energy, industrials, consumer discretionary, or financials.',
-        'Focus on recent earnings winners or stocks that have had a meaningful catalyst in the past 2 weeks.',
-        'Focus on names that are NOT in the S&P 500 top 20 holdings. Mid-cap and sector-specific names preferred.',
-        'Focus on value plays and dividend-paying stocks that are showing technical strength.',
-        'Focus on stocks tied to macro themes: AI infrastructure, clean energy, defense, or reshoring.',
-        'Focus on beaten-down stocks that are showing early signs of reversal (not yet recovered).',
+        'Focus ONLY on mid-cap names ($2B–$15B market cap). Zero mega-cap tech — no AAPL, MSFT, NVDA, GOOGL, META, AMZN, TSLA.',
+        'Focus ONLY on healthcare, biotech, or pharma names showing momentum or near catalysts.',
+        'Focus ONLY on energy, materials, or industrial sector stocks — no tech.',
+        'Focus ONLY on consumer discretionary or retail names that are moving on earnings or macro news.',
+        'Focus ONLY on financial sector — banks, insurance, fintech — showing technical strength.',
+        'Focus ONLY on stocks tied to defense, aerospace, or government spending themes.',
+        'Focus ONLY on beaten-down names (down 20%+ from 52-week high) showing early reversal signals.',
+        'Focus ONLY on small-cap names under $2B market cap with strong recent momentum.',
+        'Focus ONLY on stocks with upcoming earnings in the next 2–4 weeks (earnings play setups).',
+        'Focus ONLY on international-revenue companies or those benefiting from a weak dollar.',
+        'Focus ONLY on AI infrastructure or semiconductor supply chain names that are NOT NVDA or MSFT.',
+        'Focus ONLY on clean energy, EV, or battery supply chain names with recent catalysts.',
+        'Focus ONLY on real estate (REITs) or utility stocks showing unusual options activity.',
+        'Focus ONLY on consumer staples or food/beverage stocks breaking out technically.',
     ];
-    const week = Math.floor(Date.now() / (7 * 24 * 60 * 60 * 1000));
-    return themes[week % themes.length];
+    // Rotate daily — different sector focus every single day
+    const day = Math.floor(Date.now() / (24 * 60 * 60 * 1000));
+    return themes[day % themes.length];
 }
 
 // ── Black-Scholes Greeks estimation (fallback when API doesn't return them) ──
@@ -1467,9 +1475,12 @@ function _parseApiOptionsResponse(data){
         mid:b.mid??null, last:b.last??null,
         volume:b.volume??0, oi:b.openInterest??0,
         iv:b.iv??null, inTheMoney:b.inTheMoney??false,
-        priceType:b.priceType??null,   // 'live' | 'last_trade' | 'prev_close'
-        source:data.source??'unknown',  // 'massive' | 'twelvedata' | 'yahoo_v10'
-        isEstimate:false
+        priceType:b.priceType??null,
+        source:data.source??'unknown',
+        isEstimate:false,
+        // Greeks — from Polygon paid plan; may be null on free tier (Black-Scholes fills in below)
+        delta:b.delta??null, gamma:b.gamma??null,
+        theta:b.theta??null, vega:b.vega??null,
     };
 }
 
@@ -1499,7 +1510,14 @@ async function fetchRealOption(ticker, currentPrice, contractType, expiryTarget,
             if(data.best&&data.best.strike!=null&&(data.best.bid!=null||data.best.ask!=null||data.best.last!=null)){
                 const parsed=_parseApiOptionsResponse(data);
                 if(parsed){
-                    console.log('[options] ✓ /api/options',ticker,type,expiryTarget,'bid=$'+(parsed.bid??'—'),'ask=$'+(parsed.ask??'—'),'last=$'+(parsed.last??'—'));
+                    // Fill Greeks via Black-Scholes if Polygon didn't return them
+                    if(parsed.delta==null && parsed.iv!=null && refPrice>0 && parsed.strike){
+                        const expDate=new Date(parsed.expiry);
+                        const T=Math.max(0.003,(expDate-Date.now())/(365*24*60*60*1000));
+                        const est=estimateGreeks(refPrice, parsed.strike, T, parsed.iv/100, type==='call');
+                        if(est){parsed.delta=est.delta;parsed.gamma=est.gamma;parsed.theta=est.theta;parsed.vega=est.vega;parsed._greeksEstimated=true;}
+                    }
+                    console.log('[options] ✓ /api/options',ticker,type,expiryTarget,'bid=$'+(parsed.bid??'—'),'ask=$'+(parsed.ask??'—'),'delta='+(parsed.delta??'null'));
                     return parsed;
                 }
             }
@@ -1622,6 +1640,17 @@ function buildLiveOptionHTML(o, optType, stockTarget=null){
     const subNote = o.isEstimate
         ? `<div style="font-size:10px;color:var(--muted);margin-top:1px">${sourceLabel} · IV ~${o.iv||'—'}%${oiNote}</div>`
         : `<div style="font-size:10px;color:var(--muted);margin-top:1px">${sourceLabel} · mid $${midFmt}${ivNote}${oiNote}</div>`;
+    // Greeks row — shown when available (live from Polygon or estimated via Black-Scholes)
+    const greeksTag = o._greeksEstimated
+        ? `<span style="font-size:9px;color:var(--muted);opacity:.7"> (est.)</span>` : '';
+    const greeksRow = (o.delta!=null||o.theta!=null)
+        ? `<div style="font-size:10px;color:var(--muted);margin-top:3px;display:flex;gap:10px;flex-wrap:wrap">
+${o.delta!=null?`<span title="Delta: how much option moves per $1 stock move"><span style="color:var(--text)">Δ ${o.delta}</span></span>`:''}
+${o.gamma!=null?`<span title="Gamma: rate of delta change">γ ${o.gamma}</span>`:''}
+${o.theta!=null?`<span title="Theta: daily time decay"><span style="color:${o.theta<-0.05?'var(--red)':'var(--muted)'}">Θ ${o.theta}/day</span></span>`:''}
+${o.vega!=null?`<span title="Vega: sensitivity to IV changes">ν ${o.vega}</span>`:''}
+${greeksTag}</div>`
+        : '';
     // Option stop: 15% loss from entry (standard beginner rule)
     const refPrice = parseFloat(refAsk) || 0;
     const optStop = refPrice > 0 ? `$${(refPrice * 0.85).toFixed(2)}` : null;
@@ -1650,7 +1679,7 @@ ${optTarget ? `<div>🎯 <span style="color:var(--muted);font-weight:600">Option
     return `${badge}
 <span style="font-weight:700;font-size:12px">$${o.strike} ${optType} · exp ${expiryFmt}</span>
 <div style="margin-top:3px;font-size:13px;font-weight:700;color:var(--text)">${buyRange}${costNote}</div>
-${subNote}${stopTargetRow}`;
+${subNote}${greeksRow}${stopTargetRow}`;
 }
 
 // Enrich ONE card with live option price — separated so switchCardDir can call it too

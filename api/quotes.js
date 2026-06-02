@@ -58,11 +58,54 @@ module.exports = async function handler(req, res) {
                 }
             }
         } catch (e) {
+            // fall through to Polygon
+        }
+    }
+
+    // ── Source 2: Polygon batch snapshot (MASSIVE_API_KEY) ────────────────────
+    const polyKey = process.env.MASSIVE_API_KEY;
+    if (polyKey) {
+        try {
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), 8000);
+            const url = `https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/tickers?tickers=${tickers.join(',')}&apiKey=${polyKey}`;
+            const r = await fetch(url, {
+                headers: { 'Accept': 'application/json' },
+                signal: controller.signal,
+            });
+            clearTimeout(timer);
+            if (r.ok) {
+                const data = await r.json();
+                const priceMap = {};
+                for (const t of (data.tickers || [])) {
+                    const price = t.day?.c || t.lastTrade?.p || t.prevDay?.c;
+                    const prev  = t.prevDay?.c || price;
+                    if (price && price > 0) {
+                        priceMap[t.ticker] = {
+                            c:  parseFloat(price),
+                            pc: parseFloat(prev || price),
+                            dp: t.todaysChangePerc != null ? parseFloat(t.todaysChangePerc.toFixed(2)) : (prev ? parseFloat(((price - prev) / prev * 100).toFixed(2)) : 0),
+                            h:  parseFloat(t.day?.h || price),
+                            l:  parseFloat(t.day?.l || price),
+                        };
+                    }
+                }
+                if (Object.keys(priceMap).length > 0) {
+                    return res.status(200).json({
+                        prices: priceMap,
+                        fetched_at: new Date().toISOString(),
+                        count: Object.keys(priceMap).length,
+                        requested: tickers.length,
+                        source: 'polygon',
+                    });
+                }
+            }
+        } catch (e) {
             // fall through to Yahoo Finance
         }
     }
 
-    // ── Fallback: Yahoo Finance ────────────────────────────────
+    // ── Source 3: Yahoo Finance (no key needed) ────────────────
     async function fetchOne(ticker) {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), 7000);
