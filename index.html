@@ -1684,6 +1684,49 @@ ${subNote}${greeksRow}${stopTargetRow}`;
 
 // Enrich ONE card with live option price — separated so switchCardDir can call it too
 // Only fetches the ACTIVE tab expiry to avoid rate-limiting Yahoo Finance
+// ── Greeks plain-English rationale ──────────────────────────────────────────
+// Returns a 2–3 sentence block explaining what the Greeks mean for THIS trade
+function buildGreeksRationale(opt, optType){
+    if(!opt) return '';
+    const parts = [];
+    const isCall = (optType||'CALL').toUpperCase() === 'CALL';
+
+    if(opt.delta != null){
+        const d = opt.delta;
+        const pct = Math.round(Math.abs(d) * 100);
+        let atm = '';
+        if(Math.abs(d) >= 0.45 && Math.abs(d) <= 0.55) atm = ' (ATM — highest leverage zone)';
+        else if(Math.abs(d) < 0.30) atm = ' (OTM — needs a bigger move to pay off)';
+        else if(Math.abs(d) > 0.70) atm = ' (deep ITM — moves almost like owning shares)';
+        parts.push(`Delta ${d}: this option captures ~$${d.toFixed(2)} for every $1 the stock moves${atm}. You need about a ${(0.50/Math.abs(d)).toFixed(1)}x move in your favor to double the premium paid.`);
+    }
+
+    if(opt.theta != null){
+        const t = opt.theta;
+        const dayLoss = Math.abs(t) * 100; // per contract per day
+        parts.push(`Theta ${t}/day: time decay is costing ~$${dayLoss.toFixed(2)}/contract daily${dayLoss > 5 ? ' — this accelerates near expiry, so timing matters' : ' — decay is manageable right now'}.`);
+    }
+
+    if(opt.iv != null){
+        const iv = opt.iv;
+        let ivCtx = '';
+        if(iv < 25) ivCtx = 'low IV — cheap premium, but expect slower moves';
+        else if(iv < 45) ivCtx = 'moderate IV — balanced risk/reward';
+        else if(iv < 70) ivCtx = 'elevated IV — premium is expensive, a big move is expected';
+        else ivCtx = 'very high IV — premium is priced for a major catalyst, risky to buy';
+        parts.push(`IV ${iv.toFixed(0)}%: ${ivCtx}.`);
+    } else if(opt.vega != null){
+        parts.push(`Vega ${opt.vega}: option gains $${(opt.vega*100).toFixed(2)}/contract for each 1% rise in implied volatility.`);
+    }
+
+    if(!parts.length) return '';
+    const estNote = opt._greeksEstimated ? ' (estimated via Black-Scholes)' : '';
+    return `<div class="greeks-rationale" style="margin-top:10px;padding:8px 10px;background:rgba(255,255,255,0.04);border-left:2px solid var(--accent);border-radius:4px;font-size:11px;color:var(--muted);line-height:1.6">
+<div style="font-size:10px;font-weight:700;color:var(--accent);letter-spacing:.04em;margin-bottom:4px">📐 GREEKS RATIONALE${estNote}</div>
+${parts.map(p=>`<div style="margin-bottom:3px">${p}</div>`).join('')}
+</div>`;
+}
+
 async function enrichOneCard(cardId){
     const EXPIRY_TARGETS = ['30d', '90d', '180d'];
     const cd = window._cardData[cardId];
@@ -1749,6 +1792,17 @@ async function enrichOneCard(cardId){
             const html = `<div class="opt-live-price" style="font-size:10px;font-weight:800;color:var(--green);margin-top:1px">ask $${result.ask.toFixed(2)}</div>`;
             if(!existing) tabEls[activeIdx].insertAdjacentHTML('beforeend', html);
             else existing.outerHTML = html;
+        }
+        // Inject Greeks rationale into the account_sizing block under the card
+        const greeksHtml = buildGreeksRationale(result, optType);
+        if(greeksHtml){
+            const acEl = document.getElementById('ac-'+cardId);
+            if(acEl){
+                // Remove any previously injected greeks rationale before re-adding
+                const prev = acEl.querySelector('.greeks-rationale');
+                if(prev) prev.remove();
+                acEl.insertAdjacentHTML('beforeend', greeksHtml);
+            }
         }
         console.log('[options]', idea.ticker, optType, activeExpiry, `ask=$${result.ask} strike=$${result.strike} exp=${result.expiry}`);
     } else {
@@ -2878,12 +2932,24 @@ async function scanWatchlist(){
 
 // ── DISCOVER: BEYOND YOUR WATCHLIST ──────────────────────────
 // Shared prompt for a single discover category — returns a JSON array of 3 stocks
-function discoverPrompt(categoryDesc, extraExclude=[], techMap={}){
+function discoverPrompt(categoryDesc, extraExclude=[], techMap={}, marketCandidates=[]){
     const seenTickers = getSeenDiscoverTickers();
     const excluded=[...new Set([...WATCHLIST,...extraExclude,...seenTickers])].join(', ');
     const varietySeed = getVarietySeed();
     const exp=getExpiryContext();
     const techBlock = formatTechnicalsForPrompt(techMap);
+
+    // Build market-active block — only include candidates that fit the category direction
+    let marketBlock = '';
+    if(marketCandidates && marketCandidates.length){
+        const catIsBearish = categoryDesc.toLowerCase().includes('put') || categoryDesc.toLowerCase().includes('bearish') || categoryDesc.toLowerCase().includes('weakness');
+        const relevant = marketCandidates.filter(c => catIsBearish ? c.direction === 'bearish' : c.direction === 'bullish');
+        if(relevant.length){
+            const lines = relevant.slice(0, 10).map(c => `  ${c.ticker}: ${c.reason} (price ~$${c.price})`).join('\n');
+            marketBlock = `\n📊 TODAY'S HIGHEST VOLUME & MOST ACTIVE STOCKS — These are real stocks moving with unusually high volume RIGHT NOW. Strongly prefer picking from this list when they fit the category and are NOT on the exclusion list. For each stock you pick from this list, you MUST mention the volume/momentum data in the summary and account_sizing:\n${lines}\n`;
+        }
+    }
+
     return `You are a stock analyst helping a beginner options trader. Today: ${exp.today}
 
 Find exactly 3 stocks that fit this description: ${categoryDesc}
@@ -2894,7 +2960,7 @@ This is not a suggestion. Do not include these tickers. Pick entirely different 
 
 THEME FOR THIS SCAN: ${varietySeed}
 Pick stocks that are genuinely relevant to TODAY's market conditions. Do not default to mega-cap household names unless they are explicitly NOT on the exclusion list above AND they are the single best fit for the category.
-${techBlock ? `\nREAL CHART DATA for candidates (use to anchor price levels):\n${techBlock}\n` : ''}
+${marketBlock}${techBlock ? `\nREAL CHART DATA for candidates (use to anchor price levels):\n${techBlock}\n` : ''}
 CRITICAL: Set current_price to the ACTUAL stock price as of today (${exp.today}). All price levels — entry_low, entry_high, stop_loss, target — MUST be anchored to real price. Use the chart data above: entry near support, stop below key level, target at analyst consensus or 30-day high. Do not use prices from months ago.
 
 Return ONLY a raw JSON array of exactly 3 objects. No markdown. No code fences. No explanation.
@@ -2925,13 +2991,24 @@ async function scanDiscover(){
             <div class="loading-state" style="padding:20px"><div class="spinner"></div><div class="loading-text">Loading...</div></div>
         </div>`).join('');
 
+    // Step 0: pre-fetch market-active data (Polygon most active / gainers / losers)
+    let marketCandidates = [];
+    try{
+        const maRes = await fetch('/api/market-active');
+        if(maRes.ok){
+            const maData = await maRes.json();
+            marketCandidates = maData.candidates || [];
+            console.log('[Discover] Market-active candidates:', marketCandidates.length, marketCandidates.map(c=>c.ticker).join(', '));
+        }
+    }catch(e){ console.warn('[Discover] market-active fetch failed:', e.message); }
+
     // Step 1: fire Claude calls sequentially so each category excludes tickers from previous ones
     // This prevents the same stock appearing in multiple sections in one scan
     const catStocks = [];
     const alreadyPickedThisScan = [];
     for(const cat of cats){
         try{
-            const raw = await callClaude(discoverPrompt(cat.desc, alreadyPickedThisScan));
+            const raw = await callClaude(discoverPrompt(cat.desc, alreadyPickedThisScan, {}, marketCandidates));
             const stocks = JSON.parse(stripJSON(raw));
             if(Array.isArray(stocks) && stocks.length){
                 const batch = stocks.map(s=>({...s, category:cat.label}));
