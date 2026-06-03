@@ -1253,7 +1253,7 @@ async function fetchQuote(ticker){
     const map = await fetchQuotes([ticker]);
     const q = map[ticker];
     if(!q) return null;
-    return { ticker, price:q.c, chg:q.dp||0, closes:[q.pc,q.c], high52:q.h||q.c, low52:q.l||q.c, vol:0 };
+    return { ticker, price:q.c, chg:q.dp||0, closes:[q.pc,q.c], high52:q.h||q.c, low52:q.l||q.c, vol:0, _isLive:q._isLive!==false };
 }
 
 // Fetch prices via Finnhub — guaranteed to work (key already set in Vercel)
@@ -1282,7 +1282,7 @@ async function fetchQuotes(tickers){
     if(!tickers||!tickers.length) return {};
     const unique=[...new Set(tickers.map(t=>t.toUpperCase().trim()))].filter(Boolean);
 
-    // ── PRIMARY: Vercel serverless /api/quotes (server-side, no CORS, Yahoo Finance with proper headers) ──
+    // ── PRIMARY: Vercel serverless /api/quotes (server-side, no CORS, Polygon + Yahoo) ──
     try{
         const ctrl=new AbortController();
         setTimeout(()=>ctrl.abort(),10000);
@@ -1290,8 +1290,14 @@ async function fetchQuotes(tickers){
         if(r.ok){
             const data=await r.json();
             if(data.prices&&Object.keys(data.prices).length>0){
-                console.log('[prices] /api/quotes ✓',data.source,unique);
-                return data.prices;
+                console.log('[prices] /api/quotes ✓',data.source,Object.keys(data.prices).length,'tickers');
+                // Tag each price with whether it's truly live (not a prev-close fallback)
+                const isLiveSource = data.source !== 'polygon_prev';
+                const tagged = {};
+                for(const [k,v] of Object.entries(data.prices)){
+                    tagged[k] = {...v, _isLive: isLiveSource, _source: data.source};
+                }
+                return tagged;
             }
         }
     }catch(e){ console.warn('[prices] /api/quotes error:',e.message); }
@@ -1952,7 +1958,7 @@ function injectLivePrices(cards, quotes){
         if(q && q.price){
             card.current_price = q.price;
             card.price_change  = q.chg;
-            card._priceIsLive  = true;
+            card._priceIsLive  = q._isLive !== false;
             card = sanitizePriceLevels(card, q.price);
         } else {
             card._priceIsLive = false;
@@ -1997,12 +2003,16 @@ async function refreshVisiblePrices(){
             if(data.call){ data.call.current_price=price; data.call.price_change=chg; }
             if(data.put) { data.put.current_price =price; data.put.price_change =chg; }
 
-            // Update price DOM + flip badge to Live
+            // Update price DOM + flip badge to Live (only if source is truly live, not prev-close)
             const cpEl = document.getElementById('cp-'+cardId);
+            const isActuallyLive = q._isLive !== false;
             if(cpEl){
-                cpEl.dataset.live = '1';
+                cpEl.dataset.live = isActuallyLive ? '1' : '0';
                 const badge = cpEl.querySelector('.price-src-badge');
-                if(badge){ badge.textContent='● Live'; badge.title='Live market price'; }
+                if(badge){
+                    badge.textContent = isActuallyLive ? '● Live' : '⚠ Est';
+                    badge.title = isActuallyLive ? 'Live market price' : 'Previous session close — market may be closed';
+                }
                 // Replace text node (price) without touching the badge span
                 const textNode = [...cpEl.childNodes].find(n=>n.nodeType===3);
                 if(textNode) textNode.textContent = '$'+price.toFixed(2);
@@ -2712,7 +2722,7 @@ async function loadMoreFilter(){
             newCards=newCards.map(s=>{
                 const k=(s.ticker||'').toUpperCase();
                 const q=discPriceMap[k];
-                if(q&&q.c){s=sanitizePriceLevels(s,q.c);s.current_price=q.c;s.price_change=q.dp||0;s._priceIsLive=true;}
+                if(q&&q.c){s=sanitizePriceLevels(s,q.c);s.current_price=q.c;s.price_change=q.dp||0;s._priceIsLive=q._isLive!==false;}
                 else s._priceIsLive=false;
                 const ne=discNewsMap[k];
                 if(ne&&ne.items&&ne.items.length) s._newsItems=ne.items.slice(0,2);
@@ -2780,7 +2790,7 @@ async function runActiveFilter(){
                     s=sanitizePriceLevels(s, q.c);
                     s.current_price=q.c;
                     s.price_change=q.dp||0;
-                    s._priceIsLive=true;
+                    s._priceIsLive=q._isLive!==false;
                 } else {
                     s._priceIsLive=false;
                 }
@@ -3047,7 +3057,7 @@ async function scanDiscover(){
                 s = sanitizePriceLevels(s, q.c);
                 s.current_price = q.c;
                 s.price_change  = q.dp || 0;
-                s._priceIsLive  = true;
+                s._priceIsLive  = q._isLive !== false;
             } else {
                 s._priceIsLive = false;
             }
@@ -3102,8 +3112,8 @@ async function analyzeSingle(){
         if(!callIdea && !putIdea) throw new Error('Could not parse analysis — try again.');
 
         // ✅ Force real live price + attach news items onto both directions
-        if(callIdea){ callIdea.current_price=q.price; callIdea.price_change=q.chg; callIdea._priceIsLive=true; callIdea._newsItems=newsItems; }
-        if(putIdea) { putIdea.current_price =q.price; putIdea.price_change =q.chg; putIdea._priceIsLive=true;  putIdea._newsItems=newsItems; }
+        if(callIdea){ callIdea.current_price=q.price; callIdea.price_change=q.chg; callIdea._priceIsLive=q._isLive!==false; callIdea._newsItems=newsItems; }
+        if(putIdea) { putIdea.current_price =q.price; putIdea.price_change =q.chg; putIdea._priceIsLive=q._isLive!==false;  putIdea._newsItems=newsItems; }
 
         // Pre-create cardId and populate both directions before rendering
         const cardId = 'c' + (++_cardIdCounter);
