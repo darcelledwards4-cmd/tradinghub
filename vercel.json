@@ -11,7 +11,6 @@
     "api/quote.js":            { "maxDuration": 15 },
     "api/supabase-config.js":  { "maxDuration": 5 },
     "api/debug-options.js":    { "maxDuration": 20 },
-    "api/market-active.js":   { "maxDuration": 15 },
-    "api/debug-quotes.js":    { "maxDuration": 20 }
+    "api/market-active.js":   { "maxDuration": 15 }
   }
 }
