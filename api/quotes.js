@@ -1,234 +1,202 @@
-// Batch real-time quotes — Polygon primary (paid), Twelve Data secondary, Yahoo Finance fallback
-// GET /api/quotes?symbols=NVDA,AAPL,SPY (up to 20 symbols)
-// Returns: { prices: { NVDA: { c, pc, dp, h, l }, ... }, fetched_at, source }
+// Real-time batch quotes
+// Strategy (in order):
+//   1. Yahoo Finance v7/quote  — batch, live regularMarketPrice during market hours
+//   2. Polygon last-trade      — individual /v2/last/trade per ticker in parallel (real-time tick)
+//   3. Polygon snapshot        — batch snapshot, lastTrade.p > day.c > prevDay.c
+//   4. Polygon prev-close      — /v2/aggs/ticker/{t}/prev (offline/weekend fallback)
+// Returns: { prices: { TICKER: { c, pc, dp, h, l, _isLive } }, source, fetched_at }
+
 module.exports = async function handler(req, res) {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
 
     const raw = (req.query.symbols || '').toUpperCase();
     if (!raw) return res.status(400).json({ error: 'symbols required' });
-
     const tickers = [...new Set(raw.split(',').map(s => s.trim()).filter(Boolean))].slice(0, 20);
 
-    // ── Source 1: Polygon batch snapshot (MASSIVE_API_KEY) — paid plan, most reliable ──
+    // ── 1. Yahoo Finance v7/quote — batch, live during market hours ───────────
+    // This is Yahoo's own real-time quote API — same data their app shows.
+    // Less rate-limited than v8/chart, returns regularMarketPrice (true live price).
+    try {
+        const fields = 'regularMarketPrice,regularMarketChange,regularMarketChangePercent,regularMarketDayHigh,regularMarketDayLow,regularMarketPreviousClose,marketState';
+        const hosts  = ['query1', 'query2'];
+        let yhData   = null;
+
+        for (const host of hosts) {
+            try {
+                const url = `https://${host}.finance.yahoo.com/v7/finance/quote?symbols=${tickers.join(',')}&fields=${fields}&formatted=false`;
+                const r = await fetch(url, {
+                    headers: {
+                        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+                        'Accept': 'application/json',
+                        'Accept-Language': 'en-US,en;q=0.9',
+                        'Referer': 'https://finance.yahoo.com/',
+                        'Origin': 'https://finance.yahoo.com',
+                    },
+                    signal: AbortSignal.timeout(8000),
+                });
+                if (r.ok) { yhData = await r.json(); break; }
+                if (r.status === 429) { console.warn(`[quotes] Yahoo ${host} 429 — trying next host`); continue; }
+            } catch (e) { continue; }
+        }
+
+        if (yhData) {
+            const results = yhData?.quoteResponse?.result || [];
+            const priceMap = {};
+            for (const q of results) {
+                const price = q.regularMarketPrice;
+                const prev  = q.regularMarketPreviousClose || price;
+                if (!price || price <= 0) continue;
+                priceMap[q.symbol.toUpperCase()] = {
+                    c:  price,
+                    pc: prev,
+                    dp: q.regularMarketChangePercent != null ? parseFloat(q.regularMarketChangePercent.toFixed(2)) : (prev ? parseFloat(((price - prev) / prev * 100).toFixed(2)) : 0),
+                    h:  q.regularMarketDayHigh  || price,
+                    l:  q.regularMarketDayLow   || price,
+                    _isLive: q.marketState === 'REGULAR' || q.marketState === 'PRE' || q.marketState === 'POST',
+                };
+            }
+            if (Object.keys(priceMap).length > 0) {
+                const liveCount = Object.values(priceMap).filter(p => p._isLive).length;
+                console.log(`[quotes] Yahoo v7/quote ✓ ${Object.keys(priceMap).length}/${tickers.length} tickers, ${liveCount} live`);
+                return res.status(200).json({ prices: priceMap, fetched_at: new Date().toISOString(), source: 'yahoo', count: Object.keys(priceMap).length });
+            }
+        }
+    } catch (e) { console.warn('[quotes] Yahoo v7/quote error:', e.message); }
+
+    // ── 2. Polygon last-trade per ticker (parallel) — real-time tick price ────
+    // /v2/last/trade returns the most recent SIP tape trade, bypassing snapshot cache.
     const polyKey = process.env.MASSIVE_API_KEY;
     if (polyKey) {
         try {
-            const controller = new AbortController();
-            const timer = setTimeout(() => controller.abort(), 10000);
-            const url = `https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/tickers?tickers=${tickers.join(',')}&apiKey=${polyKey}`;
-            const r = await fetch(url, {
-                headers: { 'Accept': 'application/json' },
-                signal: controller.signal,
-            });
-            clearTimeout(timer);
-
-            if (r.ok) {
-                const data = await r.json();
-
-                // Check for Polygon auth/error responses (200 but error body)
-                if (data.status === 'NOT_AUTHORIZED' || data.status === 'ERROR') {
-                    console.error('[quotes] Polygon error status:', data.status, data.error || data.message || '');
-                    // fall through to next source
-                } else {
-                    const priceMap = {};
-                    for (const t of (data.tickers || [])) {
-                        // Price priority:
-                        //   1. lastTrade.p — most recent actual trade (best during market hours)
-                        //   2. day.c — current session close/last (updates intraday)
-                        //   3. min.c — last minute bar close
-                        //   4. prevDay.c — previous session close (always available)
-                        const price = t.lastTrade?.p || t.day?.c || t.min?.c || t.prevDay?.c;
-                        const prev  = t.prevDay?.c || t.day?.c || price;
-                        if (price && price > 0) {
-                            // todaysChangePerc is computed against prevDay, which is what we want
-                            const dpRaw = t.todaysChangePerc != null
-                                ? t.todaysChangePerc
-                                : (prev && prev > 0 ? ((price - prev) / prev * 100) : 0);
-                            priceMap[t.ticker] = {
-                                c:  parseFloat(price),
-                                pc: parseFloat(prev || price),
-                                dp: parseFloat(dpRaw.toFixed(2)),
-                                h:  parseFloat(t.day?.h || t.prevDay?.h || price),
-                                l:  parseFloat(t.day?.l || t.prevDay?.l || price),
-                            };
-                        }
-                    }
-
-                    if (Object.keys(priceMap).length > 0) {
-                        console.log('[quotes] Polygon ✓', Object.keys(priceMap).length, '/', tickers.length, 'tickers');
-                        return res.status(200).json({
-                            prices: priceMap,
-                            fetched_at: new Date().toISOString(),
-                            count: Object.keys(priceMap).length,
-                            requested: tickers.length,
-                            source: 'polygon',
-                        });
-                    } else {
-                        console.warn('[quotes] Polygon returned 0 tickers from snapshot. status=', data.status, 'count=', data.count);
-                    }
-                }
-            } else {
-                console.warn('[quotes] Polygon HTTP', r.status);
-            }
-        } catch (e) {
-            console.error('[quotes] Polygon error:', e.message);
-        }
-    }
-
-    // ── Source 2: Polygon prev-close batch (fallback — always has data, even on weekends) ──
-    // Uses the /v2/aggs/grouped/locale/us/market/stocks/{date} endpoint
-    if (polyKey) {
-        try {
-            // Get last 2 trading day dates to find the most recent available
-            const today = new Date();
-            const dates = [];
-            for (let i = 0; i < 5; i++) {
-                const d = new Date(today);
-                d.setDate(d.getDate() - i);
-                const day = d.getDay();
-                if (day !== 0 && day !== 6) { // skip weekends
-                    dates.push(d.toISOString().split('T')[0]);
-                    if (dates.length >= 2) break;
-                }
-            }
-
-            // Try prev-close for each ticker via /v2/aggs/ticker/{t}/prev
-            const results = await Promise.allSettled(
-                tickers.map(async ticker => {
-                    const url = `https://api.polygon.io/v2/aggs/ticker/${ticker}/prev?adjusted=true&apiKey=${polyKey}`;
-                    const r = await fetch(url, {
+            const results = await Promise.allSettled(tickers.map(async ticker => {
+                // last trade
+                const [tradeR, prevR] = await Promise.all([
+                    fetch(`https://api.polygon.io/v2/last/trade/${ticker}?apiKey=${polyKey}`, {
                         headers: { 'Accept': 'application/json' },
                         signal: AbortSignal.timeout(6000),
-                    });
-                    if (!r.ok) return null;
-                    const d = await r.json();
-                    const result = d.results?.[0];
-                    if (!result || !result.c) return null;
-                    return { ticker, c: result.c, o: result.o, h: result.h, l: result.l };
-                })
-            );
+                    }),
+                    fetch(`https://api.polygon.io/v2/aggs/ticker/${ticker}/prev?adjusted=true&apiKey=${polyKey}`, {
+                        headers: { 'Accept': 'application/json' },
+                        signal: AbortSignal.timeout(6000),
+                    }),
+                ]);
+                const tradeData = tradeR.ok ? await tradeR.json() : null;
+                const prevData  = prevR.ok  ? await prevR.json()  : null;
+                const price = tradeData?.results?.p || tradeData?.last?.price || 0;
+                const prev  = prevData?.results?.[0]?.c || 0;
+                if (!price || price <= 0) return null;
+                const dp = prev > 0 ? parseFloat(((price - prev) / prev * 100).toFixed(2)) : 0;
+                return { ticker, c: price, pc: prev || price, dp, h: price, l: price, _isLive: true };
+            }));
 
             const priceMap = {};
-            results.forEach((r, i) => {
+            results.forEach(r => {
                 if (r.status === 'fulfilled' && r.value) {
-                    const { ticker, c, h, l } = r.value;
-                    priceMap[ticker] = { c, pc: c, dp: 0, h: h || c, l: l || c };
+                    const { ticker, ...rest } = r.value;
+                    priceMap[ticker] = rest;
                 }
             });
-
             if (Object.keys(priceMap).length > 0) {
-                console.log('[quotes] Polygon prev-close ✓', Object.keys(priceMap).length, '/', tickers.length, 'tickers');
-                return res.status(200).json({
-                    prices: priceMap,
-                    fetched_at: new Date().toISOString(),
-                    count: Object.keys(priceMap).length,
-                    requested: tickers.length,
-                    source: 'polygon_prev',
-                });
+                console.log(`[quotes] Polygon last-trade ✓ ${Object.keys(priceMap).length}/${tickers.length} tickers`);
+                return res.status(200).json({ prices: priceMap, fetched_at: new Date().toISOString(), source: 'polygon', count: Object.keys(priceMap).length });
             }
-        } catch (e) {
-            console.error('[quotes] Polygon prev-close error:', e.message);
-        }
+        } catch (e) { console.warn('[quotes] Polygon last-trade error:', e.message); }
     }
 
-    // ── Source 3: Twelve Data (TWELVEDATA_API_KEY in Vercel env) ──────────────
-    const tdKey = process.env.TWELVEDATA_API_KEY;
-    if (tdKey) {
+    // ── 3. Polygon batch snapshot ─────────────────────────────────────────────
+    if (polyKey) {
         try {
-            const controller = new AbortController();
-            const timer = setTimeout(() => controller.abort(), 8000);
-            const url = `https://api.twelvedata.com/quote?symbol=${tickers.join(',')}&apikey=${tdKey}`;
-            const r = await fetch(url, { signal: controller.signal });
-            clearTimeout(timer);
-
+            const r = await fetch(
+                `https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/tickers?tickers=${tickers.join(',')}&apiKey=${polyKey}`,
+                { headers: { 'Accept': 'application/json' }, signal: AbortSignal.timeout(10000) }
+            );
             if (r.ok) {
                 const data = await r.json();
-                // Top-level error means bad key, rate limit, etc. — fall through
-                if (!data.code) {
+                if (data.status !== 'NOT_AUTHORIZED' && data.status !== 'ERROR') {
                     const priceMap = {};
-                    // Single ticker returns object directly; multiple returns { TICKER: {...} }
-                    const entries = tickers.length === 1
-                        ? [[tickers[0], data]]
-                        : Object.entries(data);
-
-                    for (const [ticker, q] of entries) {
-                        if (!q || q.code || !q.close) continue;
-                        const price     = parseFloat(q.close);
-                        const prevClose = parseFloat(q.previous_close || q.close);
-                        const pct       = prevClose
-                            ? parseFloat(((price - prevClose) / prevClose * 100).toFixed(2))
-                            : parseFloat(q.percent_change || 0);
-                        if (price > 0) {
-                            priceMap[ticker.toUpperCase()] = {
-                                c: price, pc: prevClose, dp: pct,
-                                h: parseFloat(q.high || price),
-                                l: parseFloat(q.low  || price),
-                            };
-                        }
+                    for (const t of (data.tickers || [])) {
+                        const price = t.lastTrade?.p || t.day?.c || t.min?.c || t.prevDay?.c;
+                        const prev  = t.prevDay?.c || t.day?.c || price;
+                        if (!price || price <= 0) continue;
+                        const dpRaw = t.todaysChangePerc != null ? t.todaysChangePerc : (prev ? (price - prev) / prev * 100 : 0);
+                        priceMap[t.ticker] = {
+                            c: parseFloat(price), pc: parseFloat(prev || price),
+                            dp: parseFloat(dpRaw.toFixed(2)),
+                            h: parseFloat(t.day?.h || t.prevDay?.h || price),
+                            l: parseFloat(t.day?.l || t.prevDay?.l || price),
+                            _isLive: !!t.lastTrade?.p,  // only truly live if lastTrade has a price
+                        };
                     }
-
                     if (Object.keys(priceMap).length > 0) {
-                        console.log('[quotes] Twelve Data ✓', Object.keys(priceMap).length, '/', tickers.length);
-                        return res.status(200).json({
-                            prices: priceMap,
-                            fetched_at: new Date().toISOString(),
-                            count: Object.keys(priceMap).length,
-                            requested: tickers.length,
-                            source: 'twelvedata',
-                        });
+                        console.log(`[quotes] Polygon snapshot ✓ ${Object.keys(priceMap).length}/${tickers.length} tickers`);
+                        return res.status(200).json({ prices: priceMap, fetched_at: new Date().toISOString(), source: 'polygon', count: Object.keys(priceMap).length });
                     }
+                } else {
+                    console.error('[quotes] Polygon auth error:', data.status, data.message);
                 }
             }
-        } catch (e) {
-            console.error('[quotes] Twelve Data error:', e.message);
-        }
+        } catch (e) { console.warn('[quotes] Polygon snapshot error:', e.message); }
     }
 
-    // ── Source 4: Yahoo Finance (no key needed) ────────────────────────────────
-    async function fetchOne(ticker) {
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 7000);
+    // ── 4. Polygon prev-close — always available, never live ─────────────────
+    if (polyKey) {
         try {
-            const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1m&range=1d&includePrePost=false`;
-            const r = await fetch(url, {
-                headers: {
-                    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-                    'Accept': 'application/json, text/plain, */*',
-                    'Accept-Language': 'en-US,en;q=0.9',
-                    'Referer': 'https://finance.yahoo.com/',
-                    'Origin': 'https://finance.yahoo.com',
-                },
-                signal: controller.signal
+            const results = await Promise.allSettled(tickers.map(async ticker => {
+                const r = await fetch(
+                    `https://api.polygon.io/v2/aggs/ticker/${ticker}/prev?adjusted=true&apiKey=${polyKey}`,
+                    { headers: { 'Accept': 'application/json' }, signal: AbortSignal.timeout(5000) }
+                );
+                if (!r.ok) return null;
+                const d = await r.json();
+                const res = d.results?.[0];
+                if (!res?.c) return null;
+                return { ticker, c: res.c, pc: res.c, dp: 0, h: res.h || res.c, l: res.l || res.c, _isLive: false };
+            }));
+            const priceMap = {};
+            results.forEach(r => {
+                if (r.status === 'fulfilled' && r.value) {
+                    const { ticker, ...rest } = r.value;
+                    priceMap[ticker] = rest;
+                }
             });
-            if (!r.ok) return null;
-            const data = await r.json();
-            const meta = data?.chart?.result?.[0]?.meta;
-            if (!meta || !meta.regularMarketPrice) return null;
-            const price     = meta.regularMarketPrice;
-            const prevClose = meta.previousClose || meta.chartPreviousClose || price;
-            const pct       = prevClose ? parseFloat(((price - prevClose) / prevClose * 100).toFixed(2)) : 0;
-            return { c: price, pc: prevClose, dp: pct, h: meta.regularMarketDayHigh || price, l: meta.regularMarketDayLow || price };
-        } catch (e) {
-            return null;
-        } finally {
-            clearTimeout(timer);
-        }
+            if (Object.keys(priceMap).length > 0) {
+                console.log(`[quotes] Polygon prev-close ✓ ${Object.keys(priceMap).length}/${tickers.length} tickers (NOT live)`);
+                return res.status(200).json({ prices: priceMap, fetched_at: new Date().toISOString(), source: 'polygon_prev', count: Object.keys(priceMap).length });
+            }
+        } catch (e) { console.warn('[quotes] Polygon prev-close error:', e.message); }
     }
 
-    const results = await Promise.allSettled(tickers.map(fetchOne));
-    const priceMap = {};
-    tickers.forEach((ticker, i) => {
-        const r = results[i];
-        if (r.status === 'fulfilled' && r.value) priceMap[ticker] = r.value;
-    });
+    // ── 5. Yahoo Finance v8/chart per ticker (last resort) ───────────────────
+    const results = await Promise.allSettled(tickers.map(async ticker => {
+        try {
+            for (const host of ['query2', 'query1']) {
+                const r = await fetch(
+                    `https://${host}.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1m&range=1d`,
+                    {
+                        headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json', 'Referer': 'https://finance.yahoo.com/' },
+                        signal: AbortSignal.timeout(6000),
+                    }
+                );
+                if (!r.ok) continue;
+                const data = await r.json();
+                const meta = data?.chart?.result?.[0]?.meta;
+                if (!meta?.regularMarketPrice) continue;
+                const price = meta.regularMarketPrice;
+                const prev  = meta.previousClose || meta.chartPreviousClose || price;
+                return { ticker, c: price, pc: prev, dp: prev ? parseFloat(((price - prev) / prev * 100).toFixed(2)) : 0, h: meta.regularMarketDayHigh || price, l: meta.regularMarketDayLow || price, _isLive: true };
+            }
+        } catch (e) {}
+        return null;
+    }));
 
-    console.log('[quotes] Yahoo ✓', Object.keys(priceMap).length, '/', tickers.length);
-    return res.status(200).json({
-        prices: priceMap,
-        fetched_at: new Date().toISOString(),
-        count: Object.keys(priceMap).length,
-        requested: tickers.length,
-        source: 'yahoo',
+    const priceMap = {};
+    results.forEach(r => {
+        if (r.status === 'fulfilled' && r.value) {
+            const { ticker, ...rest } = r.value;
+            priceMap[ticker] = rest;
+        }
     });
+    console.log(`[quotes] Yahoo v8/chart ✓ ${Object.keys(priceMap).length}/${tickers.length} tickers`);
+    return res.status(200).json({ prices: priceMap, fetched_at: new Date().toISOString(), source: Object.keys(priceMap).length > 0 ? 'yahoo' : 'none', count: Object.keys(priceMap).length });
 };

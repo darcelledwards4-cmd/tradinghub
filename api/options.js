@@ -636,15 +636,40 @@ module.exports = async function handler(req, res) {
             return res.status(200).json(payload);
         };
 
-        // ── Source 1: Massive (Polygon — MASSIVE_API_KEY) ────────────
+        // ── Source 1: Polygon (MASSIVE_API_KEY) — best for greeks + liquid options ──
+        // Falls back to NBBO tape when snapshot bid/ask is null (see fetchMassiveOptions)
         const massiveKey = process.env.MASSIVE_API_KEY;
+        let massiveResult = null;
         if (massiveKey) {
-            const result = await fetchMassiveOptions(symbol, contractType, targetDateStr, refPrice, massiveKey, targetStrike);
-            if (result) return respond(result, 'massive');
-            console.warn('[options] Massive failed, trying Tradier');
+            massiveResult = await fetchMassiveOptions(symbol, contractType, targetDateStr, refPrice, massiveKey, targetStrike);
+            // Use Polygon result only if we got live bid/ask — not just prev_close
+            if (massiveResult && (massiveResult.bid != null || massiveResult.ask != null)) {
+                return respond(massiveResult, 'massive');
+            }
+            if (massiveResult) console.warn('[options] Polygon returned only prev_close — trying Yahoo for live bid/ask');
+            else console.warn('[options] Polygon returned no result — trying Yahoo');
         }
 
-        // ── Source 2: Tradier (TRADIER_API_KEY) ───────────────────────
+        // ── Source 2: Yahoo Finance v10 — live bid/ask, no greeks needed ─────
+        // Moved up: Yahoo gives reliable live bid/ask for any listed option.
+        // Run in parallel with Polygon's prev_close attempt above.
+        const yahooResult = await fetchYahooV10Options(symbol, contractType, expiryDays);
+        if (yahooResult && (yahooResult.bid != null || yahooResult.ask != null)) {
+            // If Polygon gave us greeks, merge them onto the Yahoo result
+            if (massiveResult) {
+                yahooResult.delta = massiveResult.delta ?? null;
+                yahooResult.gamma = massiveResult.gamma ?? null;
+                yahooResult.theta = massiveResult.theta ?? null;
+                yahooResult.vega  = massiveResult.vega  ?? null;
+            }
+            return respond(yahooResult, 'yahoo_v10');
+        }
+
+        // ── Source 3: Polygon prev_close (if nothing better available) ────────
+        if (massiveResult) return respond(massiveResult, 'massive');
+        console.warn('[options] Both Polygon and Yahoo failed — trying Tradier');
+
+        // ── Source 4: Tradier (TRADIER_API_KEY) ──────────────────────────────
         const tradierKey = process.env.TRADIER_API_KEY;
         if (tradierKey) {
             const result = await fetchTradierOptions(symbol, contractType, targetDateStr, refPrice, tradierKey);
@@ -652,7 +677,7 @@ module.exports = async function handler(req, res) {
             console.warn('[options] Tradier failed, trying Twelve Data');
         }
 
-        // ── Source 3: Twelve Data (TWELVEDATA_API_KEY) ────────────────
+        // ── Source 5: Twelve Data (TWELVEDATA_API_KEY) ───────────────────────
         const twelvedataKey = process.env.TWELVEDATA_API_KEY;
         if (twelvedataKey) {
             const result = await fetchTwelvedataOptions(symbol, contractType, targetDateStr, refPrice, twelvedataKey);
@@ -660,21 +685,16 @@ module.exports = async function handler(req, res) {
             console.warn('[options] TwelveData failed, trying Finnhub');
         }
 
-        // ── Source 4: Finnhub (FINNHUB_API_KEY) ───────────────────────
+        // ── Source 6: Finnhub (FINNHUB_API_KEY) ──────────────────────────────
         const finnhubKey = process.env.FINNHUB_API_KEY;
         if (finnhubKey) {
             const result = await fetchFinnhubOptions(symbol, contractType, targetDateStr, refPrice, finnhubKey);
             if (result) return respond(result, 'finnhub');
-            console.warn('[options] Finnhub failed, trying Yahoo v10 fallback');
         }
 
-        // ── Source 5: Yahoo Finance v10/quoteSummary (no key needed) ─
-        const yahooResult = await fetchYahooV10Options(symbol, contractType, expiryDays);
-        if (yahooResult) return respond(yahooResult, 'yahoo_v10');
-
         return res.status(502).json({
-            error: `Options data unavailable for ${symbol}. All sources failed (Polygon, Tradier, Twelve Data, Finnhub, Yahoo).`,
-            hint: 'Check Vercel logs for source-specific errors. Polygon free tier does not include options — upgrade or use another source.'
+            error: `Options data unavailable for ${symbol}. All sources failed.`,
+            hint: 'Check Vercel logs for source-specific errors.',
         });
 
     } catch(err) {
