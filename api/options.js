@@ -97,19 +97,40 @@ async function fetchMassiveOptions(symbol, contractType, targetDate, currentPric
     });
 
     const q          = best.last_quote;
-    const bid        = q?.bid         ?? null;
-    const ask        = q?.ask         ?? null;
-    const mid        = q?.midpoint    ?? (bid != null && ask != null ? (bid + ask) / 2 : null);
+    let   bid        = q?.bid         ?? null;
+    let   ask        = q?.ask         ?? null;
     const iv         = best.implied_volatility != null ? parseFloat((best.implied_volatility * 100).toFixed(1)) : null;
     const oi         = best.open_interest ?? 0;
     const last       = best.last_trade?.price  ?? null;
     const dayClose   = best.day?.close         ?? null;  // prev session close — always populated
-    const dayOpen    = best.day?.open          ?? null;
-    const dayVwap    = best.day?.vwap          ?? null;
+
+    // ── If snapshot bid/ask are null, hit the NBBO quote tape for this contract ──
+    // Polygon /v3/quotes/{ticker} returns the most recent bid/ask from the options tape
+    const contractTicker = best.details?.ticker;  // e.g. "O:CPB260821C00035000"
+    if ((bid == null || ask == null) && contractTicker && apiKey) {
+        try {
+            const qr = await fetch(
+                `https://api.polygon.io/v3/quotes/${encodeURIComponent(contractTicker)}?limit=1&sort=timestamp&order=desc&apiKey=${apiKey}`,
+                { headers: { 'Accept': 'application/json' }, signal: AbortSignal.timeout(5000) }
+            );
+            if (qr.ok) {
+                const qd = await qr.json();
+                const latestQ = qd?.results?.[0];
+                if (latestQ) {
+                    if (bid == null && latestQ.bid_price != null) bid = parseFloat(latestQ.bid_price);
+                    if (ask == null && latestQ.ask_price != null) ask = parseFloat(latestQ.ask_price);
+                    console.log(`[options] NBBO tape for ${contractTicker}: bid=${bid} ask=${ask}`);
+                }
+            }
+        } catch(e) { console.warn('[options] NBBO tape fetch failed:', e.message); }
+    }
+
+    const mid = (bid != null && ask != null) ? parseFloat(((bid + ask) / 2).toFixed(2))
+              : q?.midpoint != null ? parseFloat(q.midpoint.toFixed(2)) : null;
 
     // Accept any available price — bid/ask live during hours, day.close always available
     if (bid == null && ask == null && last == null && dayClose == null) {
-        console.error('[options] Massive: all price fields null for', best.details?.ticker, '— raw day:', JSON.stringify(best.day));
+        console.error('[options] Massive: all price fields null for', contractTicker, '— raw day:', JSON.stringify(best.day));
         return null;
     }
 
