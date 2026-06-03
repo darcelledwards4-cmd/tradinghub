@@ -551,28 +551,45 @@ module.exports = async function handler(req, res) {
     }
     const expiryDays = Math.round((new Date(targetDateStr).getTime() / 1000 - now) / 86400);
 
-    // Get current price for ATM strike selection
-    // Polygon snapshot → Polygon prev-close → Yahoo fallback
+    // Get current stock price for ATM strike selection.
+    // NOTE: Polygon plan only covers OPTIONS data — stock snapshot returns 403.
+    // Use Yahoo Finance v7/quote (live regularMarketPrice) with aggs prev-close as fallback.
     let currentPrice = 0;
-    const _priceKey = process.env.MASSIVE_API_KEY;
-    if (_priceKey) {
+
+    // Source 1: Yahoo Finance v7/quote — live during market hours
+    for (const host of ['query1', 'query2']) {
+        if (currentPrice) break;
         try {
-            // Single-ticker snapshot — fastest path
-            const snapR = await fetch(
-                `https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/tickers/${symbol}?apiKey=${_priceKey}`,
-                { headers: { 'Accept': 'application/json' }, signal: AbortSignal.timeout(6000) }
+            const yqR = await fetch(
+                `https://${host}.finance.yahoo.com/v7/finance/quote?symbols=${symbol}&fields=regularMarketPrice&formatted=false`,
+                { headers: { 'User-Agent': UA, 'Accept': 'application/json', 'Referer': 'https://finance.yahoo.com/' }, signal: AbortSignal.timeout(5000) }
             );
-            if (snapR.ok) {
-                const snapD = await snapR.json();
-                const t = snapD?.ticker;
-                // Priority: lastTrade.p (real-time) → day.c (session) → prevDay.c (last close)
-                currentPrice = t?.lastTrade?.p || t?.day?.c || t?.prevDay?.c || 0;
-                if (currentPrice) console.log(`[options] Polygon snapshot price: ${symbol} = $${currentPrice}`);
+            if (yqR.ok) {
+                const yqD = await yqR.json();
+                const price = yqD?.quoteResponse?.result?.[0]?.regularMarketPrice;
+                if (price && price > 0) { currentPrice = price; console.log(`[options] Yahoo v7/quote price: ${symbol} = $${currentPrice}`); }
             }
-        } catch(e) { console.warn(`[options] Polygon snapshot timeout/error for ${symbol}:`, e.message); }
+        } catch(e) {}
     }
-    // Polygon prev-close — always has data, even weekends/pre-market
-    if (!currentPrice && _priceKey) {
+
+    // Source 2: Yahoo v8/chart — backup
+    if (!currentPrice) {
+        try {
+            const qr = await fetch(`https://query2.finance.yahoo.com/v8/finance/chart/${symbol}?interval=1m&range=1d`, {
+                headers: { 'User-Agent': UA, 'Accept': 'application/json', 'Referer': 'https://finance.yahoo.com/' },
+                signal: AbortSignal.timeout(6000),
+            });
+            if (qr.ok) {
+                const qd = await qr.json();
+                currentPrice = qd?.chart?.result?.[0]?.meta?.regularMarketPrice || 0;
+                if (currentPrice) console.log(`[options] Yahoo v8/chart price: ${symbol} = $${currentPrice}`);
+            }
+        } catch(e) {}
+    }
+
+    // Source 3: Polygon prev-close — always available, used only as last resort
+    if (!currentPrice) {
+        const _priceKey = process.env.MASSIVE_API_KEY;
         try {
             const prevR = await fetch(
                 `https://api.polygon.io/v2/aggs/ticker/${symbol}/prev?adjusted=true&apiKey=${_priceKey}`,
@@ -581,23 +598,11 @@ module.exports = async function handler(req, res) {
             if (prevR.ok) {
                 const prevD = await prevR.json();
                 currentPrice = prevD?.results?.[0]?.c || 0;
-                if (currentPrice) console.log(`[options] Polygon prev-close: ${symbol} = $${currentPrice}`);
+                if (currentPrice) console.log(`[options] Polygon prev-close: ${symbol} = $${currentPrice} (stale — Yahoo unavailable)`);
             }
         } catch(e) {}
     }
-    if (!currentPrice) {
-        try {
-            const qr = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?interval=1m&range=1d`, {
-                headers: { 'User-Agent': UA, 'Accept': 'application/json', 'Referer': 'https://finance.yahoo.com/' },
-                signal: AbortSignal.timeout(6000),
-            });
-            if (qr.ok) {
-                const qd = await qr.json();
-                currentPrice = qd?.chart?.result?.[0]?.meta?.regularMarketPrice || 0;
-                if (currentPrice) console.log(`[options] Yahoo fallback price: ${symbol} = $${currentPrice}`);
-            }
-        } catch(e) {}
-    }
+
     if (!currentPrice) console.error(`[options] WARNING: could not get current price for ${symbol} — ATM selection will be wrong`);
 
     const refPrice = targetStrike || currentPrice;
