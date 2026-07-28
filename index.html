@@ -2135,8 +2135,10 @@ async function callClaude(prompt){
             body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:12000,messages:[{role:'user',content:prompt}]})
         });
     }
-    const d=await r.json();
-    if(!d.content?.[0]?.text)throw new Error(d.error?.message||'Claude error');
+    let d;
+    const raw=await r.text();
+    try{ d=JSON.parse(raw); }catch(e){ throw new Error('API returned non-JSON: '+raw.slice(0,200)); }
+    if(!d.content?.[0]?.text)throw new Error(d.error?.message||JSON.stringify(d).slice(0,200));
     return d.content[0].text;
 }
 
