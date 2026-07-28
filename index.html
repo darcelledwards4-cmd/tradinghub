@@ -2123,7 +2123,7 @@ async function callClaude(prompt){
         r=await fetch('/api/claude',{
             method:'POST',
             headers:{'Content-Type':'application/json'},
-            body:JSON.stringify({model:'claude-haiku-4-5-20251001',max_tokens:4000,messages:[{role:'user',content:prompt}]})
+            body:JSON.stringify({model:'claude-haiku-4-5-20251001',max_tokens:6000,messages:[{role:'user',content:prompt}]})
         });
     } else {
         // Local dev — use key from localStorage/config.js with browser direct access
@@ -2132,7 +2132,7 @@ async function callClaude(prompt){
         r=await fetch('https://api.anthropic.com/v1/messages',{
             method:'POST',
             headers:{'Content-Type':'application/json','x-api-key':key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
-            body:JSON.stringify({model:'claude-haiku-4-5-20251001',max_tokens:4000,messages:[{role:'user',content:prompt}]})
+            body:JSON.stringify({model:'claude-haiku-4-5-20251001',max_tokens:6000,messages:[{role:'user',content:prompt}]})
         });
     }
     let d;
@@ -2858,7 +2858,7 @@ expiry_options (array of EXACTLY 3 objects — pre-compute all 3 so the user can
   [2] {"label":"6 Mo · Conservative", "entry_low":number, "entry_high":number, "stop_loss":number, "target":number, "option_detail":"$X ${optionType} · Expires [options Friday around ${exp.sixMonth}] · Est. $X.XX/contract",     "account_sizing":"[Sentence 1: RSI number + specific MA level] [Sentence 2: exact strike price + ATM/OTM vs current stock price in plain terms] [Sentence 3: why a 6-month window specifically — the slow trend or long-duration catalyst and what dollar level it's targeting]", "potential":"high" or "moderate" or "avoid"}
 Use DIFFERENT strikes, expiry dates, and price levels for each. 1-month: tighter stop, closer target. 6-month: wider stop, bigger target, higher premium cost.
 
-Raw JSON array only. Nothing else.`;
+IMPORTANT: Your ENTIRE response must be a single raw JSON array starting with [ and ending with ]. No markdown, no code fences, no explanation before or after. Any text outside the array will break parsing.`;
 }
 
 async function scanWatchlist(){
@@ -2977,7 +2977,7 @@ expiry_options (array of EXACTLY 3 objects — each with its own adjusted price 
   [2] {"label":"6 Mo · Conservative", "entry_low":number, "entry_high":number, "stop_loss":number, "target":number, "option_detail":"$X Call/Put · Expires [options Friday around ${exp.sixMonth}] · Est. $X.XX/contract",     "account_sizing":"[Sentence 1: actual RSI number + specific MA level.] [Sentence 2: exact strike dollar amount, ATM or OTM vs today's price, explain what 6 months of time buys in terms of cost and time pressure.] [Sentence 3: why a 6-month window — the slow trend or long-duration catalyst and the analyst price target or resistance level it's heading toward; no calendar months.]", "potential":"high" or "moderate" or "avoid"}
 Use DIFFERENT strikes, real options-expiry Fridays, and different price levels for each. 1-month: tighter stop, closer target. 6-month: wider stop, bigger target. Do NOT use Aug 15 or any fixed date.
 
-Raw JSON array only. Nothing else.`;
+IMPORTANT: Your ENTIRE response must be a single raw JSON array starting with [ and ending with ]. No markdown, no code fences, no explanation before or after the array. Any text outside the array will break parsing.`;
 }
 
 async function scanDiscover(){
