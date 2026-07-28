@@ -2694,7 +2694,12 @@ async function loadMoreFilter(){
             });
         } else {
             const cat=DISCOVER_CATS.find(c=>c.key===key);
-            const raw=await callClaude(discoverPrompt(cat.desc,shownTickers));
+            let lmMarketCandidates = [];
+            try{
+                const maR = await fetch('/api/market-active');
+                if(maR.ok){ const maD = await maR.json(); lmMarketCandidates = maD.candidates || []; }
+            }catch(e){}
+            const raw=await callClaude(discoverPrompt(cat.desc, shownTickers, {}, lmMarketCandidates));
             newCards=JSON.parse(stripJSON(raw)).map(s=>({...s,category:cat.label}));
             const discTickers=[...new Set(newCards.map(s=>(s.ticker||'').toUpperCase()).filter(Boolean))];
             const [discPriceMap,discNewsMap,discTechMap]=await Promise.all([
@@ -2756,7 +2761,13 @@ async function runActiveFilter(){
             });
         } else {
             const cat=DISCOVER_CATS.find(c=>c.key===key);
-            const raw=await callClaude(discoverPrompt(cat.desc));
+            // Fetch market-active data so Claude uses real movers, not defaults
+            let rfMarketCandidates = [];
+            try{
+                const maR = await fetch('/api/market-active');
+                if(maR.ok){ const maD = await maR.json(); rfMarketCandidates = maD.candidates || []; }
+            }catch(e){}
+            const raw=await callClaude(discoverPrompt(cat.desc, [], {}, rfMarketCandidates));
             cards=JSON.parse(stripJSON(raw));
             cards=cards.map(s=>({...s, category:cat.label}));
             // Fetch live prices + news + technicals for all discover cards, then sanitize levels
@@ -2926,7 +2937,7 @@ async function scanWatchlist(){
 // ── DISCOVER: BEYOND YOUR WATCHLIST ──────────────────────────
 // Shared prompt for a single discover category — returns a JSON array of 3 stocks
 function discoverPrompt(categoryDesc, extraExclude=[], techMap={}, marketCandidates=[]){
-    const seenTickers = getSeenDiscoverTickers();
+    const seenTickers = getSeenDiscoverTickers().slice(0, 25); // cap at 25 to keep prompt short
     const excluded=[...new Set([...WATCHLIST,...extraExclude,...seenTickers])].join(', ');
     const varietySeed = getVarietySeed();
     const exp=getExpiryContext();
