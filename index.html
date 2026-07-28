@@ -1171,7 +1171,7 @@ setInterval(updateClock,1000); updateClock();
 // Keys live in Vercel env vars — never in the browser.
 // When running locally (file:// or localhost), falls back to localStorage/config.js keys.
 // Vercel serverless proxy routes are broken — always use direct browser API calls.
-const ON_VERCEL = false;
+const ON_VERCEL = true;
 
 // Local-only key helpers (used only when running locally)
 function getClaudeKey(){
