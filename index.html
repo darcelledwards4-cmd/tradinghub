@@ -1750,17 +1750,6 @@ async function enrichOneCard(cardId){
     if(!odElNow) return; // card was removed from DOM
 
     if(result){
-        // Cheap Gems: hide card if real option price > $300/contract
-        const isGems = (idea.category||'').includes('Cheap Gems');
-        const contractCost = result.ask != null ? result.ask * 100 : (result.last != null ? result.last * 100 : null);
-        if(isGems && contractCost != null && contractCost > 300){
-            const cardEl = document.getElementById('cwrap-'+cardId) || document.querySelector(`[data-card-id="${cardId}"]`);
-            if(cardEl){
-                cardEl.style.display = 'none';
-                console.log('[gems] hiding card', idea.ticker, '— option cost $'+contractCost.toFixed(0)+' exceeds $300 limit');
-            }
-            return;
-        }
 
         const _activeStockTarget = idea.expiry_options?.[activeIdx]?.target || idea.target || null;
         odElNow.innerHTML = buildLiveOptionHTML(result, optType, _activeStockTarget);
@@ -1793,7 +1782,11 @@ async function enrichOneCard(cardId){
         }
         console.log('[options]', idea.ticker, optType, activeExpiry, `ask=$${result.ask} strike=$${result.strike} exp=${result.expiry}`);
     } else {
-        odElNow.innerHTML = '<span style="color:var(--muted);font-size:11px">Option price unavailable — check console (testOptions)</span>';
+        // Fall back to Claude's estimated price from expiry_options detail string
+        const fallbackDetail = idea.expiry_options?.[activeIdx]?.option_detail || idea.option_detail || '';
+        const estMatch = fallbackDetail.match(/Est\.\s*\$?([\d.]+)/i);
+        const estPrice = estMatch ? `~$${parseFloat(estMatch[1]).toFixed(2)}/contract (est.)` : 'Live price unavailable';
+        odElNow.innerHTML = `<span style="color:var(--muted);font-size:12px">${estPrice}</span>`;
         console.warn('[options] enrichOneCard failed for', idea.ticker, optType, activeExpiry);
     }
 
@@ -2739,16 +2732,30 @@ async function runActiveFilter(){
     try{
         let cards;
         if(meta.type==='watchlist'){
-            // Fetch prices + technicals for watchlist in parallel
+            // Fetch market-active FIRST so we can expand the quote list to include real movers
+            let wlMarketCandidates = [];
+            try{
+                const maR = await fetch('/api/market-active');
+                if(maR.ok){ const maD = await maR.json(); wlMarketCandidates = maD.candidates || []; }
+            }catch(e){}
+            // Merge top directional movers into the tickers we fetch prices for
+            // This ensures Claude gets live prices for movers, not just the static watchlist
+            const isPutScan = meta.optType === 'PUT';
+            const moverTickers = wlMarketCandidates
+                .filter(c => isPutScan ? c.direction==='bearish' : c.direction==='bullish')
+                .slice(0, 8).map(c => c.ticker);
+            const expandedList = [...new Set([...WATCHLIST, ...moverTickers])];
             const [qMap, rfTechMap] = await Promise.all([
-                fetchQuotesCached(WATCHLIST),
-                fetchTechnicalsBatch(WATCHLIST)
+                fetchQuotesCached(expandedList),
+                fetchTechnicalsBatch(expandedList),
             ]);
-            const quotes=Object.entries(qMap).map(([ticker,q])=>({ticker,price:q.c,chg:q.dp||0,closes:[q.pc,q.c],high52:q.h||q.c,low52:q.l||q.c,vol:0})).filter(q=>q.price>0);
+            let quotes=Object.entries(qMap).map(([ticker,q])=>({ticker,price:q.c,chg:q.dp||0,closes:[q.pc,q.c],high52:q.h||q.c,low52:q.l||q.c,vol:0})).filter(q=>q.price>0);
+            // Sort biggest movers first — Claude picks from the top of this list
+            quotes.sort((a,b)=>Math.abs(b.chg)-Math.abs(a.chg));
             const priceData=quotes.length>0
                 ?quotes.map(q=>`${q.ticker}: $${q.price.toFixed(2)} (${q.chg>=0?'+':''}${q.chg.toFixed(2)}% today)`).join('\n')
                 :WATCHLIST.join(', ')+' — use your latest knowledge';
-            const raw=await callClaude(watchlistScanPrompt(priceData, meta.optType, {}, [], rfTechMap));
+            const raw=await callClaude(watchlistScanPrompt(priceData, meta.optType, {}, [], rfTechMap, wlMarketCandidates));
             cards=JSON.parse(stripJSON(raw));
             cards=injectLivePrices(cards, quotes);
             // Fetch news ONLY for the 3 tickers Claude picked (avoids rate-limit)
@@ -2770,30 +2777,36 @@ async function runActiveFilter(){
             const raw=await callClaude(discoverPrompt(cat.desc, [], {}, rfMarketCandidates));
             cards=JSON.parse(stripJSON(raw));
             cards=cards.map(s=>({...s, category:cat.label}));
-            // Fetch live prices + news + technicals for all discover cards, then sanitize levels
+            // Fetch live prices + news + technicals — wrapped in nested try/catch so
+            // a failed fetch never clears the cards Claude already found
             const discTickers=[...new Set(cards.map(s=>(s.ticker||'').toUpperCase()).filter(Boolean))];
-            const [discPriceMap, discNewsMap, rfDiscTechMap] = await Promise.all([
-                discTickers.length ? fetchQuotesCached(discTickers) : Promise.resolve({}),
-                discTickers.length ? fetchNewsForPromptBatch(discTickers) : Promise.resolve({}),
-                discTickers.length ? fetchTechnicalsBatch(discTickers) : Promise.resolve({})
-            ]);
-            cards=cards.map(s=>{
-                const k=(s.ticker||'').toUpperCase();
-                const q=discPriceMap[k];
-                if(q&&q.c){
-                    s=sanitizePriceLevels(s, q.c);
-                    s.current_price=q.c;
-                    s.price_change=q.dp||0;
-                    s._priceIsLive=q._isLive!==false;
-                } else {
-                    s._priceIsLive=false;
-                }
-                const newsEntry=discNewsMap[k];
-                if(newsEntry&&newsEntry.items&&newsEntry.items.length) s._newsItems=newsEntry.items.slice(0,2);
-                const techEntry=rfDiscTechMap[k];
-                if(techEntry) s._techSummary=techEntry.summary;
-                return s;
-            });
+            try{
+                const [discPriceMap, discNewsMap, rfDiscTechMap] = await Promise.all([
+                    discTickers.length ? fetchQuotesCached(discTickers) : Promise.resolve({}),
+                    discTickers.length ? fetchNewsForPromptBatch(discTickers) : Promise.resolve({}),
+                    discTickers.length ? fetchTechnicalsBatch(discTickers) : Promise.resolve({})
+                ]);
+                cards=cards.map(s=>{
+                    const k=(s.ticker||'').toUpperCase();
+                    const q=discPriceMap[k];
+                    if(q&&q.c){
+                        s=sanitizePriceLevels(s, q.c);
+                        s.current_price=q.c;
+                        s.price_change=q.dp||0;
+                        s._priceIsLive=q._isLive!==false;
+                    } else {
+                        s._priceIsLive=false;
+                    }
+                    const newsEntry=discNewsMap[k];
+                    if(newsEntry&&newsEntry.items&&newsEntry.items.length) s._newsItems=newsEntry.items.slice(0,2);
+                    const techEntry=rfDiscTechMap[k];
+                    if(techEntry) s._techSummary=techEntry.summary;
+                    return s;
+                });
+            }catch(enrichErr){
+                console.warn('[discover] price/news enrichment failed — showing Claude estimates:', enrichErr.message);
+                // cards stays as Claude's initial output — still renders correctly below
+            }
         }
         filterCache[key]=cards;
         renderFilterResult(key, cards);
@@ -2808,22 +2821,29 @@ async function runActiveFilter(){
 
 // ── SCAN WATCHLIST ────────────────────────────────────────────
 // Shared prompt builder for watchlist scan — pass "CALL" or "PUT"
-function watchlistScanPrompt(priceData, optionType, newsMap={}, excludeTickers=[], techMap={}){
+function watchlistScanPrompt(priceData, optionType, newsMap={}, excludeTickers=[], techMap={}, marketCandidates=[]){
     const isPut = optionType === 'PUT';
     const exp = getExpiryContext();
-    // Build a compact news block (max 8 tickers, 2 headlines each — already limited in fetchNewsForPrompt)
     const newsEntries = Object.entries(newsMap)
         .filter(([,n])=>n&&n.text)
         .slice(0,8)
         .map(([t,n])=>n.text)
         .join('\n');
     const techBlock = formatTechnicalsForPrompt(techMap);
+    // Build market movers block — stocks actually moving today
+    const catIsBearish = isPut;
+    const relevantMovers = (marketCandidates||[])
+        .filter(c => catIsBearish ? c.direction === 'bearish' : c.direction === 'bullish')
+        .slice(0, 8)
+        .map(c => `  ${c.ticker}: ${c.reason} (price ~$${c.price})`)
+        .join('\n');
+    const moversBlock = relevantMovers ? `\nTODAY'S MARKET MOVERS (high volume, real movement right now) — if any of these are also in the watchlist above, strongly prefer them over flat names like AAPL/MSFT/GOOG unless those are genuinely the best setup:\n${relevantMovers}\n` : '';
     return `You are a trading analyst helping a beginner options trader. Today: ${exp.today}.
 
 You have REAL chart data below — use it. Base entry zones, stop levels, and targets on actual support/resistance and analyst targets, not guesses.
 
 Live price data (use these EXACT prices — never substitute training data):
-${priceData}
+${priceData}${moversBlock}
 ${techBlock ? '\nReal-time technical data (RSI, MAs, support/resistance, analyst targets, earnings):\n'+techBlock : ''}
 ${newsEntries?'\nRecent news (cite with "Source: pub, date" if used in summary):\n'+newsEntries:''}
 IMPORTANT: All price levels must be anchored to the live prices and technical data above.
@@ -2833,7 +2853,8 @@ Expiry windows — use DIFFERENT expirations for each of the 3 trades:
   • 3-month (moderate): around ${exp.moderate}
   • 6-month (conservative): around ${exp.conservative}
 
-Find the TOP 3 best ${isPut ? 'PUT (bearish) trade setups' : 'CALL (bullish) trade setups'} from this watchlist — one per timeframe.
+Find the TOP 3 best ${isPut ? 'PUT (bearish) trade setups' : 'CALL (bullish) trade setups'} from the price list above — one per timeframe.
+The stocks are listed in order of TODAY'S % price movement (biggest movers first). STRONGLY prefer stocks near the top of the list — real movement today is the #1 signal. Only pick a stock lower on the list if it has a dramatically better technical setup than the top movers.
 CRITICAL: Each of the 3 ideas MUST use a DIFFERENT ticker.${excludeTickers&&excludeTickers.length?`\nDo NOT repeat: ${excludeTickers.join(', ')}.`:''}
 ${isPut ? 'Look for: overextended stocks, breaking down technically (RSI overbought + below key MAs), bad news, sector weakness.' : 'Look for: bullish momentum, RSI not yet overbought, above key MAs, positive catalyst, analyst target above current price.'}
 
