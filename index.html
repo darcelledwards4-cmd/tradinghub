@@ -832,19 +832,9 @@
                 <span style="font-size:10px;color:var(--muted);margin-top:3px">Get yours at <a href="https://console.anthropic.com" target="_blank" style="color:var(--blue)">console.anthropic.com</a></span>
             </div>
             <div class="fg">
-                <label>Twelve Data API Key <span style="font-weight:400;text-transform:none;letter-spacing:0">(for live prices — free)</span></label>
-                <input type="password" id="s-twelvedata" placeholder="your-twelvedata-key" style="font-family:monospace;font-size:12px" />
-                <span style="font-size:10px;color:var(--muted);margin-top:3px">Get yours free at <a href="https://twelvedata.com" target="_blank" style="color:var(--blue)">twelvedata.com</a></span>
-            </div>
-            <div class="fg">
                 <label>Finnhub API Key <span style="font-weight:400;text-transform:none;letter-spacing:0">(for live news on cards — free)</span></label>
                 <input type="password" id="s-finnhub" placeholder="your-finnhub-key" style="font-family:monospace;font-size:12px" />
                 <span style="font-size:10px;color:var(--muted);margin-top:3px">Get yours free at <a href="https://finnhub.io" target="_blank" style="color:var(--blue)">finnhub.io</a></span>
-            </div>
-            <div class="fg">
-                <label>Massive.com API Key <span style="font-weight:400;text-transform:none;letter-spacing:0">(real options contract prices — free tier)</span></label>
-                <input type="password" id="s-massive" placeholder="your-massive-api-key" style="font-family:monospace;font-size:12px" />
-                <span style="font-size:10px;color:var(--muted);margin-top:3px">Get yours free at <a href="https://massive.com" target="_blank" style="color:var(--blue)">massive.com</a></span>
             </div>
         </div>
         <div id="s-status" style="margin-top:12px;font-size:12px;display:none"></div>
@@ -1204,13 +1194,8 @@ function getMassiveKey(){
 // ── SETTINGS MODAL ────────────────────────────────────────────
 function openSettings(){
     const st=document.getElementById('s-status');
-    // Always let user set Twelve Data + Finnhub keys
-    document.getElementById('s-twelvedata').disabled=false;
-    document.getElementById('s-twelvedata').value=localStorage.getItem('th_twelvedata_key')||'';
     document.getElementById('s-finnhub').disabled=false;
     document.getElementById('s-finnhub').value=localStorage.getItem('th_finnhub_key')||'';
-    document.getElementById('s-massive').disabled=false;
-    document.getElementById('s-massive').value=localStorage.getItem('th_massive_key')||'';
     document.getElementById('s-claude').disabled=false;
     document.getElementById('s-claude').placeholder='sk-ant-api03-...';
     document.getElementById('s-claude').value=localStorage.getItem('th_claude_key')||'';
@@ -1222,12 +1207,8 @@ function openSettings(){
 }
 function closeSettings(){ document.getElementById('settingsModal').classList.remove('open'); }
 function saveSettings(){
-    const tdk=document.getElementById('s-twelvedata').value.trim();
-    if(tdk) localStorage.setItem('th_twelvedata_key',tdk);
     const fhk=document.getElementById('s-finnhub').value.trim();
     if(fhk) localStorage.setItem('th_finnhub_key',fhk);
-    const mk=document.getElementById('s-massive').value.trim();
-    if(mk) localStorage.setItem('th_massive_key',mk);
     const ck=document.getElementById('s-claude').value.trim();
     if(!ck){alert('Claude API key is required for AI features to work.');return;}
     localStorage.setItem('th_claude_key',ck);
