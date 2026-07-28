@@ -1,9 +1,10 @@
 // Real-time batch quotes
 // Strategy (in order):
-//   1. Yahoo Finance v7/quote  — batch, live regularMarketPrice during market hours
-//   2. Polygon last-trade      — individual /v2/last/trade per ticker in parallel (real-time tick)
-//   3. Polygon snapshot        — batch snapshot, lastTrade.p > day.c > prevDay.c
-//   4. Polygon prev-close      — /v2/aggs/ticker/{t}/prev (offline/weekend fallback)
+//   1. Tradier                 — live quotes from brokerage account (TRADIER_TOKEN)
+//   2. Yahoo Finance v7/quote  — batch, live regularMarketPrice during market hours
+//   3. Polygon last-trade      — individual /v2/last/trade per ticker in parallel (real-time tick)
+//   4. Polygon snapshot        — batch snapshot, lastTrade.p > day.c > prevDay.c
+//   5. Polygon prev-close      — /v2/aggs/ticker/{t}/prev (offline/weekend fallback)
 // Returns: { prices: { TICKER: { c, pc, dp, h, l, _isLive } }, source, fetched_at }
 
 module.exports = async function handler(req, res) {
@@ -14,7 +15,50 @@ module.exports = async function handler(req, res) {
     if (!raw) return res.status(400).json({ error: 'symbols required' });
     const tickers = [...new Set(raw.split(',').map(s => s.trim()).filter(Boolean))].slice(0, 20);
 
-    // ── 1. Yahoo Finance v7/quote — batch, live during market hours ───────────
+    // ── 1. Tradier — live stock quotes (real-time, brokerage account) ─────────
+    const tradierToken = process.env.TRADIER_TOKEN;
+    if (tradierToken) {
+        try {
+            const r = await fetch(
+                `https://api.tradier.com/v1/markets/quotes?symbols=${tickers.join(',')}&greeks=false`,
+                {
+                    headers: {
+                        'Authorization': `Bearer ${tradierToken}`,
+                        'Accept': 'application/json',
+                    },
+                    signal: AbortSignal.timeout(8000),
+                }
+            );
+            if (r.ok) {
+                const data = await r.json();
+                let quotes = data?.quotes?.quote ?? [];
+                if (!Array.isArray(quotes)) quotes = quotes ? [quotes] : []; // single symbol returns object
+                const priceMap = {};
+                for (const q of quotes) {
+                    if (!q?.symbol || q?.last == null) continue;
+                    const price = parseFloat(q.last);
+                    const prev  = parseFloat(q.prevclose) || price;
+                    if (!price || price <= 0) continue;
+                    priceMap[q.symbol.toUpperCase()] = {
+                        c:  price,
+                        pc: prev,
+                        dp: prev ? parseFloat(((price - prev) / prev * 100).toFixed(2)) : 0,
+                        h:  parseFloat(q.high)  || price,
+                        l:  parseFloat(q.low)   || price,
+                        _isLive: true,
+                    };
+                }
+                if (Object.keys(priceMap).length > 0) {
+                    console.log(`[quotes] Tradier ✓ ${Object.keys(priceMap).length}/${tickers.length} tickers`);
+                    return res.status(200).json({ prices: priceMap, fetched_at: new Date().toISOString(), source: 'tradier', count: Object.keys(priceMap).length });
+                }
+            } else {
+                console.warn(`[quotes] Tradier ${r.status}`);
+            }
+        } catch (e) { console.warn('[quotes] Tradier error:', e.message); }
+    }
+
+    // ── 2. Yahoo Finance v7/quote — batch, live during market hours ───────────
     // This is Yahoo's own real-time quote API — same data their app shows.
     // Less rate-limited than v8/chart, returns regularMarketPrice (true live price).
     try {

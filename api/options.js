@@ -172,10 +172,9 @@ async function fetchMassiveOptions(symbol, contractType, targetDate, currentPric
 }
 
 // ── Tradier options chain ────────────────────────────────────────────────────
-// Free developer sandbox: real bid/ask, 15-min delayed. Sign up at tradier.com/create/developer
-// Sandbox base: https://sandbox.tradier.com/v1/ (use api.tradier.com for live brokerage account)
+// Live brokerage account: real-time bid/ask + greeks. Uses TRADIER_TOKEN env var.
 async function fetchTradierOptions(symbol, contractType, targetDateStr, currentPrice, apiKey) {
-    const base = 'https://sandbox.tradier.com/v1';
+    const base = 'https://api.tradier.com/v1';
     const hdrs = { 'Authorization': `Bearer ${apiKey}`, 'Accept': 'application/json', 'User-Agent': UA };
 
     // Step 1: Get available expiration dates
@@ -552,11 +551,30 @@ module.exports = async function handler(req, res) {
     const expiryDays = Math.round((new Date(targetDateStr).getTime() / 1000 - now) / 86400);
 
     // Get current stock price for ATM strike selection.
-    // NOTE: Polygon plan only covers OPTIONS data — stock snapshot returns 403.
-    // Use Yahoo Finance v7/quote (live regularMarketPrice) with aggs prev-close as fallback.
     let currentPrice = 0;
 
-    // Source 1: Yahoo Finance v7/quote — live during market hours
+    // Source 1: Tradier — live stock quote
+    const tradierTokenForPrice = process.env.TRADIER_TOKEN;
+    if (tradierTokenForPrice) {
+        try {
+            const tr = await fetch(
+                `https://api.tradier.com/v1/markets/quotes?symbols=${symbol}&greeks=false`,
+                {
+                    headers: { 'Authorization': `Bearer ${tradierTokenForPrice}`, 'Accept': 'application/json' },
+                    signal: AbortSignal.timeout(5000),
+                }
+            );
+            if (tr.ok) {
+                const td = await tr.json();
+                let q = td?.quotes?.quote;
+                if (Array.isArray(q)) q = q[0];
+                const price = q?.last ? parseFloat(q.last) : 0;
+                if (price > 0) { currentPrice = price; console.log(`[options] Tradier stock price: ${symbol} = $${currentPrice}`); }
+            }
+        } catch(e) { console.warn('[options] Tradier price error:', e.message); }
+    }
+
+    // Source 2: Yahoo Finance v7/quote — live during market hours
     for (const host of ['query1', 'query2']) {
         if (currentPrice) break;
         try {
@@ -641,26 +659,33 @@ module.exports = async function handler(req, res) {
             return res.status(200).json(payload);
         };
 
-        // ── Source 1: Polygon (MASSIVE_API_KEY) — best for greeks + liquid options ──
-        // Falls back to NBBO tape when snapshot bid/ask is null (see fetchMassiveOptions)
+        // ── Source 1: Tradier (TRADIER_TOKEN) — real-time bid/ask + greeks ──────
+        const tradierKey = process.env.TRADIER_TOKEN;
+        if (tradierKey) {
+            const result = await fetchTradierOptions(symbol, contractType, targetDateStr, refPrice, tradierKey);
+            if (result && (result.bid != null || result.ask != null)) {
+                return respond(result, 'tradier');
+            }
+            if (result) console.warn('[options] Tradier returned no live bid/ask — trying Polygon');
+            else console.warn('[options] Tradier failed — trying Polygon');
+        }
+
+        // ── Source 2: Polygon (MASSIVE_API_KEY) — greeks + delayed snapshot ──
         const massiveKey = process.env.MASSIVE_API_KEY;
         let massiveResult = null;
         if (massiveKey) {
             massiveResult = await fetchMassiveOptions(symbol, contractType, targetDateStr, refPrice, massiveKey, targetStrike);
-            // Use Polygon result only if we got live bid/ask — not just prev_close
             if (massiveResult && (massiveResult.bid != null || massiveResult.ask != null)) {
                 return respond(massiveResult, 'massive');
             }
-            if (massiveResult) console.warn('[options] Polygon returned only prev_close — trying Yahoo for live bid/ask');
+            if (massiveResult) console.warn('[options] Polygon returned only prev_close — trying Yahoo');
             else console.warn('[options] Polygon returned no result — trying Yahoo');
         }
 
-        // ── Source 2: Yahoo Finance v10 — live bid/ask, no greeks needed ─────
-        // Moved up: Yahoo gives reliable live bid/ask for any listed option.
-        // Run in parallel with Polygon's prev_close attempt above.
+        // ── Source 3: Yahoo Finance v10 — live bid/ask, no greeks ────────────
         const yahooResult = await fetchYahooV10Options(symbol, contractType, expiryDays);
         if (yahooResult && (yahooResult.bid != null || yahooResult.ask != null)) {
-            // If Polygon gave us greeks, merge them onto the Yahoo result
+            // Merge Polygon greeks if available
             if (massiveResult) {
                 yahooResult.delta = massiveResult.delta ?? null;
                 yahooResult.gamma = massiveResult.gamma ?? null;
@@ -670,17 +695,9 @@ module.exports = async function handler(req, res) {
             return respond(yahooResult, 'yahoo_v10');
         }
 
-        // ── Source 3: Polygon prev_close (if nothing better available) ────────
+        // ── Source 4: Polygon prev_close (last resort from Polygon) ──────────
         if (massiveResult) return respond(massiveResult, 'massive');
-        console.warn('[options] Both Polygon and Yahoo failed — trying Tradier');
-
-        // ── Source 4: Tradier (TRADIER_API_KEY) ──────────────────────────────
-        const tradierKey = process.env.TRADIER_API_KEY;
-        if (tradierKey) {
-            const result = await fetchTradierOptions(symbol, contractType, targetDateStr, refPrice, tradierKey);
-            if (result) return respond(result, 'tradier');
-            console.warn('[options] Tradier failed, trying Twelve Data');
-        }
+        console.warn('[options] All primary sources failed — trying Twelve Data');
 
         // ── Source 5: Twelve Data (TWELVEDATA_API_KEY) ───────────────────────
         const twelvedataKey = process.env.TWELVEDATA_API_KEY;
