@@ -371,10 +371,16 @@
         .decode-label { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.4px; color:var(--muted); margin-bottom:4px; }
 
         /* ── FILTER BAR ── */
-        .filter-bar { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:20px; align-items:center; }
+        .filter-bar { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px; align-items:center; }
         .filter-pill { padding:8px 16px; border-radius:20px; border:1px solid var(--border); background:var(--bg2); color:var(--muted); font-size:12px; font-weight:700; cursor:pointer; transition:all .15s; white-space:nowrap; user-select:none; }
         .filter-pill:hover { border-color:var(--blue); color:var(--text); }
         .filter-pill.active { background:var(--blue); color:#000; border-color:var(--blue); }
+        /* ── COST TIER ROW ── */
+        .tier-row { display:none; gap:6px; align-items:center; margin-bottom:16px; flex-wrap:wrap; }
+        .tier-row.visible { display:flex; }
+        .tier-pill { padding:5px 13px; border-radius:14px; border:1px solid var(--border); background:var(--bg3); color:var(--muted); font-size:11px; font-weight:700; cursor:pointer; transition:all .15s; white-space:nowrap; }
+        .tier-pill:hover { border-color:var(--purple); color:var(--text); }
+        .tier-pill.active { background:var(--purple); color:#fff; border-color:var(--purple); }
 
         /* ── EXPIRY TABS ── */
         .expiry-tabs-wrap { padding:0 16px 12px; border-bottom:1px solid var(--border); }
@@ -570,6 +576,14 @@
                     <button class="filter-pill"        id="fp-momentum"  onclick="selectFilter('momentum')">🚀 Momentum</button>
                     <button class="filter-pill"        id="fp-community" onclick="selectFilter('community')">🔥 Community</button>
                     <button class="filter-pill"        id="fp-putplays"  onclick="selectFilter('putplays')">📉 Put Plays</button>
+                </div>
+                <!-- Cost tier row — shown only for calls/puts/momentum/putplays -->
+                <div class="tier-row" id="costTierRow">
+                    <span style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;white-space:nowrap">Contract Cost:</span>
+                    <button class="tier-pill active" id="tp-any"  onclick="selectCostTier(null)">Any Price</button>
+                    <button class="tier-pill"        id="tp-low"  onclick="selectCostTier('low')">$3 – $6</button>
+                    <button class="tier-pill"        id="tp-mid"  onclick="selectCostTier('mid')">$6 – $10</button>
+                    <button class="tier-pill"        id="tp-high" onclick="selectCostTier('high')">$10 +</button>
                 </div>
 
                 <!-- WATCHLIST EDITOR -->
@@ -1214,7 +1228,7 @@ const FILTER_META = {
 };
 
 const DISCOVER_CATS = [
-    {key:'gems',      label:'💎 Cheap Gems — Solid Companies at Good Prices',     desc:'cheap stocks under $60/share that are historically strong companies currently undervalued or recovering. Return option_type as CALL and direction as bullish. CRITICAL: option premiums must be under $3.00/share (under $300/contract) — pick strikes accordingly (ATM or slightly OTM on low-priced stocks). If a stock is priced such that any reasonable CALL option would exceed $300/contract, do not include it.'},
+    {key:'gems',      label:'💎 Cheap Gems — Solid Companies at Good Prices',     desc:'cheap stocks under $60/share that are historically strong companies currently undervalued or recovering. Return option_type as CALL and direction as bullish. HARD CONTRACT PRICE LIMIT: The estimated option premium must be $3.00 per share or less ($300 or less per contract total). This is non-negotiable — if a stock\'s ATM or slightly OTM CALL would cost more than $3.00/share, do NOT include it. Pick lower-priced stocks with strikes that keep the contract cost under $3.00/share.'},
     {key:'momentum',  label:'🚀 Momentum Movers — High Upside Right Now',          desc:'stocks showing strong bullish momentum, high upside potential, and a clear upward trend. Return option_type as CALL and direction as bullish'},
     {key:'community', label:'🔥 Community Favorites — What People Are Buying',     desc:'stocks that retail traders and investing communities are actively buying and discussing right now. Return option_type as CALL and direction as bullish'},
     {key:'putplays',  label:'📉 Put Plays — Companies Showing Weakness',           desc:'stocks showing significant weakness, breaking down technically, facing bad news or headwinds, or overextended and due for a drop. PUT setups — stocks to go DOWN. Return option_type as PUT and direction as bearish. For entry_low/entry_high use the stock price zone to enter the put. For stop set the price if stock bounces above. For target set the downside price target.'},
@@ -2675,12 +2689,44 @@ Use DIFFERENT strikes and expiry Fridays for each. 1-month: tighter stop, closer
 Raw JSON only. Nothing else.`;
 }
 
+// ── COST TIER FILTER ──────────────────────────────────────────
+let activeCostTier = null; // null | 'low' | 'mid' | 'high'
+const TIER_TABS = new Set(['calls','puts','momentum','putplays']); // tabs that show tier row
+
+function selectCostTier(tier){
+    activeCostTier = tier;
+    ['any','low','mid','high'].forEach(t=>{
+        const btn = document.getElementById('tp-'+(t==='any'?'any':t));
+        if(btn) btn.classList.toggle('active', (tier===null&&t==='any')||(tier===t));
+    });
+}
+
+function updateTierRow(){
+    const row = document.getElementById('costTierRow');
+    if(!row) return;
+    const show = TIER_TABS.has(activeFilter);
+    row.classList.toggle('visible', show);
+    // Reset tier when switching to a tab that doesn't support it
+    if(!show){ selectCostTier(null); }
+}
+
+function getCostTierBlock(){
+    if(!activeCostTier) return '';
+    const map = {
+        low:  'CONTRACT PRICE HARD REQUIREMENT: Only suggest options where the estimated premium is $3.00–$6.00 per share ($300–$600 per contract total). Choose strikes and expiries that land in this price range. Do NOT suggest any option that would cost less than $3.00 or more than $6.00 per share. If a stock has no suitable options in this range, skip it entirely.',
+        mid:  'CONTRACT PRICE HARD REQUIREMENT: Only suggest options where the estimated premium is $6.00–$10.00 per share ($600–$1,000 per contract total). Choose strikes and expiries that land in this price range. Do NOT suggest any option that would cost less than $6.00 or more than $10.00 per share. If a stock has no suitable options in this range, skip it entirely.',
+        high: 'CONTRACT PRICE HARD REQUIREMENT: Only suggest options where the estimated premium is $10.00 or more per share ($1,000+ per contract total). Choose strikes and expiries that meet or exceed this price. Do NOT suggest cheaper options. If a stock has no suitable options at this level, skip it entirely.',
+    };
+    return '\n⚠️ '+map[activeCostTier]+'\n';
+}
+
 // ── FILTER FUNCTIONS ──────────────────────────────────────────
 function selectFilter(key){
     activeFilter=key;
     document.querySelectorAll('.filter-pill').forEach(p=>p.classList.remove('active'));
     const pill=document.getElementById('fp-'+key);
     if(pill) pill.classList.add('active');
+    updateTierRow();
     const meta=FILTER_META[key];
     const lbl=document.getElementById('scanBtnLabel');
     if(lbl) lbl.textContent=meta.scanLabel;
@@ -2756,7 +2802,7 @@ async function loadMoreFilter(){
             ]);
             const quotes=Object.entries(qMap).map(([ticker,q])=>({ticker,price:q.c,chg:q.dp||0,closes:[q.pc,q.c],high52:q.h||q.c,low52:q.l||q.c,vol:0})).filter(q=>q.price>0);
             const priceData=quotes.length>0?quotes.map(q=>`${q.ticker}: $${q.price.toFixed(2)} (${q.chg>=0?'+':''}${q.chg.toFixed(2)}% today)`).join('\n'):WATCHLIST.join(', ');
-            const raw=await callClaude(watchlistScanPrompt(priceData,meta.optType,{},shownTickers,lmTechMap));
+            const raw=await callClaude(watchlistScanPrompt(priceData,meta.optType,{},shownTickers,lmTechMap,[], activeCostTier));
             newCards=injectLivePrices(JSON.parse(stripJSON(raw)),quotes);
             const lmTickers=[...new Set(newCards.map(s=>(s.ticker||'').toUpperCase()).filter(Boolean))];
             const newsMap=lmTickers.length?await fetchNewsForPromptBatch(lmTickers):{};
@@ -2772,7 +2818,7 @@ async function loadMoreFilter(){
                 const maR = await fetch('/api/market-active');
                 if(maR.ok){ const maD = await maR.json(); lmMarketCandidates = maD.candidates || []; }
             }catch(e){}
-            const raw=await callClaude(discoverPrompt(cat.desc, shownTickers, {}, lmMarketCandidates));
+            const raw=await callClaude(discoverPrompt(cat.desc, shownTickers, {}, lmMarketCandidates, activeCostTier));
             newCards=JSON.parse(stripJSON(raw)).map(s=>({...s,category:cat.label}));
             const discTickers=[...new Set(newCards.map(s=>(s.ticker||'').toUpperCase()).filter(Boolean))];
             const [discPriceMap,discNewsMap,discTechMap]=await Promise.all([
@@ -2835,7 +2881,7 @@ async function runActiveFilter(){
             const priceData=quotes.length>0
                 ?quotes.map(q=>`${q.ticker}: $${q.price.toFixed(2)} (${q.chg>=0?'+':''}${q.chg.toFixed(2)}% today)`).join('\n')
                 :WATCHLIST.join(', ')+' — use your latest knowledge';
-            const raw=await callClaude(watchlistScanPrompt(priceData, meta.optType, {}, [], rfTechMap, wlMarketCandidates));
+            const raw=await callClaude(watchlistScanPrompt(priceData, meta.optType, {}, [], rfTechMap, wlMarketCandidates, activeCostTier));
             cards=JSON.parse(stripJSON(raw));
             cards=injectLivePrices(cards, quotes);
             // Fetch news ONLY for the 3 tickers Claude picked (avoids rate-limit)
@@ -2854,7 +2900,7 @@ async function runActiveFilter(){
                 const maR = await fetch('/api/market-active');
                 if(maR.ok){ const maD = await maR.json(); rfMarketCandidates = maD.candidates || []; }
             }catch(e){}
-            const raw=await callClaude(discoverPrompt(cat.desc, [], {}, rfMarketCandidates));
+            const raw=await callClaude(discoverPrompt(cat.desc, [], {}, rfMarketCandidates, activeCostTier));
             cards=JSON.parse(stripJSON(raw));
             cards=cards.map(s=>({...s, category:cat.label}));
             // Fetch live prices + news + technicals — wrapped in nested try/catch so
@@ -2901,7 +2947,7 @@ async function runActiveFilter(){
 
 // ── SCAN WATCHLIST ────────────────────────────────────────────
 // Shared prompt builder for watchlist scan — pass "CALL" or "PUT"
-function watchlistScanPrompt(priceData, optionType, newsMap={}, excludeTickers=[], techMap={}, marketCandidates=[]){
+function watchlistScanPrompt(priceData, optionType, newsMap={}, excludeTickers=[], techMap={}, marketCandidates=[], costTier=null){
     const isPut = optionType === 'PUT';
     const exp = getExpiryContext();
     const newsEntries = Object.entries(newsMap)
@@ -2919,10 +2965,11 @@ function watchlistScanPrompt(priceData, optionType, newsMap={}, excludeTickers=[
         .join('\n');
     const moversBlock = relevantMovers ? `\nTODAY'S MARKET MOVERS (high volume, real movement right now) — if any of these are also in the watchlist above, strongly prefer them over flat names like AAPL/MSFT/GOOG unless those are genuinely the best setup:\n${relevantMovers}\n` : '';
     const dnaBlock = getDNAPromptBlock();
+    const tierBlock = costTier ? getCostTierBlock() : '';
     return `You are a trading analyst helping a beginner options trader. Today: ${exp.today}.
 
 You have REAL chart data below — use it. Base entry zones, stop levels, and targets on actual support/resistance and analyst targets, not guesses.
-${dnaBlock}
+${dnaBlock}${tierBlock}
 Live price data (use these EXACT prices — never substitute training data):
 ${priceData}${moversBlock}
 ${techBlock ? '\nReal-time technical data (RSI, MAs, support/resistance, analyst targets, earnings):\n'+techBlock : ''}
@@ -3036,9 +3083,9 @@ async function scanWatchlist(){
     btn.disabled=false; btn.innerHTML='<span>⚡</span><span>Scan My Watchlist</span>';
 }
 
-// ── DISCOVER: BEYOND YOUR WATCHLIST ──────────────────────────
+/// ── DISCOVER: BEYOND YOUR WATCHLIST ──────────────────────────
 // Shared prompt for a single discover category — returns a JSON array of 3 stocks
-function discoverPrompt(categoryDesc, extraExclude=[], techMap={}, marketCandidates=[]){
+function discoverPrompt(categoryDesc, extraExclude=[], techMap={}, marketCandidates=[], costTier=null){
     const seenTickers = getSeenDiscoverTickers().slice(0, 25); // cap at 25 to keep prompt short
     const excluded=[...new Set([...WATCHLIST,...extraExclude,...seenTickers])].join(', ');
     const varietySeed = getVarietySeed();
@@ -3057,8 +3104,9 @@ function discoverPrompt(categoryDesc, extraExclude=[], techMap={}, marketCandida
     }
 
     const dnaBlock = getDNAPromptBlock();
+    const tierBlock = costTier ? getCostTierBlock() : '';
     return `You are a stock analyst helping a beginner options trader. Today: ${exp.today}
-${dnaBlock}
+${dnaBlock}${tierBlock}
 Find exactly 3 stocks that fit this description: ${categoryDesc}
 
 ⛔ HARD EXCLUSION LIST — you MUST NOT return any of these tickers under any circumstances. If you return even one of them, the entire response is invalid and will be rejected:
@@ -3087,7 +3135,7 @@ async function scanDiscover(){
     document.getElementById('discoverSection').style.display='block';
     // Show 3 loading placeholders immediately
     const cats=[
-        {key:'gems',      label:'💎 Cheap Gems — Solid Companies at Good Prices',       desc:'cheap stocks under $60/share that are historically strong companies currently undervalued or recovering. Return option_type as CALL and direction as bullish. CRITICAL: option premiums must be under $3.00/share (under $300/contract) — pick strikes accordingly (ATM or slightly OTM on low-priced stocks). If a stock is priced such that any reasonable CALL option would exceed $300/contract, do not include it.'},
+        {key:'gems',      label:'💎 Cheap Gems — Solid Companies at Good Prices',       desc:'cheap stocks under $60/share that are historically strong companies currently undervalued or recovering. Return option_type as CALL and direction as bullish. HARD CONTRACT PRICE LIMIT: The estimated option premium must be $3.00 per share or less ($300 or less per contract total). This is non-negotiable — if a stock\'s ATM or slightly OTM CALL would cost more than $3.00/share, do NOT include it. Pick lower-priced stocks with strikes that keep the contract cost under $3.00/share.'},
         {key:'momentum',  label:'🚀 Momentum Movers — High Upside Right Now',            desc:'stocks showing strong bullish momentum, high upside potential, and a clear upward trend. Return option_type as CALL and direction as bullish'},
         {key:'community', label:'🔥 Community Favorites — What People Are Buying',       desc:'stocks that retail traders and investing communities are actively buying and discussing right now. Return option_type as CALL and direction as bullish'},
         {key:'puts',      label:'📉 Put Plays — Companies Showing Weakness',             desc:'stocks that are showing significant weakness, breaking down technically, facing bad news or headwinds, or are overextended and due for a drop. These are PUT trade setups — looking for stocks to go DOWN. Return option_type as PUT and direction as bearish. For entry_low/entry_high put the stock price zone to enter the put. For stop set the price if stock bounces above. For target set the downside price target.'},
