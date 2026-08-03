@@ -959,8 +959,8 @@
             <div class="fg"><label>Number of Contracts</label><input type="number" id="e-qty" value="1" min="1" /></div>
             <div class="fg"><label>Option Price I Paid (per contract, e.g. $2.50 = $250 total)</label><input type="number" id="e-entry" placeholder="2.50" step="0.01" /></div>
             <div class="fg"><label>Stock Price When I Entered ($)</label><input type="number" id="e-stock-entry" placeholder="143.00" step="0.01" /></div>
-            <div class="fg"><label>Stock Stop Level ($) — if stock drops to this price, thesis is broken</label><input type="number" id="e-stop" placeholder="e.g. 24.63" step="0.01" /></div>
-            <div class="fg"><label>Stock Target Level ($) — stock price where you'd take profit</label><input type="number" id="e-target" placeholder="e.g. 32.00" step="0.01" /></div>
+            <div class="fg"><label>Option Stop ($) — exit if contract price drops to this level</label><input type="number" id="e-stop" placeholder="e.g. 0.44" step="0.01" /></div>
+            <div class="fg"><label>Option Target ($) — take profit if contract reaches this price</label><input type="number" id="e-target" placeholder="e.g. 1.80" step="0.01" /></div>
             <div class="fg"><label>Option Price I Sold At (leave blank if still open)</label><input type="number" id="e-exit" placeholder="—" step="0.01" /></div>
             <div class="fg"><label>Manual P&amp;L Override ($) — leave blank to auto-calculate from entry/exit</label><input type="number" id="e-manual-pnl" placeholder="e.g. 320 or -150" step="1" /><span style="font-size:10px;color:var(--muted);margin-top:3px">Enter the exact dollar amount if you want to override the calculated P&amp;L.</span></div>
             <div class="fg"><label>Status</label><select id="e-status"><option value="Open">Open</option><option value="Closed">Closed</option></select></div>
@@ -4169,7 +4169,9 @@ function logTradeFromCard(cardId){
     const expMatch=optDetail.match(/(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2},?\s+\d{4}/);
     let expDate='';
     if(expMatch){try{const d=new Date(expMatch[0]);if(!isNaN(d.getTime()))expDate=d.toISOString().split('T')[0];}catch(e){}}
-    window._pendingCardData={entry_low:entryLow,entry_high:entryHigh,stop_loss:stopLoss,target:target,option_detail:optDetail,account_sizing:acctSizing,stock_price_at_entry:cd.current_price||idea.current_price||0,option_type:(idea.option_type||'CALL').toUpperCase()};
+    // stop_loss/target from card are STOCK PRICE levels — don't carry them into journal
+    // User will set their own option contract price stops via Edit modal
+    window._pendingCardData={entry_low:entryLow,entry_high:entryHigh,option_detail:optDetail,account_sizing:acctSizing,stock_price_at_entry:cd.current_price||idea.current_price||0,option_type:(idea.option_type||'CALL').toUpperCase()};
     document.getElementById('m-date').value=new Date().toISOString().split('T')[0];
     document.getElementById('m-ticker').value=idea.ticker||'';
     document.getElementById('m-type').value=(idea.option_type||'CALL').toUpperCase();
@@ -4209,10 +4211,10 @@ function buildJournalCard(trade){
             </div>
             ${hasLevels?`<div class="j-lvl-row">
                 <div class="j-lvl"><div class="j-lvl-lbl">Paid / Contract</div><div class="j-lvl-val">$${parseFloat(trade.entry||0).toFixed(2)}</div></div>
-                <div class="j-lvl"><div class="j-lvl-lbl">Stock Stop <span style="font-size:9px;font-weight:400;opacity:.6">(stock $)</span></div><div class="j-lvl-val" style="color:var(--red)">${trade.stop_loss?'$'+parseFloat(trade.stop_loss).toFixed(2):'<span style="font-size:11px;opacity:.5">not set</span>'}</div></div>
-                <div class="j-lvl"><div class="j-lvl-lbl">Stock Target <span style="font-size:9px;font-weight:400;opacity:.6">(stock $)</span></div><div class="j-lvl-val" style="color:var(--green)">${trade.target?'$'+parseFloat(trade.target).toFixed(2):'<span style="font-size:11px;opacity:.5">not set</span>'}</div></div>
+                <div class="j-lvl"><div class="j-lvl-lbl">Option Stop <span style="font-size:9px;font-weight:400;opacity:.6">(contract $)</span></div><div class="j-lvl-val" style="color:var(--red)">${trade.stop_loss?'$'+parseFloat(trade.stop_loss).toFixed(2):'<span style="font-size:11px;opacity:.5">not set</span>'}</div></div>
+                <div class="j-lvl"><div class="j-lvl-lbl">Option Target <span style="font-size:9px;font-weight:400;opacity:.6">(contract $)</span></div><div class="j-lvl-val" style="color:var(--green)">${trade.target?'$'+parseFloat(trade.target).toFixed(2):'<span style="font-size:11px;opacity:.5">not set</span>'}</div></div>
             </div>
-            <div style="font-size:10px;color:var(--muted);margin-bottom:6px;opacity:.7">Stock Stop &amp; Target are stock price levels — click <strong>✏️ Edit</strong> to set your actual prices for accurate analysis.</div>`:''}
+            <div style="font-size:10px;color:var(--muted);margin-bottom:6px;opacity:.7">Option Stop &amp; Target are contract price levels — click <strong>✏️ Edit</strong> to set your exits for accurate analysis.</div>`:''}
             ${trade.option_summary?`<div class="j-action-box" style="border-left-color:var(--blue)">📊 ${trade.option_summary}</div>`:''}
             ${trade.action?`<div class="j-action-box">💡 ${trade.action}</div>`:''}
             ${trade.news_summary?`<div class="j-news-line">📰 ${trade.news_summary.slice(0,140)}${trade.news_summary.length>140?'…':''}</div>`:''}
@@ -4237,9 +4239,8 @@ function journalAnalysisPrompt(trade,currentPrice,priceChange,newsText,optData){
     const target=parseFloat(trade.target)||0;
     const entryPrice=parseFloat(trade.stock_price_at_entry)||0;
 
-    // stop_loss and target are STOCK PRICE levels (where the trade thesis breaks or succeeds)
-    // They must be compared against the current STOCK price — NOT the option price.
-    // The option entry price is used separately to calculate P&L and suggest an option-level stop.
+    // stop_loss and target are OPTION CONTRACT PRICE levels set by the trader
+    // Compare them against the live option contract price — not the stock price
     const liveOptPrice = optData ? parseFloat(optData.ask ?? optData.mid ?? optData.last ?? 0) : 0;
     const optEntryPrice = parseFloat(trade.entry||0); // what was paid per contract
 
@@ -4248,28 +4249,23 @@ function journalAnalysisPrompt(trade,currentPrice,priceChange,newsText,optData){
         ? ((liveOptPrice-optEntryPrice)/optEntryPrice*100).toFixed(1)
         : null;
 
-    // Stock stop: compare stop_loss (a stock price level) against current stock price
-    const priceVsStop = stopLoss>0 && currentPrice>0
-        ? (currentPrice > stopLoss
-            ? `${trade.ticker} stock at $${currentPrice.toFixed(2)} is ABOVE stock stop ($${stopLoss}) — thesis still intact`
-            : `${trade.ticker} stock at $${currentPrice.toFixed(2)} is AT OR BELOW stock stop ($${stopLoss}) — setup is broken, exit recommended`)
+    // Option stop: compare stop_loss (option contract price) against live option price
+    const priceVsStop = stopLoss>0 && liveOptPrice>0
+        ? (liveOptPrice <= stopLoss
+            ? `Option at $${liveOptPrice.toFixed(2)} has hit/dropped to stop of $${stopLoss} — EXIT signal triggered`
+            : `Option at $${liveOptPrice.toFixed(2)} is above stop of $${stopLoss} — still in range ($${(liveOptPrice-stopLoss).toFixed(2)} cushion)`)
         : stopLoss>0
-            ? `Stock stop at $${stopLoss} — current stock price $${currentPrice>0?currentPrice.toFixed(2):'unavailable'}`
-            : 'No stock price stop set';
+            ? `Option stop set at $${stopLoss} — live option price unavailable`
+            : 'No option stop set';
 
-    // Stock target: compare target (a stock price level) against current stock price
-    const priceVsTarget = target>0 && currentPrice>0
-        ? (currentPrice >= target
-            ? `Stock at $${currentPrice.toFixed(2)} has REACHED or exceeded stock target ($${target}) — consider taking profit`
-            : `Stock at $${currentPrice.toFixed(2)}, target $${target} — needs $${(target-currentPrice).toFixed(2)} more to reach goal`)
+    // Option target: compare target (option contract price) against live option price
+    const priceVsTarget = target>0 && liveOptPrice>0
+        ? (liveOptPrice >= target
+            ? `Option at $${liveOptPrice.toFixed(2)} has REACHED/exceeded target of $${target} — take profit signal`
+            : `Option at $${liveOptPrice.toFixed(2)}, target $${target} — needs $${(target-liveOptPrice).toFixed(2)} more per contract`)
         : target>0
-            ? `Stock target at $${target} — current stock price $${currentPrice>0?currentPrice.toFixed(2):'unavailable'}`
-            : 'No stock price target set';
-
-    // Option-level stop suggestion: 50% of entry price is a common beginner risk rule
-    const optStopSuggestion = optEntryPrice>0
-        ? `$${(optEntryPrice*0.50).toFixed(2)}/contract (50% of $${optEntryPrice.toFixed(2)} entry)`
-        : null;
+            ? `Option target at $${target} — live option price unavailable`
+            : 'No option target set';
 
     // Stock price movement context
     const stockVsEntry = entryPrice>0
@@ -4315,34 +4311,34 @@ Option contract: $${trade.strike||'?'} strike · Expires ${trade.exp||'?'}
 Contracts held: ${trade.qty||1} × $${optEntryPrice.toFixed(2)} paid per contract = $${(optEntryPrice*(trade.qty||1)*100).toFixed(0)} total cost
 
 CURRENT FACTS — use these exactly, do not contradict them:
-STOCK PRICE CONTEXT:
-- ${trade.ticker} stock now: $${currentPrice} (${priceChange>=0?'+':''}${parseFloat(priceChange||0).toFixed(2)}% today)
-${stockVsEntry?'- '+stockVsEntry:''}
-- Stock stop level: ${priceVsStop}
-- Stock target level: ${priceVsTarget}
-
-OPTION CONTRACT CONTEXT:
+OPTION CONTRACT CONTEXT (PRIMARY — this is what controls the money):
 - Option now trading: ${liveOptPrice>0?'$'+liveOptPrice.toFixed(2)+' per contract':'price not available'}
 - Entry cost: $${optEntryPrice.toFixed(2)}/contract${optPnLPct!=null?' → current P&L: '+optPnLPct+'%':''}
-${optStopSuggestion?'- Suggested option stop (50% rule): '+optStopSuggestion:''}
+- Option stop: ${priceVsStop}
+- Option target: ${priceVsTarget}
 ${optBlock}
+
+STOCK PRICE CONTEXT (secondary — use to assess thesis direction):
+- ${trade.ticker} stock now: $${currentPrice} (${priceChange>=0?'+':''}${parseFloat(priceChange||0).toFixed(2)}% today)
+${stockVsEntry?'- '+stockVsEntry:''}
+
 ${newsText?'\nRecent news:\n'+newsText:'No recent news available.'}
 
-IMPORTANT — stop/target context:
-The stop ($${stopLoss||'not set'}) and target ($${target||'not set'}) are STOCK PRICE levels — they represent where the underlying stock needs to be for the thesis to hold or succeed. They are NOT option contract prices.
-The option contract P&L is tracked separately against the entry cost ($${optEntryPrice.toFixed(2)}/contract).
+IMPORTANT — stop/target are OPTION CONTRACT PRICES:
+The stop ($${stopLoss||'not set'}) and target ($${target||'not set'}) are the option contract prices the trader chose as exit levels. If the live option price hits or drops below stop → exit. If it reaches target → take profit.
+Use stock price and Greeks to explain WHY the option is moving, but the primary exit signals are the option price vs these levels.
 
 Based on ALL the facts above, assess whether to hold, adjust, or exit.
-- If the stock price is at or below the stock stop: thesis is broken → recommend exit
-- If the stock price has reached the stock target: consider taking profit
-- Also assess option-level health: is the option losing too much value (theta decay, low delta on OTM, etc.)?
-- If Greeks are available, use them to explain urgency
+- If option price ≤ stop: exit signal triggered
+- If option price ≥ target: take profit signal
+- Also assess Greeks: theta decay, delta (how sensitive to stock move), vega (IV impact)
+- If stop/target not set, give a recommendation based on P&L% and Greeks alone
 
 Return ONLY this JSON (no markdown):
-{"recommendation":"hold","reason":"2-3 sentences — reference stock price vs stop/target level, option P&L%, and at least one Greek if available","rating":"moderate","action":"1 specific actionable sentence referencing either the stock price stop/target or the option contract price","option_summary":"1 plain-English sentence: stock position vs stop/target, option P&L%, and one key Greek insight"}
+{"recommendation":"hold","reason":"2-3 sentences — reference option price vs stop/target, P&L%, and at least one Greek if available","rating":"moderate","action":"1 specific actionable sentence with the option price level to act on","option_summary":"1 plain-English sentence: option price vs stop/target, P&L%, and one key Greek insight"}
 
 recommendation: "hold", "adjust", or "exit" only
-rating: "high" (trade working, stock above stop and moving toward target), "moderate" (mixed), "low" (stock near stop or option bleeding), or "exit" (stock stop broken or thesis failed)`;
+rating: "high" (option above stop, moving toward target), "moderate" (mixed signals), "low" (option near stop or bleeding from theta), or "exit" (stop hit or thesis failed)`;
 }
 // Fetch live option price + Greeks for a specific logged trade
 async function fetchLiveOptionData(trade){
