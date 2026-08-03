@@ -178,7 +178,7 @@
         .j-top { display:flex; justify-content:space-between; align-items:center; margin-bottom:18px; }
         .j-title { font-size:17px; font-weight:700; }
         .j-add { background:var(--green); color:#000; border:none; border-radius:6px; padding:8px 16px; font-size:13px; font-weight:700; cursor:pointer; }
-        .stats { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin-bottom:18px; }
+        .stats { display:grid; grid-template-columns:repeat(5,1fr); gap:10px; margin-bottom:18px; }
         .stat { background:var(--bg2); border:1px solid var(--border); border-radius:8px; padding:12px 14px; }
         .stat-lbl { font-size:10px; color:var(--muted); font-weight:700; text-transform:uppercase; letter-spacing:.5px; margin-bottom:4px; }
         .stat-val { font-size:22px; font-weight:800; }
@@ -807,8 +807,9 @@
                 </div>
                 <div class="stats">
                     <div class="stat"><div class="stat-lbl">Total Trades</div><div class="stat-val" id="s-total">0</div></div>
-                    <div class="stat"><div class="stat-lbl">Open Positions</div><div class="stat-val neu" id="s-open">0</div></div>
-                    <div class="stat"><div class="stat-lbl">Total P&amp;L</div><div class="stat-val" id="s-pnl">$0</div></div>
+                    <div class="stat"><div class="stat-lbl">Open</div><div class="stat-val neu" id="s-open">0</div></div>
+                    <div class="stat"><div class="stat-lbl">Total Profit</div><div class="stat-val pos" id="s-profit">$0</div></div>
+                    <div class="stat"><div class="stat-lbl">Total Loss</div><div class="stat-val neg" id="s-loss">$0</div></div>
                     <div class="stat"><div class="stat-lbl">Win Rate</div><div class="stat-val" id="s-wr">—</div></div>
                 </div>
                 <div id="journalBody"></div>
@@ -899,6 +900,33 @@
 </div>
 
 <!-- Edit Trade Modal -->
+<!-- Close Trade Modal -->
+<div class="overlay" id="closeTradeModal">
+    <div class="modal" style="max-width:420px">
+        <div class="modal-title">🏁 Close Trade</div>
+        <input type="hidden" id="ct-id" />
+        <div id="ct-summary" style="font-size:12px;color:var(--muted);margin-bottom:18px;line-height:1.5;padding:10px 12px;background:var(--bg3);border-radius:8px;border:1px solid var(--border)"></div>
+        <div style="display:flex;flex-direction:column;gap:14px">
+            <div class="fg">
+                <label>Exit Price — what you sold the option for (per contract)</label>
+                <input type="number" id="ct-exit" placeholder="e.g. 4.20" step="0.01" oninput="updateClosePreview()" />
+                <span style="font-size:10px;color:var(--muted);margin-top:3px">P&amp;L will be calculated automatically. Or skip this and enter the dollar amount below.</span>
+            </div>
+            <div style="text-align:center;font-size:11px;color:var(--muted);letter-spacing:.5px;text-transform:uppercase">— or —</div>
+            <div class="fg">
+                <label>Manual P&amp;L — exact dollar amount you made or lost</label>
+                <input type="number" id="ct-manual-pnl" placeholder="e.g. 320 (profit) or -150 (loss)" step="1" oninput="updateClosePreview()" />
+                <span style="font-size:10px;color:var(--muted);margin-top:3px">Use a negative number for a loss. This overrides the calculated P&amp;L.</span>
+            </div>
+            <div id="ct-preview" style="display:none;text-align:center;font-size:20px;font-weight:800;padding:12px;border-radius:8px;background:var(--bg3)"></div>
+        </div>
+        <div class="mactions">
+            <button class="btn-cancel" onclick="closeCloseModal()">Cancel</button>
+            <button class="btn-save" onclick="saveCloseModal()">Mark Closed</button>
+        </div>
+    </div>
+</div>
+
 <div class="overlay" id="editModal">
     <div class="modal">
         <div class="modal-title">✏️ Edit Trade</div>
@@ -915,6 +943,7 @@
             <div class="fg"><label>Stop Loss — option contract price ($) · e.g. exit if option drops to $1.25</label><input type="number" id="e-stop" placeholder="1.25" step="0.01" /></div>
             <div class="fg"><label>Take Profit Target — option contract price ($) · e.g. sell if option hits $5.00</label><input type="number" id="e-target" placeholder="5.00" step="0.01" /></div>
             <div class="fg"><label>Option Price I Sold At (leave blank if still open)</label><input type="number" id="e-exit" placeholder="—" step="0.01" /></div>
+            <div class="fg"><label>Manual P&amp;L Override ($) — leave blank to auto-calculate from entry/exit</label><input type="number" id="e-manual-pnl" placeholder="e.g. 320 or -150" step="1" /><span style="font-size:10px;color:var(--muted);margin-top:3px">Enter the exact dollar amount if you want to override the calculated P&amp;L.</span></div>
             <div class="fg"><label>Status</label><select id="e-status"><option value="Open">Open</option><option value="Closed">Closed</option></select></div>
             <div class="fg span2"><label>Why I Took This Trade</label><textarea id="e-thesis" placeholder="e.g. bouncing off support, strong momentum..."></textarea></div>
         </div>
@@ -3995,17 +4024,54 @@ function saveTrade(){
     ['m-ticker','m-strike','m-entry','m-exit','m-thesis'].forEach(id=>document.getElementById(id).value='');document.getElementById('m-exp').value='';
 }
 function deleteTrade(id){if(!confirm('Delete this trade?'))return;trades=trades.filter(t=>t.id!==id);localStorage.setItem('darcell_v2_trades',JSON.stringify(trades));renderJournal();_sbDeleteTrade(id);}
-function closeTrade(id){
-    const ep=prompt('What price did you close/sell at (per contract $)? Leave blank to just mark closed.');
-    if(ep===null)return;
+function closeTrade(id){ openCloseModal(id); } // legacy alias
+function openCloseModal(id){
+    const trade=trades.find(t=>t.id===id);
+    if(!trade)return;
+    document.getElementById('ct-id').value=id;
+    const totalCost=(parseFloat(trade.entry||0)*( trade.qty||1)*100).toFixed(0);
+    document.getElementById('ct-summary').innerHTML=`<strong>${trade.ticker}</strong> ${trade.type||'CALL'} · $${trade.strike||'?'} strike · ${trade.qty||1} contract${(trade.qty||1)!==1?'s':''}<br>You paid <strong>$${parseFloat(trade.entry||0).toFixed(2)}/contract</strong> ($${totalCost} total cost)`;
+    document.getElementById('ct-exit').value='';
+    document.getElementById('ct-manual-pnl').value='';
+    document.getElementById('ct-preview').style.display='none';
+    const m=document.getElementById('closeTradeModal');
+    m.dataset.entry=trade.entry||0;
+    m.dataset.qty=trade.qty||1;
+    m.classList.add('open');
+}
+function closeCloseModal(){document.getElementById('closeTradeModal').classList.remove('open');}
+function updateClosePreview(){
+    const m=document.getElementById('closeTradeModal');
+    const entry=parseFloat(m.dataset.entry||0);
+    const qty=parseInt(m.dataset.qty||1);
+    const exitVal=parseFloat(document.getElementById('ct-exit').value);
+    const manualVal=parseFloat(document.getElementById('ct-manual-pnl').value);
+    const preview=document.getElementById('ct-preview');
+    let pnl=null;
+    // manual P&L takes priority; otherwise calculate from exit price
+    if(document.getElementById('ct-manual-pnl').value!=='')pnl=isNaN(manualVal)?null:manualVal;
+    else if(!isNaN(exitVal)&&entry>0)pnl=(exitVal-entry)*qty*100;
+    if(pnl!==null){
+        preview.style.display='block';
+        preview.style.color=pnl>=0?'var(--green)':'var(--red)';
+        preview.textContent=(pnl>=0?'+ $':'- $')+Math.abs(pnl).toFixed(0)+' '+(pnl>=0?'profit':'loss');
+    }else{
+        preview.style.display='none';
+    }
+}
+function saveCloseModal(){
+    const id=parseInt(document.getElementById('ct-id').value);
     const idx=trades.findIndex(t=>t.id===id);
     if(idx<0)return;
+    const exitVal=document.getElementById('ct-exit').value;
+    const manualVal=document.getElementById('ct-manual-pnl').value;
     trades[idx].status='Closed';
-    const v=parseFloat(ep);
-    if(!isNaN(v)&&v>0)trades[idx].exit=v;
+    if(exitVal)trades[idx].exit=parseFloat(exitVal);
+    if(manualVal!=='')trades[idx].manual_pnl=parseFloat(manualVal);
     localStorage.setItem('darcell_v2_trades',JSON.stringify(trades));
     renderJournal();
     _sbUpsertTrade(trades[idx]);
+    closeCloseModal();
 }
 function openEditModal(id){
     const trade=trades.find(t=>t.id===id);
@@ -4022,6 +4088,7 @@ function openEditModal(id){
     document.getElementById('e-stop').value=trade.stop_loss!=null?trade.stop_loss:'';
     document.getElementById('e-target').value=trade.target!=null?trade.target:'';
     document.getElementById('e-exit').value=trade.exit!=null?trade.exit:'';
+    document.getElementById('e-manual-pnl').value=trade.manual_pnl!=null?trade.manual_pnl:'';
     document.getElementById('e-status').value=trade.status||'Open';
     document.getElementById('e-thesis').value=trade.thesis||'';
     document.getElementById('editModal').classList.add('open');
@@ -4035,6 +4102,7 @@ function saveEditTrade(){
     const stopVal=document.getElementById('e-stop').value;
     const targetVal=document.getElementById('e-target').value;
     const stockEntryVal=document.getElementById('e-stock-entry').value;
+    const manualPnlVal=document.getElementById('e-manual-pnl').value;
     trades[idx]={
         ...trades[idx],
         ticker:   document.getElementById('e-ticker').value.toUpperCase().trim(),
@@ -4048,6 +4116,7 @@ function saveEditTrade(){
         stop_loss:  stopVal   ? parseFloat(stopVal)   : trades[idx].stop_loss,
         target:     targetVal ? parseFloat(targetVal) : trades[idx].target,
         exit:       exitVal   ? parseFloat(exitVal)   : null,
+        manual_pnl: manualPnlVal!=='' ? parseFloat(manualPnlVal) : null,
         status:   document.getElementById('e-status').value,
         thesis:   document.getElementById('e-thesis').value.trim(),
     };
@@ -4118,10 +4187,11 @@ function buildJournalCard(trade){
                 </div>
             </div>
             ${hasLevels?`<div class="j-lvl-row">
-                <div class="j-lvl"><div class="j-lvl-lbl">Paid / Contract</div><div class="j-lvl-val">$${parseFloat(trade.entry||0).toFixed(2)}</div></div>
-                <div class="j-lvl"><div class="j-lvl-lbl">Contract Stop</div><div class="j-lvl-val" style="color:var(--red)">${trade.stop_loss?'$'+trade.stop_loss:'—'}</div></div>
-                <div class="j-lvl"><div class="j-lvl-lbl">Contract Target</div><div class="j-lvl-val" style="color:var(--green)">${trade.target?'$'+trade.target:'—'}</div></div>
-            </div>`:''}
+                <div class="j-lvl"><div class="j-lvl-lbl">My Entry</div><div class="j-lvl-val">$${parseFloat(trade.entry||0).toFixed(2)}</div></div>
+                <div class="j-lvl"><div class="j-lvl-lbl">My Stop <span style="font-size:9px;font-weight:400;opacity:.6">(contract $)</span></div><div class="j-lvl-val" style="color:var(--red)">${trade.stop_loss?'$'+parseFloat(trade.stop_loss).toFixed(2):'<span style="font-size:11px;opacity:.5">not set</span>'}</div></div>
+                <div class="j-lvl"><div class="j-lvl-lbl">My Target <span style="font-size:9px;font-weight:400;opacity:.6">(contract $)</span></div><div class="j-lvl-val" style="color:var(--green)">${trade.target?'$'+parseFloat(trade.target).toFixed(2):'<span style="font-size:11px;opacity:.5">not set</span>'}</div></div>
+            </div>
+            <div style="font-size:10px;color:var(--muted);margin-bottom:6px;opacity:.7">⚠️ Stop &amp; target are Claude's estimates — click <strong>✏️ Edit</strong> to set your actual levels for accurate analysis.</div>`:''}
             ${trade.option_summary?`<div class="j-action-box" style="border-left-color:var(--blue)">📊 ${trade.option_summary}</div>`:''}
             ${trade.action?`<div class="j-action-box">💡 ${trade.action}</div>`:''}
             ${trade.news_summary?`<div class="j-news-line">📰 ${trade.news_summary.slice(0,140)}${trade.news_summary.length>140?'…':''}</div>`:''}
@@ -4132,7 +4202,7 @@ function buildJournalCard(trade){
                 </div>
                 <div>
                     <button class="j-edit-btn" onclick="openEditModal(${trade.id})">✏️ Edit</button>
-                    <button class="j-close-trade-btn" onclick="closeTrade(${trade.id})">Mark Closed</button>
+                    <button class="j-close-trade-btn" onclick="openCloseModal(${trade.id})">🏁 Close Trade</button>
                     <button class="j-del-btn" onclick="deleteTrade(${trade.id})">×</button>
                 </div>
             </div>
@@ -4346,11 +4416,16 @@ function renderJournal(){
     if(!body)return;
     const open=trades.filter(t=>t.status==='Open');
     const closed=trades.filter(t=>t.status!=='Open');
-    let pnl=0,wins=0;
-    closed.forEach(t=>{const p=t.exit!=null?(t.exit-t.entry)*t.qty*100:null;if(p!=null){pnl+=p;if(p>0)wins++;}});
+    let totalProfit=0,totalLoss=0,wins=0;
+    closed.forEach(t=>{
+        // Use manual_pnl if set, otherwise calculate from entry/exit prices
+        const p=t.manual_pnl!=null?t.manual_pnl:(t.exit!=null?(t.exit-t.entry)*t.qty*100:null);
+        if(p!=null){if(p>=0){totalProfit+=p;wins++;}else{totalLoss+=p;}}
+    });
     document.getElementById('s-total').textContent=trades.length;
     document.getElementById('s-open').textContent=open.length;
-    const pe=document.getElementById('s-pnl');pe.textContent=(pnl>=0?'+':'-')+'$'+Math.abs(pnl).toFixed(0);pe.className='stat-val '+(pnl>=0?'pos':'neg');
+    document.getElementById('s-profit').textContent='+$'+totalProfit.toFixed(0);
+    document.getElementById('s-loss').textContent='-$'+Math.abs(totalLoss).toFixed(0);
     const we=document.getElementById('s-wr');const wr=closed.length?Math.round(wins/closed.length*100):null;we.textContent=wr!==null?wr+'%':'—';if(wr!==null)we.className='stat-val '+(wr>=50?'pos':'neg');
     if(!trades.length){body.innerHTML='<div class="empty-state" style="margin-top:24px"><div class="empty-icon">📒</div><div class="empty-title">No trades logged yet</div><div class="empty-sub">Open any trade idea card and tap "📒 Log This Trade" to start tracking.</div></div>';return;}
     let html='';
@@ -4362,7 +4437,7 @@ function renderJournal(){
         html+=`<div style="margin-top:${open.length?'28px':'0'};margin-bottom:8px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:var(--muted)">✅ Closed Trades</div>`;
         html+=`<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Date</th><th>Ticker</th><th>Type</th><th>Strike</th><th>Expiry</th><th>Qty</th><th>Entry</th><th>Exit</th><th>P&L</th><th>Notes</th><th></th></tr></thead><tbody>`;
         html+=closed.map(t=>{
-            const p=t.exit!=null?(t.exit-t.entry)*t.qty*100:null;
+            const p=t.manual_pnl!=null?t.manual_pnl:(t.exit!=null?(t.exit-t.entry)*t.qty*100:null);
             const ph=p!=null?`<span class="${p>=0?'pos':'neg'}">${p>=0?'+':'-'}$${Math.abs(p).toFixed(0)}</span>`:'—';
             return`<tr><td style="color:var(--muted);white-space:nowrap">${fmt(t.date)}</td><td><strong>${t.ticker}</strong></td><td><span class="badge ${(t.type||'CALL')==='CALL'?'bc':'bp'}">${t.type||'CALL'}</span></td><td>$${t.strike||'?'}</td><td style="color:var(--muted)">${fmt(t.exp)}</td><td>${t.qty}</td><td>$${parseFloat(t.entry||0).toFixed(2)}</td><td>${t.exit!=null?'$'+t.exit.toFixed(2):'—'}</td><td>${ph}</td><td style="max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:11px">${t.thesis||'—'}</td><td style="white-space:nowrap"><button class="j-edit-btn" style="padding:3px 8px;margin-right:4px" onclick="openEditModal(${t.id})">✏️</button><button class="del" onclick="deleteTrade(${t.id})">×</button></td></tr>`;
         }).join('');
@@ -4375,6 +4450,7 @@ setInterval(()=>{if(document.getElementById('tab-journal')?.classList.contains('
 document.getElementById('modal').addEventListener('click',e=>{if(e.target.id==='modal')closeModal();});
 document.getElementById('authModal').addEventListener('click',e=>{if(e.target.id==='authModal')closeAuthModal();});
 document.getElementById('editModal').addEventListener('click',e=>{if(e.target.id==='editModal')closeEditModal();});
+document.getElementById('closeTradeModal').addEventListener('click',e=>{if(e.target.id==='closeTradeModal')closeCloseModal();});
 window.addEventListener('load',()=>{
     loadTape(); loadChart(curTicker); renderJournal();
     updateSettingsBtn();
