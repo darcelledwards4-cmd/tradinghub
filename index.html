@@ -417,6 +417,23 @@
         .j-edit-btn{background:none;border:1px solid rgba(88,166,255,.3);color:var(--blue);border-radius:5px;padding:4px 10px;font-size:11px;cursor:pointer;margin-right:6px;transition:all .15s}
         .j-edit-btn:hover{background:rgba(88,166,255,.1)}
         .j-analyzing-row{display:flex;align-items:center;gap:7px;font-size:11px;color:var(--muted);padding:7px 14px;border-bottom:1px solid var(--border)}
+        /* Trading DNA card */
+        .dna-card{background:linear-gradient(135deg,rgba(130,80,255,.07),rgba(88,166,255,.05));border:1px solid rgba(130,80,255,.25);border-radius:10px;padding:16px;margin-bottom:18px}
+        .dna-header{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px;gap:8px}
+        .dna-title{font-size:14px;font-weight:800;color:var(--text)}
+        .dna-meta{font-size:10px;color:var(--muted);text-align:right;line-height:1.5}
+        .dna-summary{font-size:12px;color:var(--muted);line-height:1.55;margin-bottom:12px;font-style:italic}
+        .dna-section{margin-bottom:10px}
+        .dna-section-lbl{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px}
+        .dna-pill{display:inline-block;font-size:11px;border-radius:20px;padding:3px 10px;margin:2px 3px 2px 0;font-weight:600;line-height:1.4}
+        .dna-win{background:rgba(63,185,80,.12);color:var(--green);border:1px solid rgba(63,185,80,.25)}
+        .dna-loss{background:rgba(248,81,73,.10);color:var(--red);border:1px solid rgba(248,81,73,.2)}
+        .dna-lesson{font-size:11px;color:var(--muted);padding:4px 0 4px 14px;border-left:2px solid rgba(130,80,255,.3);margin-bottom:4px;line-height:1.4}
+        .dna-actions{display:flex;gap:8px;margin-top:12px}
+        .dna-train-btn{background:rgba(130,80,255,.15);color:#a855f7;border:1px solid rgba(130,80,255,.3);border-radius:6px;padding:5px 14px;font-size:11px;font-weight:700;cursor:pointer}
+        .dna-train-btn:hover{background:rgba(130,80,255,.25)}
+        .dna-clear-btn{background:transparent;color:var(--muted);border:1px solid var(--border);border-radius:6px;padding:5px 12px;font-size:11px;cursor:pointer}
+        .dna-badge{display:inline-flex;align-items:center;gap:4px;font-size:10px;font-weight:700;color:#a855f7;background:rgba(130,80,255,.1);border:1px solid rgba(130,80,255,.2);border-radius:10px;padding:2px 8px;vertical-align:middle;margin-left:6px}
         .log-trade-btn{width:100%;margin-top:10px;padding:9px;background:rgba(139,92,246,.1);border:1px solid rgba(139,92,246,.22);color:#a78bfa;border-radius:7px;font-size:12px;font-weight:700;cursor:pointer;transition:all .15s;letter-spacing:.3px}
         .log-trade-btn:hover{background:rgba(139,92,246,.22);border-color:rgba(139,92,246,.45)}
         .j-refresh-btn{background:var(--bg3);border:1px solid var(--border);color:var(--muted);border-radius:6px;padding:7px 13px;font-size:12px;cursor:pointer;transition:all .15s}
@@ -526,7 +543,7 @@
                 <div id="singleResult" style="margin-bottom:20px;display:none;"></div>
                 <div class="scan-row" style="margin-bottom:14px">
                     <div>
-                        <div class="scan-title">Today's Trade Ideas</div>
+                        <div class="scan-title">Today's Trade Ideas <span class="dna-badge" id="dnaBadge" style="display:none">🧠 Personalized</span></div>
                         <div class="last-scan" id="lastScan">Choose a category below, then hit Scan</div>
                     </div>
                     <div style="display:flex;gap:8px;align-items:center">
@@ -797,6 +814,7 @@
                     <div class="j-title">📒 My Trade Journal</div>
                     <div style="display:flex;gap:8px;align-items:center">
                         <button class="j-refresh-btn" onclick="analyzeOpenTrades()" id="analyzeBtn" title="Re-check all open trades with live prices + news">⟳ Refresh Analysis</button>
+                        <button class="dna-train-btn" onclick="trainTradingModel()" id="trainBtn" title="Analyze your closed trades to personalize future suggestions">🧠 Train My Model</button>
                         <button class="j-add" onclick="openModal()">+ Log a Trade</button>
                     </div>
                 </div>
@@ -812,6 +830,7 @@
                     <div class="stat"><div class="stat-lbl">Total Loss</div><div class="stat-val neg" id="s-loss">$0</div></div>
                     <div class="stat"><div class="stat-lbl">Win Rate</div><div class="stat-val" id="s-wr">—</div></div>
                 </div>
+                <div id="dnaCard"></div>
                 <div id="journalBody"></div>
             </div>
         </div>
@@ -2867,10 +2886,11 @@ function watchlistScanPrompt(priceData, optionType, newsMap={}, excludeTickers=[
         .map(c => `  ${c.ticker}: ${c.reason} (price ~$${c.price})`)
         .join('\n');
     const moversBlock = relevantMovers ? `\nTODAY'S MARKET MOVERS (high volume, real movement right now) — if any of these are also in the watchlist above, strongly prefer them over flat names like AAPL/MSFT/GOOG unless those are genuinely the best setup:\n${relevantMovers}\n` : '';
+    const dnaBlock = getDNAPromptBlock();
     return `You are a trading analyst helping a beginner options trader. Today: ${exp.today}.
 
 You have REAL chart data below — use it. Base entry zones, stop levels, and targets on actual support/resistance and analyst targets, not guesses.
-
+${dnaBlock}
 Live price data (use these EXACT prices — never substitute training data):
 ${priceData}${moversBlock}
 ${techBlock ? '\nReal-time technical data (RSI, MAs, support/resistance, analyst targets, earnings):\n'+techBlock : ''}
@@ -3004,8 +3024,9 @@ function discoverPrompt(categoryDesc, extraExclude=[], techMap={}, marketCandida
         }
     }
 
+    const dnaBlock = getDNAPromptBlock();
     return `You are a stock analyst helping a beginner options trader. Today: ${exp.today}
-
+${dnaBlock}
 Find exactly 3 stocks that fit this description: ${categoryDesc}
 
 ⛔ HARD EXCLUSION LIST — you MUST NOT return any of these tickers under any circumstances. If you return even one of them, the entire response is invalid and will be rejected:
@@ -4427,6 +4448,7 @@ function renderJournal(){
     document.getElementById('s-profit').textContent='+$'+totalProfit.toFixed(0);
     document.getElementById('s-loss').textContent='-$'+Math.abs(totalLoss).toFixed(0);
     const we=document.getElementById('s-wr');const wr=closed.length?Math.round(wins/closed.length*100):null;we.textContent=wr!==null?wr+'%':'—';if(wr!==null)we.className='stat-val '+(wr>=50?'pos':'neg');
+    renderDNACard();
     if(!trades.length){body.innerHTML='<div class="empty-state" style="margin-top:24px"><div class="empty-icon">📒</div><div class="empty-title">No trades logged yet</div><div class="empty-sub">Open any trade idea card and tap "📒 Log This Trade" to start tracking.</div></div>';return;}
     let html='';
     if(open.length){
@@ -4445,6 +4467,155 @@ function renderJournal(){
     }
     body.innerHTML=html;
 }
+// ── TRADING DNA — personalized win/loss learning model ───────────────────────
+const DNA_KEY = 'th_trading_dna';
+
+function getDNA(){ try{ return JSON.parse(localStorage.getItem(DNA_KEY)||'null'); }catch(e){ return null; } }
+function saveDNA(dna){ localStorage.setItem(DNA_KEY, JSON.stringify(dna)); }
+function clearDNA(){ localStorage.removeItem(DNA_KEY); renderDNACard(); }
+
+// Returns a concise prompt block to inject into Claude scan prompts
+// Called from discoverPrompt() and watchlistScanPrompt() — if no DNA exists, returns ''
+function getDNAPromptBlock(){
+    const dna = getDNA();
+    if(!dna || !dna.winning_patterns?.length) return '';
+    const wins  = dna.winning_patterns.slice(0, 3).join(' · ');
+    const losses = dna.losing_patterns?.slice(0, 2).join(' · ') || '';
+    return `\n🧠 THIS TRADER'S REAL EDGE (learned from ${dna.trades_analyzed} actual wins & losses):
+✅ What works for them: ${wins}
+${losses?`❌ What leads to losses: ${losses}`:''}
+Preferred setup: ${dna.setup_preference||''}
+→ APPLY THIS: Strongly prefer setups matching the winning patterns. When selecting stocks, this trader's history should directly influence which setups you prioritize. Briefly note in account_sizing why the trade fits (or warn if it goes against) their proven edge.\n`;
+}
+
+function buildTrainingPrompt(closedTrades){
+    const tradeLines = closedTrades.map(t=>{
+        const pnl = t.manual_pnl!=null ? t.manual_pnl : (t.exit!=null?(t.exit-t.entry)*t.qty*100:null);
+        const outcome = pnl!=null ? (pnl>=0?`WIN +$${pnl.toFixed(0)}`:`LOSS -$${Math.abs(pnl).toFixed(0)}`) : 'CLOSED (P&L unknown)';
+        const entry = t.entry ? `option entry $${parseFloat(t.entry).toFixed(2)}/contract` : '';
+        const exit  = t.exit  ? `exit $${parseFloat(t.exit).toFixed(2)}/contract`  : '';
+        const stop  = t.stop_loss ? `stop $${t.stop_loss}` : '';
+        const tgt   = t.target    ? `target $${t.target}`  : '';
+        const daysHeld = t.date&&t.exp ? Math.round((new Date(t.exp)-new Date(t.date))/(86400000)) : null;
+        return `• ${outcome} — ${t.ticker} ${t.type||'CALL'} $${t.strike||'?'} strike exp ${fmt(t.exp)||'?'}${daysHeld?` (~${daysHeld}d DTE)`:''}${entry?', '+entry:''}${exit?', '+exit:''}${stop?', '+stop:''}${tgt?', '+tgt:''}${t.thesis?`\n  Thesis: "${t.thesis.slice(0,120)}"`:''}`
+    }).join('\n');
+
+    return `You are analyzing a beginner options trader's closed trade history to extract personalized patterns.
+
+Their closed trades (outcomes, entries, theses):
+${tradeLines}
+
+Find SPECIFIC patterns in what led to wins vs losses. Look at:
+- Sector / company type (tech, energy, meme, blue-chip, small-cap, etc.)
+- Option direction and type (calls on momentum, puts on weakness, etc.)
+- Entry timing signals (pullback to support, earnings play, news catalyst, breakout, etc.)
+- DTE (days to expiry) preference — did shorter or longer DTEs work better?
+- What thesis types actually played out vs failed
+
+Return ONLY this JSON (no markdown):
+{
+  "summary": "2-3 sentences describing this trader's style, what they win on, and where they consistently lose",
+  "winning_patterns": ["3-5 specific patterns from winning trades — sector, setup type, timing"],
+  "losing_patterns": ["2-4 patterns that appear in losing trades"],
+  "setup_preference": "One sentence: the ideal setup type for this trader based on their wins",
+  "avoid_setup": "One sentence: what setup type to avoid based on their losses",
+  "lessons": ["3-5 specific actionable lessons — reference the ticker if helpful, e.g. 'AMD calls worked because of earnings beat — look for upcoming catalysts'"]
+}`;
+}
+
+async function trainTradingModel(){
+    const closed = trades.filter(t=>t.status!=='Open');
+    if(closed.length < 2){
+        alert(`You need at least 2 closed trades to train the model.\n\nYou have ${closed.length} — log more trades and mark them closed first.`);
+        return;
+    }
+    const btn = document.getElementById('trainBtn');
+    btn.disabled = true;
+    btn.textContent = '⏳ Training...';
+
+    try{
+        const prompt = buildTrainingPrompt(closed);
+        const raw = await callClaude(prompt);
+        const result = JSON.parse(stripJSON(raw));
+
+        const dna = {
+            trained_at:       new Date().toISOString(),
+            trades_analyzed:  closed.length,
+            summary:          result.summary          || '',
+            winning_patterns: result.winning_patterns || [],
+            losing_patterns:  result.losing_patterns  || [],
+            setup_preference: result.setup_preference || '',
+            avoid_setup:      result.avoid_setup      || '',
+            lessons:          result.lessons          || [],
+        };
+        saveDNA(dna);
+        renderDNACard();
+        // Show badge on Ideas tab
+        const badge = document.getElementById('dnaBadge');
+        if(badge) badge.style.display = 'inline-flex';
+
+    }catch(e){
+        alert('Training failed: ' + e.message);
+    }
+    btn.disabled = false;
+    btn.textContent = '🧠 Train My Model';
+}
+
+function renderDNACard(){
+    const el = document.getElementById('dnaCard');
+    if(!el) return;
+    const dna = getDNA();
+
+    // Show/hide badge on Ideas tab
+    const badge = document.getElementById('dnaBadge');
+    if(badge) badge.style.display = dna ? 'inline-flex' : 'none';
+
+    if(!dna){
+        // Show prompt if there are closed trades but model isn't trained
+        const closedCount = trades.filter(t=>t.status!=='Open').length;
+        if(closedCount >= 2){
+            el.innerHTML=`<div class="dna-card" style="opacity:.75">
+                <div class="dna-header"><div class="dna-title">🧠 Trading DNA — Not Yet Trained</div></div>
+                <div class="dna-summary">You have ${closedCount} closed trade${closedCount!==1?'s':''} — click <strong style="color:#a855f7">Train My Model</strong> to extract your winning patterns and personalize future trade suggestions.</div>
+            </div>`;
+        } else {
+            el.innerHTML = '';
+        }
+        return;
+    }
+
+    const closedCount = trades.filter(t=>t.status!=='Open').length;
+    const staleNote = closedCount > dna.trades_analyzed
+        ? `<div style="font-size:10px;color:#f0883e;margin-top:4px">⚠️ You've added ${closedCount - dna.trades_analyzed} new closed trade${closedCount-dna.trades_analyzed!==1?'s':''} since last training — retrain to include them.</div>`
+        : '';
+
+    const winsHtml = (dna.winning_patterns||[]).map(p=>`<span class="dna-pill dna-win">✅ ${p}</span>`).join('');
+    const lossHtml = (dna.losing_patterns||[]).map(p=>`<span class="dna-pill dna-loss">❌ ${p}</span>`).join('');
+    const lessonsHtml = (dna.lessons||[]).map(l=>`<div class="dna-lesson">→ ${l}</div>`).join('');
+
+    const trainedDate = new Date(dna.trained_at).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'2-digit'});
+
+    el.innerHTML=`<div class="dna-card">
+        <div class="dna-header">
+            <div>
+                <div class="dna-title">🧠 My Trading DNA</div>
+                <div style="font-size:10px;color:var(--muted);margin-top:2px">Active on all 6 scan tabs · suggestions match your proven edge</div>
+            </div>
+            <div class="dna-meta">Trained on ${dna.trades_analyzed} trades<br>${trainedDate}</div>
+        </div>
+        ${staleNote}
+        ${dna.summary?`<div class="dna-summary">${dna.summary}</div>`:''}
+        ${winsHtml?`<div class="dna-section"><div class="dna-section-lbl" style="color:var(--green)">What works for you</div>${winsHtml}</div>`:''}
+        ${lossHtml?`<div class="dna-section"><div class="dna-section-lbl" style="color:var(--red)">What to avoid</div>${lossHtml}</div>`:''}
+        ${dna.setup_preference?`<div class="dna-section"><div class="dna-section-lbl" style="color:#a855f7">Your ideal setup</div><div style="font-size:12px;color:var(--text);line-height:1.5">${dna.setup_preference}</div></div>`:''}
+        ${lessonsHtml?`<div class="dna-section" style="margin-top:10px"><div class="dna-section-lbl">Key lessons from your trades</div>${lessonsHtml}</div>`:''}
+        <div class="dna-actions">
+            <button class="dna-train-btn" onclick="trainTradingModel()">↺ Retrain</button>
+            <button class="dna-clear-btn" onclick="if(confirm('Clear your Trading DNA? Future scans will no longer be personalized.'))clearDNA()">Clear</button>
+        </div>
+    </div>`;
+}
+
 function isMarketHours(){const et=new Date(new Date().toLocaleString('en-US',{timeZone:'America/New_York'}));const dow=et.getDay(),h=et.getHours(),m=et.getMinutes();return dow>0&&dow<6&&h*100+m>=930&&h*100+m<1600;}
 setInterval(()=>{if(document.getElementById('tab-journal')?.classList.contains('active')&&isMarketHours())analyzeOpenTrades();},30*60*1000);
 document.getElementById('modal').addEventListener('click',e=>{if(e.target.id==='modal')closeModal();});
@@ -4458,6 +4629,8 @@ window.addEventListener('load',()=>{
     restoreLastSession();
     // Initialize Supabase for cross-device journal sync
     initSupabase();
+    // Show DNA badge on Ideas tab if model is already trained
+    if(getDNA()){ const b=document.getElementById('dnaBadge'); if(b) b.style.display='inline-flex'; }
 });
 </script>
 </body>
