@@ -217,6 +217,16 @@
         .d-cat-label { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.5px; color:var(--muted); margin-bottom:10px; padding:0 2px; display:flex; align-items:center; gap:6px; }
         .d-cat-label::after { content:''; flex:1; height:1px; background:var(--border); }
 
+        /* ── REVENUE MODAL ── */
+        .rev-tab { background:var(--bg3); border:1px solid var(--border); color:var(--muted); border-radius:6px; padding:6px 14px; font-size:12px; font-weight:600; cursor:pointer; transition:all .15s; }
+        .rev-tab.active,.rev-tab:hover { background:var(--blue); color:#000; border-color:var(--blue); }
+        .rev-stat-box { background:var(--bg3); border-radius:8px; padding:11px 8px; text-align:center; border:1px solid var(--border); }
+        .rev-stat-lbl { font-size:9px; color:var(--muted); font-weight:700; text-transform:uppercase; letter-spacing:.4px; margin-bottom:4px; }
+        .rev-stat-val { font-size:15px; font-weight:800; }
+        .rev-month-row { display:grid; grid-template-columns:80px 50px 1fr 1fr 1fr; gap:8px; align-items:center; padding:8px 10px; border-radius:6px; font-size:12px; margin-bottom:4px; background:var(--bg3); }
+        .rev-month-bar-wrap { grid-column:1/-1; height:3px; background:var(--border); border-radius:2px; margin:2px 0 4px; }
+        .rev-month-bar { height:3px; border-radius:2px; }
+
         /* ── MODAL ── */
         .overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,.75); z-index:200; align-items:center; justify-content:center; }
         .overlay.open { display:flex; }
@@ -815,6 +825,7 @@
                     <div style="display:flex;gap:8px;align-items:center">
                         <button class="j-refresh-btn" onclick="analyzeOpenTrades()" id="analyzeBtn" title="Re-check all open trades with live prices + news">⟳ Refresh Analysis</button>
                         <button class="dna-train-btn" onclick="trainTradingModel()" id="trainBtn" title="Analyze your closed trades to personalize future suggestions">🧠 Train My Model</button>
+                        <button class="j-refresh-btn" onclick="openRevenueModal()" style="background:var(--green);color:#000;font-weight:700" title="View P&L breakdown by month, YTD, or all time">📊 Revenue</button>
                         <button class="j-add" onclick="openModal()">+ Log a Trade</button>
                     </div>
                 </div>
@@ -914,6 +925,27 @@
         <div class="mactions">
             <button class="btn-cancel" onclick="closeModal()">Cancel</button>
             <button class="btn-save" onclick="saveTrade()">Save Trade</button>
+        </div>
+    </div>
+</div>
+
+<!-- Revenue Modal -->
+<div class="overlay" id="revenueModal">
+    <div class="modal" style="max-width:560px;max-height:85vh;overflow-y:auto">
+        <div class="modal-title">📊 Revenue Summary</div>
+        <div style="display:flex;gap:8px;margin-bottom:20px;flex-wrap:wrap">
+            <button class="rev-tab active" id="rt-month" onclick="renderRevenue('month')">This Month</button>
+            <button class="rev-tab" id="rt-ytd" onclick="renderRevenue('ytd')">YTD</button>
+            <button class="rev-tab" id="rt-year" onclick="renderRevenue('year')">
+                This Year
+            </button>
+            <button class="rev-tab" id="rt-all" onclick="renderRevenue('all')">All Time</button>
+        </div>
+        <div id="rev-period-label" style="font-size:11px;color:var(--muted);margin-bottom:14px;font-weight:600;text-transform:uppercase;letter-spacing:.5px"></div>
+        <div id="rev-stats" style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-bottom:20px"></div>
+        <div id="rev-breakdown"></div>
+        <div class="mactions" style="margin-top:20px">
+            <button class="btn-cancel" onclick="closeRevenueModal()">Close</button>
         </div>
     </div>
 </div>
@@ -4446,6 +4478,95 @@ async function analyzeOpenTrades(){
     if(_sbUser) trades.filter(t=>t.status==='Open').forEach(t=>_sbUpsertTrade(t));
 }
 function fmt(d){if(!d)return'—';return new Date(d+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'2-digit'});}
+
+// ── REVENUE MODAL ─────────────────────────────────────────────
+function openRevenueModal(){
+    renderRevenue('month');
+    document.getElementById('revenueModal').classList.add('open');
+}
+function closeRevenueModal(){
+    document.getElementById('revenueModal').classList.remove('open');
+}
+function renderRevenue(filter){
+    ['month','ytd','year','all'].forEach(f=>{
+        const el=document.getElementById('rt-'+f);
+        if(el) el.classList.toggle('active', f===filter);
+    });
+    const now=new Date();
+    const thisYear=now.getFullYear();
+    const thisMonth=now.getMonth();
+    const closed=trades.filter(t=>t.status!=='Open');
+
+    let filtered=closed, periodLabel='';
+    if(filter==='month'){
+        filtered=closed.filter(t=>{ const d=new Date(t.date+'T12:00:00'); return d.getFullYear()===thisYear && d.getMonth()===thisMonth; });
+        periodLabel=now.toLocaleDateString('en-US',{month:'long',year:'numeric'});
+    } else if(filter==='ytd'){
+        filtered=closed.filter(t=>{ const d=new Date(t.date+'T12:00:00'); return d.getFullYear()===thisYear && d<=now; });
+        periodLabel=`Jan 1 – Today, ${thisYear}`;
+    } else if(filter==='year'){
+        filtered=closed.filter(t=>{ const d=new Date(t.date+'T12:00:00'); return d.getFullYear()===thisYear; });
+        periodLabel=`Full Year ${thisYear}`;
+    } else {
+        periodLabel='All Time';
+    }
+    document.getElementById('rev-period-label').textContent=periodLabel;
+
+    let totalProfit=0,totalLoss=0,wins=0;
+    filtered.forEach(t=>{
+        const p=t.manual_pnl!=null?t.manual_pnl:(t.exit!=null?(t.exit-t.entry)*t.qty*100:null);
+        if(p!=null){if(p>=0){totalProfit+=p;wins++;}else{totalLoss+=p;}}
+    });
+    const net=totalProfit+totalLoss;
+    const wr=filtered.length?Math.round(wins/filtered.length*100):null;
+
+    document.getElementById('rev-stats').innerHTML=`
+        <div class="rev-stat-box"><div class="rev-stat-lbl">Net P&L</div><div class="rev-stat-val ${net>=0?'pos':'neg'}">${net>=0?'+':'-'}$${Math.abs(net).toFixed(0)}</div></div>
+        <div class="rev-stat-box"><div class="rev-stat-lbl">Profit</div><div class="rev-stat-val pos">+$${totalProfit.toFixed(0)}</div></div>
+        <div class="rev-stat-box"><div class="rev-stat-lbl">Loss</div><div class="rev-stat-val neg">-$${Math.abs(totalLoss).toFixed(0)}</div></div>
+        <div class="rev-stat-box"><div class="rev-stat-lbl">Win Rate</div><div class="rev-stat-val ${wr!=null&&wr>=50?'pos':'neg'}">${wr!=null?wr+'%':'—'}</div></div>
+        <div class="rev-stat-box"><div class="rev-stat-lbl">Trades</div><div class="rev-stat-val">${filtered.length}</div></div>`;
+
+    // Monthly breakdown
+    const byMonth={};
+    filtered.forEach(t=>{
+        const key=t.date?t.date.slice(0,7):'unknown';
+        if(!byMonth[key]) byMonth[key]={profit:0,loss:0,trades:0,wins:0};
+        const p=t.manual_pnl!=null?t.manual_pnl:(t.exit!=null?(t.exit-t.entry)*t.qty*100:null);
+        byMonth[key].trades++;
+        if(p!=null){if(p>=0){byMonth[key].profit+=p;byMonth[key].wins++;}else{byMonth[key].loss+=p;}}
+    });
+    const months=Object.keys(byMonth).sort().reverse();
+    const maxNet=Math.max(...months.map(k=>Math.abs(byMonth[k].profit+byMonth[k].loss)),1);
+
+    if(!months.length){
+        document.getElementById('rev-breakdown').innerHTML='<div style="text-align:center;color:var(--muted);font-size:13px;padding:20px 0">No closed trades in this period.</div>';
+        return;
+    }
+
+    let html=`<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);display:grid;grid-template-columns:80px 50px 1fr 1fr 1fr;gap:8px;padding:4px 10px;margin-bottom:4px">
+        <span>Month</span><span>Trades</span><span>Profit</span><span>Loss</span><span>Net</span></div>`;
+    months.forEach(k=>{
+        const m=byMonth[k];
+        const net=m.profit+m.loss;
+        const wr=m.trades?Math.round(m.wins/m.trades*100):0;
+        const barW=Math.round(Math.abs(net)/maxNet*100);
+        const barClr=net>=0?'var(--green)':'var(--red)';
+        const label=k==='unknown'?'Unknown':new Date(k+'-15').toLocaleDateString('en-US',{month:'short',year:'numeric'});
+        html+=`<div style="background:var(--bg3);border-radius:8px;padding:0;overflow:hidden;margin-bottom:6px;border:1px solid var(--border)">
+            <div class="rev-month-row">
+                <span style="font-weight:700;color:var(--text)">${label}</span>
+                <span style="color:var(--muted)">${m.trades} <span style="font-size:9px">(${wr}% W)</span></span>
+                <span class="pos">+$${m.profit.toFixed(0)}</span>
+                <span class="neg">-$${Math.abs(m.loss).toFixed(0)}</span>
+                <span class="${net>=0?'pos':'neg'}" style="font-weight:800">${net>=0?'+':'-'}$${Math.abs(net).toFixed(0)}</span>
+            </div>
+            <div style="height:3px;background:var(--border)"><div style="height:3px;width:${barW}%;background:${barClr};border-radius:2px;transition:width .3s"></div></div>
+        </div>`;
+    });
+    document.getElementById('rev-breakdown').innerHTML=html;
+}
+
 function renderJournal(){
     const body=document.getElementById('journalBody');
     if(!body)return;
