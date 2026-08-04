@@ -2710,8 +2710,9 @@ const TIER_TABS = new Set(['calls','puts','momentum','putplays']); // tabs that 
 
 function selectCostTier(tier){
     activeCostTier = tier;
-    // Clear cached cards so the next view requires a fresh scan with the new tier
-    delete filterCache[activeFilter];
+    // Clear ALL tier-affected tab caches — not just the current one.
+    // Otherwise switching tabs shows old cached cards that predate the tier change.
+    TIER_TABS.forEach(k=>{ delete filterCache[k]; delete filterAllCards[k]; });
     ['any','low','mid','high'].forEach(t=>{
         const btn = document.getElementById('tp-'+(t==='any'?'any':t));
         if(btn) btn.classList.toggle('active', (tier===null&&t==='any')||(tier===t));
@@ -2831,8 +2832,8 @@ async function loadMoreFilter(){
             ]);
             const allQuotes=Object.entries(qMap).map(([ticker,q])=>({ticker,price:q.c,chg:q.dp||0,closes:[q.pc,q.c],high52:q.h||q.c,low52:q.l||q.c,vol:0})).filter(q=>q.price>0);
             // Apply tier filter — same logic as runActiveFilter so Scan More respects the same price range
-            const lmTierMax=activeCostTier==='low'?120:activeCostTier==='mid'?200:Infinity;
-            const lmTierMin=activeCostTier==='mid'?60:activeCostTier==='high'?120:0;
+            const lmTierMax=activeCostTier==='low'?250:activeCostTier==='mid'?450:Infinity;
+            const lmTierMin=activeCostTier==='mid'?80:activeCostTier==='high'?200:0;
             let quotes=activeCostTier?allQuotes.filter(q=>q.price>=lmTierMin&&q.price<=lmTierMax):allQuotes;
             if(quotes.length===0) quotes=allQuotes;
             const lmAllowed=new Set(quotes.map(q=>q.ticker.toUpperCase()));
@@ -2941,15 +2942,18 @@ async function runActiveFilter(){
             // Filter BOTH the stock pool and market movers by tier price range.
             // Market movers are shown separately in the prompt — if not filtered,
             // Claude picks from them even when they're excluded from priceData.
-            const tierMaxPrice = activeCostTier==='low'?120 : activeCostTier==='mid'?200 : Infinity;
-            const tierMinPrice = activeCostTier==='mid'?60  : activeCostTier==='high'?120 : 0;
+            // Stock price ranges that typically produce options in each cost tier.
+            // Wider than before so the DEFAULT_WATCHLIST has enough candidates per tier.
+            // The prompt instruction (getCostTierBlock) enforces the actual option price.
+            const tierMaxPrice = activeCostTier==='low'?250 : activeCostTier==='mid'?450 : Infinity;
+            const tierMinPrice = activeCostTier==='mid'?80  : activeCostTier==='high'?200 : 0;
             let tierQuotes = activeCostTier
                 ? quotes.filter(q=>q.price>=tierMinPrice && q.price<=tierMaxPrice)
                 : quotes;
-            if(tierQuotes.length===0) tierQuotes = quotes; // fallback
+            if(tierQuotes.length===0) tierQuotes = quotes; // fallback: watchlist has no stocks in range
             // Also filter market movers so moversBlock only shows in-tier stocks
             const tierCandidates = activeCostTier
-                ? wlMarketCandidates.filter(c=>(c.price||0)>=tierMinPrice && (c.price||0)<=tierMaxPrice)
+                ? wlMarketCandidates.filter(c=>{ const p=c.price||0; return p>=tierMinPrice&&p<=tierMaxPrice; })
                 : wlMarketCandidates;
 
             const allowedTickers = new Set(tierQuotes.map(q=>q.ticker.toUpperCase()));
@@ -2964,6 +2968,16 @@ async function runActiveFilter(){
                     if(!allowedTickers.has(t)){ console.warn(`[tier] Dropped ${t} — not in allowed pool`); return false; }
                     return true;
                 });
+                if(cards.length===0){
+                    const tierLabel=activeCostTier==='low'?'$3–$6':activeCostTier==='mid'?'$6–$10':'$10+';
+                    document.getElementById('ideasOutput').innerHTML=`<div class="empty-state">
+                        <div class="empty-icon">⚠️</div>
+                        <div class="empty-title">No ${tierLabel} setups found</div>
+                        <div class="empty-sub">None of your watchlist stocks have options in the <strong>${tierLabel}</strong> range right now. Try <strong>Any Price</strong> to see all setups, or use <strong>💎 Cheap Gems</strong> for under-$3 picks.</div>
+                    </div>`;
+                    btn.disabled=false; btn.innerHTML=`<span>⚡</span><span id="scanBtnLabel">${meta.scanLabel}</span>`;
+                    return;
+                }
             }
             cards=injectLivePrices(cards, quotes);
             // Fetch news ONLY for the 3 tickers Claude picked (avoids rate-limit)
