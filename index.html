@@ -4821,6 +4821,8 @@ document.getElementById('closeTradeModal').addEventListener('click',e=>{if(e.tar
 window.addEventListener('load',()=>{
     loadTape(); loadChart(curTicker); renderJournal();
     updateSettingsBtn();
+    // Show cost tier row for the default active filter (calls)
+    updateTierRow();
     // Restore last session's trade ideas and auto-refresh prices
     restoreLastSession();
     // Initialize Supabase for cross-device journal sync
