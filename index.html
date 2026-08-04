@@ -2740,12 +2740,23 @@ function updateTierRow(){
     if(!show){ selectCostTier(null); }
 }
 
+// Stock price ranges that reliably produce options in each cost tier (ATM 30-90 DTE).
+// Used both for prompt guidance and as a hard JS post-filter after Claude responds.
+const TIER_STOCK_MAX = { low: 120, mid: 300, high: Infinity };
+const TIER_STOCK_MIN = { low: 0,   mid: 60,  high: 150   };
+
 function getCostTierBlock(){
     if(!activeCostTier) return '';
     const map = {
-        low:  'CONTRACT PRICE HARD REQUIREMENT: Only suggest options where the estimated premium is $3.00–$6.00 per share ($300–$600 per contract total). Choose strikes and expiries that land in this price range. Do NOT suggest any option that would cost less than $3.00 or more than $6.00 per share. If a stock has no suitable options in this range, skip it entirely.',
-        mid:  'CONTRACT PRICE HARD REQUIREMENT: Only suggest options where the estimated premium is $6.00–$10.00 per share ($600–$1,000 per contract total). Choose strikes and expiries that land in this price range. Do NOT suggest any option that would cost less than $6.00 or more than $10.00 per share. If a stock has no suitable options in this range, skip it entirely.',
-        high: 'CONTRACT PRICE HARD REQUIREMENT: Only suggest options where the estimated premium is $10.00 or more per share ($1,000+ per contract total). Choose strikes and expiries that meet or exceed this price. Do NOT suggest cheaper options. If a stock has no suitable options at this level, skip it entirely.',
+        low:  `CONTRACT PRICE HARD REQUIREMENT: Only suggest options estimated at $3.00–$6.00 per share ($300–$600/contract).
+STOCK PRICE REQUIREMENT: Only pick stocks currently priced between $0 and $120/share — higher-priced stocks will have options above $6. Examples of stocks to AVOID for this tier: ORCL ($140+), MSFT ($480+), ITA ($240+), HII ($320+). Good candidates: stocks $20–$120 where ATM 30-60 DTE calls/puts run $3–$6.
+If a stock has no options in this range, skip it and pick a cheaper stock.`,
+        mid:  `CONTRACT PRICE HARD REQUIREMENT: Only suggest options estimated at $6.00–$10.00 per share ($600–$1,000/contract).
+STOCK PRICE REQUIREMENT: Focus on stocks priced $60–$300/share — stocks below $60 rarely have $6+ premiums, stocks above $300 typically exceed $10.
+If a stock has no options in this range, skip it entirely.`,
+        high: `CONTRACT PRICE HARD REQUIREMENT: Only suggest options estimated at $10.00 or more per share ($1,000+/contract).
+STOCK PRICE REQUIREMENT: Focus on stocks priced $150+/share where ATM options naturally run $10+.
+Do NOT suggest cheaper options.`,
     };
     return '\n⚠️ '+map[activeCostTier]+'\n';
 }
@@ -2849,6 +2860,19 @@ async function loadMoreFilter(){
                     if(ne&&ne.items&&ne.items.length) s._newsItems=ne.items.slice(0,2);
                     return s;
                 });
+                // Stock-price proxy filter — drop cards where stock price makes tier impossible
+                if(activeCostTier){
+                    const tMax=TIER_STOCK_MAX[activeCostTier]??Infinity;
+                    const tMin=TIER_STOCK_MIN[activeCostTier]??0;
+                    newCards=newCards.filter(c=>{
+                        const sp=c.current_price||0;
+                        if(sp>0&&(sp>tMax||sp<tMin)){
+                            console.warn(`[freeform tier] loadMore dropped ${c.ticker} $${sp}`);
+                            return false;
+                        }
+                        return true;
+                    });
+                }
             }catch(e){ console.warn('[freeform loadMore] enrichment failed:', e.message); }
         } else if(meta.type==='watchlist'){
             const [qMap, lmTechMap] = await Promise.all([
@@ -2965,6 +2989,19 @@ async function runActiveFilter(){
                     if(ne&&ne.items&&ne.items.length) s._newsItems=ne.items.slice(0,2);
                     return s;
                 });
+                // Stock-price proxy filter — drop cards where stock price makes tier impossible
+                if(activeCostTier){
+                    const tMax=TIER_STOCK_MAX[activeCostTier]??Infinity;
+                    const tMin=TIER_STOCK_MIN[activeCostTier]??0;
+                    cards=cards.filter(c=>{
+                        const sp=c.current_price||0;
+                        if(sp>0&&(sp>tMax||sp<tMin)){
+                            console.warn(`[freeform tier] Dropped ${c.ticker} $${sp} (tier ${activeCostTier}: $${tMin}–$${tMax==='Infinity'?'∞':tMax})`);
+                            return false;
+                        }
+                        return true;
+                    });
+                }
                 if(ffTickers.length) addSeenDiscoverTickers(ffTickers);
             }catch(enrichErr){ console.warn('[freeform] enrichment failed:', enrichErr.message); }
         } else if(meta.type==='watchlist'){
