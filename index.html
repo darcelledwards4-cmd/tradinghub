@@ -1219,8 +1219,8 @@ async function fetchQuotesCached(tickers){
 }
 
 const FILTER_META = {
-    calls:     { scanLabel:'Scan Calls',      type:'watchlist', optType:'CALL',  sectionLabel:'📈 CALL IDEAS — Bullish Setups' },
-    puts:      { scanLabel:'Scan Puts',       type:'watchlist', optType:'PUT',   sectionLabel:'📉 PUT IDEAS — Bearish Setups' },
+    calls:     { scanLabel:'Scan Calls',      type:'freeform',  optType:'CALL',  sectionLabel:'📈 CALL IDEAS — Bullish Setups' },
+    puts:      { scanLabel:'Scan Puts',       type:'freeform',  optType:'PUT',   sectionLabel:'📉 PUT IDEAS — Bearish Setups' },
     gems:      { scanLabel:'Scan Gems',       type:'gems',                       sectionLabel:'💎 Cheap Gems — Solid Companies at Good Prices' },
     momentum:  { scanLabel:'Scan Momentum',   type:'discover',  key:'momentum',  sectionLabel:'🚀 Momentum Movers — High Upside Right Now' },
     community: { scanLabel:'Scan Community',  type:'discover',  key:'community', sectionLabel:'🔥 Community Favorites — What People Are Buying' },
@@ -2825,7 +2825,32 @@ async function loadMoreFilter(){
         const shownTickers=(filterAllCards[key]||[]).map(c=>(c.ticker||'').toUpperCase()).filter(Boolean);
         let newCards=[];
 
-        if(meta.type==='watchlist'){
+        if(meta.type==='freeform'){
+            // Free-form load-more: same as initial scan but excluding already-shown tickers
+            let lmFfCandidates = [];
+            try{
+                const maR = await fetch('/api/market-active');
+                if(maR.ok){ const maD = await maR.json(); lmFfCandidates = maD.candidates || []; }
+            }catch(e){}
+            const raw = await callClaude(freeFormScanPrompt(meta.optType, lmFfCandidates, shownTickers, activeCostTier));
+            newCards = JSON.parse(stripJSON(raw));
+            const lmFfTickers = [...new Set(newCards.map(s=>(s.ticker||'').toUpperCase()).filter(Boolean))];
+            try{
+                const [lmPriceMap, lmNewsMap] = await Promise.all([
+                    lmFfTickers.length ? fetchQuotesCached(lmFfTickers) : Promise.resolve({}),
+                    lmFfTickers.length ? fetchNewsForPromptBatch(lmFfTickers) : Promise.resolve({})
+                ]);
+                newCards = newCards.map(s=>{
+                    const k=(s.ticker||'').toUpperCase();
+                    const q=lmPriceMap[k];
+                    if(q&&q.c){ s=sanitizePriceLevels(s,q.c); s.current_price=q.c; s.price_change=q.dp||0; s._priceIsLive=q._isLive!==false; }
+                    else s._priceIsLive=false;
+                    const ne=lmNewsMap[k];
+                    if(ne&&ne.items&&ne.items.length) s._newsItems=ne.items.slice(0,2);
+                    return s;
+                });
+            }catch(e){ console.warn('[freeform loadMore] enrichment failed:', e.message); }
+        } else if(meta.type==='watchlist'){
             const [qMap, lmTechMap] = await Promise.all([
                 fetchQuotesCached(WATCHLIST),
                 fetchTechnicalsBatch(WATCHLIST)
@@ -2916,7 +2941,33 @@ async function runActiveFilter(){
     delete filterAllCards[key];
     try{
         let cards;
-        if(meta.type==='watchlist'){
+        if(meta.type==='freeform'){
+            // ── FREE-FORM SCAN: Claude picks any market stock, guided by DNA + tier + movers ──
+            let ffCandidates = [];
+            try{
+                const maR = await fetch('/api/market-active');
+                if(maR.ok){ const maD = await maR.json(); ffCandidates = maD.candidates || []; }
+            }catch(e){}
+            const raw = await callClaude(freeFormScanPrompt(meta.optType, ffCandidates, [], activeCostTier));
+            cards = JSON.parse(stripJSON(raw));
+            const ffTickers = [...new Set(cards.map(s=>(s.ticker||'').toUpperCase()).filter(Boolean))];
+            try{
+                const [ffPriceMap, ffNewsMap] = await Promise.all([
+                    ffTickers.length ? fetchQuotesCached(ffTickers) : Promise.resolve({}),
+                    ffTickers.length ? fetchNewsForPromptBatch(ffTickers) : Promise.resolve({})
+                ]);
+                cards = cards.map(s=>{
+                    const k=(s.ticker||'').toUpperCase();
+                    const q=ffPriceMap[k];
+                    if(q&&q.c){ s=sanitizePriceLevels(s,q.c); s.current_price=q.c; s.price_change=q.dp||0; s._priceIsLive=q._isLive!==false; }
+                    else s._priceIsLive=false;
+                    const ne=ffNewsMap[k];
+                    if(ne&&ne.items&&ne.items.length) s._newsItems=ne.items.slice(0,2);
+                    return s;
+                });
+                if(ffTickers.length) addSeenDiscoverTickers(ffTickers);
+            }catch(enrichErr){ console.warn('[freeform] enrichment failed:', enrichErr.message); }
+        } else if(meta.type==='watchlist'){
             // Fetch market-active FIRST so we can expand the quote list to include real movers
             let wlMarketCandidates = [];
             try{
@@ -3205,7 +3256,49 @@ async function scanWatchlist(){
     btn.disabled=false; btn.innerHTML='<span>⚡</span><span>Scan My Watchlist</span>';
 }
 
-//// ── CHEAP GEMS PROMPT — constrained to GEMS_UNIVERSE, live-price-filtered ──
+// ── FREE-FORM SCAN PROMPT — no watchlist constraint, guided by DNA + tier + movers ──
+// Used for Calls and Puts tabs so Claude picks the best setups across the whole market.
+function freeFormScanPrompt(optionType, marketCandidates=[], excludeTickers=[], costTier=null){
+    const isPut = optionType === 'PUT';
+    const exp = getExpiryContext();
+    const dnaBlock = getDNAPromptBlock();
+    const tierBlock = costTier ? getCostTierBlock() : '';
+    const seenTickers = getSeenDiscoverTickers().slice(0, 20);
+    const allExclude = [...new Set([...excludeTickers, ...seenTickers])];
+    const exclusionBlock = allExclude.length ? `\n⛔ Do NOT return any of these already-seen tickers: ${allExclude.join(', ')}\n` : '';
+    const varietySeed = getVarietySeed();
+    const relevantMovers = (marketCandidates||[])
+        .filter(c => isPut ? c.direction==='bearish' : c.direction==='bullish')
+        .slice(0, 10)
+        .map(c=>`  ${c.ticker}: ${c.reason} (price ~$${c.price})`).join('\n');
+    const moversBlock = relevantMovers
+        ? `\n📊 TODAY'S MOST ACTIVE STOCKS — real movement right now, strongly prefer these:\n${relevantMovers}\n`
+        : '';
+    return `You are a trading analyst helping a beginner options trader. Today: ${exp.today}.
+${dnaBlock}${tierBlock}
+Find the TOP 3 best ${isPut?'PUT (bearish) option setups':'CALL (bullish) option setups'} in today's market. You have full freedom to pick ANY publicly traded US stock — not limited to a watchlist.
+
+THEME FOR THIS SCAN: ${varietySeed}
+${moversBlock}${exclusionBlock}
+${isPut
+    ? 'Look for: overbought RSI, breaking below key MAs, bad news/earnings risk, sector weakness, stocks that have run too far.'
+    : 'Look for: strong momentum today, RSI not overbought, holding above key MAs, positive catalyst, analyst target well above current price.'}
+Each pick MUST be a DIFFERENT ticker. Pick stocks with real options liquidity (not penny stocks or microcaps).
+
+CRITICAL: Set current_price to the ACTUAL stock price as of today (${exp.today}). All price levels must be anchored to real prices.
+
+Return ONLY a raw JSON array of exactly 3 objects. No markdown. No code fences.
+
+Each object must have:
+ticker, company, current_price (number), price_change (number), direction ("${isPut?'bearish':'bullish'}"), summary (1 plain English sentence), pros (array of 2 short strings), cons (array of 1 short string), potential ("high"|"moderate"|"avoid"), entry_low (number), entry_high (number), stop_loss (number), target (number), option_type ("${optionType}"), option_detail (same as expiry_options[0].option_detail), account_sizing (same as expiry_options[0].account_sizing), confidence ("high"|"medium"|"low"), risk_reward (string e.g. "1:2.5"),
+expiry_options (array of EXACTLY 3 objects):
+  [0] {"label":"1 Mo · Aggressive",   "entry_low":number,"entry_high":number,"stop_loss":number,"target":number,"option_detail":"$X ${optionType} · Expires [options Friday around ${exp.aggressive}] · Est. $X.XX/contract","account_sizing":"3 sentences: (1) RSI number and specific MA dollar level, (2) exact strike price ATM or OTM vs today's stock price, (3) specific catalyst with dollar target or timeline","potential":"high"|"moderate"|"avoid"}
+  [1] {"label":"3 Mo · Moderate",     "entry_low":number,"entry_high":number,"stop_loss":number,"target":number,"option_detail":"$X ${optionType} · Expires [options Friday around ${exp.moderate}] · Est. $X.XX/contract","account_sizing":"same 3-sentence structure","potential":"high"|"moderate"|"avoid"}
+  [2] {"label":"6 Mo · Conservative", "entry_low":number,"entry_high":number,"stop_loss":number,"target":number,"option_detail":"$X ${optionType} · Expires [options Friday around ${exp.sixMonth}] · Est. $X.XX/contract","account_sizing":"same 3-sentence structure","potential":"high"|"moderate"|"avoid"}
+Use DIFFERENT strikes and levels per timeframe. ENTIRE response must be a single JSON array starting with [ and ending with ].`;
+}
+
+// ── CHEAP GEMS PROMPT — constrained to GEMS_UNIVERSE, live-price-filtered ──
 function gemsPrompt(priceData, dnaBlock='', shownTickers=[]){
     const exclusionBlock = shownTickers.length>0
         ? `\n⚠️ Do NOT return any of these already-shown tickers: ${shownTickers.join(', ')}\n` : '';
