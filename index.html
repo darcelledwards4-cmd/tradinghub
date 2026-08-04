@@ -2696,10 +2696,24 @@ const TIER_TABS = new Set(['calls','puts','momentum','putplays']); // tabs that 
 
 function selectCostTier(tier){
     activeCostTier = tier;
+    // Clear cached cards so the next view requires a fresh scan with the new tier
+    delete filterCache[activeFilter];
     ['any','low','mid','high'].forEach(t=>{
         const btn = document.getElementById('tp-'+(t==='any'?'any':t));
         if(btn) btn.classList.toggle('active', (tier===null&&t==='any')||(tier===t));
     });
+    // If cards are currently showing, replace them with empty state prompting rescan
+    if(activeCostTier){
+        const meta = FILTER_META[activeFilter];
+        if(meta && TIER_TABS.has(activeFilter)){
+            const icons={calls:'📈',puts:'📉',momentum:'🚀',putplays:'📉'};
+            document.getElementById('ideasOutput').innerHTML=`<div class="empty-state">
+                <div class="empty-icon">${icons[activeFilter]||'📡'}</div>
+                <div class="empty-title">Tier changed — rescan required</div>
+                <div class="empty-sub">Hit <strong>⚡ ${meta.scanLabel}</strong> to find setups with <strong>${tier==='low'?'$3–$6':tier==='mid'?'$6–$10':'$10+'}</strong> contract prices.</div>
+            </div>`;
+        }
+    }
 }
 
 function updateTierRow(){
@@ -2887,21 +2901,34 @@ async function runActiveFilter(){
             let quotes=Object.entries(qMap).map(([ticker,q])=>({ticker,price:q.c,chg:q.dp||0,closes:[q.pc,q.c],high52:q.h||q.c,low52:q.l||q.c,vol:0})).filter(q=>q.price>0);
             // Sort biggest movers first — Claude picks from the top of this list
             quotes.sort((a,b)=>Math.abs(b.chg)-Math.abs(a.chg));
-            // Filter stock pool by price range matching the selected contract cost tier
-            // ATM 1-month option premium ≈ 3-6% of stock price, so:
-            //   $3-$6 contracts → stocks under $120 (6% of $100 = $6)
-            //   $6-$10 contracts → stocks $80-$200
-            //   $10+ contracts  → stocks over $150
-            let tierQuotes = quotes;
-            if(activeCostTier==='low')  tierQuotes = quotes.filter(q=>q.price<=120);
-            else if(activeCostTier==='mid')  tierQuotes = quotes.filter(q=>q.price>=60&&q.price<=200);
-            else if(activeCostTier==='high') tierQuotes = quotes.filter(q=>q.price>=120);
-            if(tierQuotes.length===0) tierQuotes = quotes; // fallback if nothing in range
-            const priceData=tierQuotes.length>0
-                ?tierQuotes.map(q=>`${q.ticker}: $${q.price.toFixed(2)} (${q.chg>=0?'+':''}${q.chg.toFixed(2)}% today)`).join('\n')
-                :WATCHLIST.join(', ')+' — use your latest knowledge';
-            const raw=await callClaude(watchlistScanPrompt(priceData, meta.optType, {}, [], rfTechMap, wlMarketCandidates, activeCostTier));
+
+            // Filter BOTH the stock pool and market movers by tier price range.
+            // Market movers are shown separately in the prompt — if not filtered,
+            // Claude picks from them even when they're excluded from priceData.
+            const tierMaxPrice = activeCostTier==='low'?120 : activeCostTier==='mid'?200 : Infinity;
+            const tierMinPrice = activeCostTier==='mid'?60  : activeCostTier==='high'?120 : 0;
+            let tierQuotes = activeCostTier
+                ? quotes.filter(q=>q.price>=tierMinPrice && q.price<=tierMaxPrice)
+                : quotes;
+            if(tierQuotes.length===0) tierQuotes = quotes; // fallback
+            // Also filter market movers so moversBlock only shows in-tier stocks
+            const tierCandidates = activeCostTier
+                ? wlMarketCandidates.filter(c=>(c.price||0)>=tierMinPrice && (c.price||0)<=tierMaxPrice)
+                : wlMarketCandidates;
+
+            const allowedTickers = new Set(tierQuotes.map(q=>q.ticker.toUpperCase()));
+            const priceData=tierQuotes.map(q=>`${q.ticker}: $${q.price.toFixed(2)} (${q.chg>=0?'+':''}${q.chg.toFixed(2)}% today)`).join('\n')
+                || WATCHLIST.join(', ')+' — use your latest knowledge';
+            const raw=await callClaude(watchlistScanPrompt(priceData, meta.optType, {}, [], rfTechMap, tierCandidates, activeCostTier));
             cards=JSON.parse(stripJSON(raw));
+            // Hard JS post-filter: drop any card whose ticker wasn't in the allowed pool
+            if(activeCostTier){
+                cards=cards.filter(c=>{
+                    const t=(c.ticker||'').toUpperCase();
+                    if(!allowedTickers.has(t)){ console.warn(`[tier] Dropped ${t} — not in allowed pool`); return false; }
+                    return true;
+                });
+            }
             cards=injectLivePrices(cards, quotes);
             // Fetch news ONLY for the 3 tickers Claude picked (avoids rate-limit)
             const cardTickers=[...new Set(cards.map(s=>(s.ticker||'').toUpperCase()).filter(Boolean))];
@@ -2958,8 +2985,19 @@ async function runActiveFilter(){
                         return true;
                     });
                     if(cards.length===0&&before>0){
-                        document.getElementById('ideasOutput').innerHTML=`<div class="empty-state"><div class="empty-icon">💎</div><div class="empty-title">No valid gems found</div><div class="empty-sub">Claude picked stocks above $45 — all filtered out. Click <strong>⚡ Scan Gems</strong> again to get a fresh batch of cheaper picks.</div></div>`;
-                        return;
+                        // Auto-retry once before showing failure message
+                        console.warn('[gems] All cards filtered — auto-retrying scan...');
+                        document.getElementById('ideasOutput').innerHTML=`<div class="loading-state"><div class="spinner"></div><div class="loading-text">Finding cheaper gems...</div></div>`;
+                        try{
+                            const retryRaw=await callClaude(discoverPrompt(cat.desc, [], {}, rfMarketCandidates, activeCostTier));
+                            let retryCards=JSON.parse(stripJSON(retryRaw)).map(s=>({...s,category:cat.label}));
+                            const retryTickers=[...new Set(retryCards.map(s=>(s.ticker||'').toUpperCase()).filter(Boolean))];
+                            const [rPriceMap]=await Promise.all([retryTickers.length?fetchQuotesCached(retryTickers):Promise.resolve({})]);
+                            retryCards=retryCards.map(s=>{const k=(s.ticker||'').toUpperCase();const q=rPriceMap[k];if(q&&q.c){s=sanitizePriceLevels(s,q.c);s.current_price=q.c;s.price_change=q.dp||0;s._priceIsLive=q._isLive!==false;}return s;});
+                            retryCards=retryCards.filter(c=>(c.current_price||parseFloat(c.entry_high)||999)<=45);
+                            if(retryCards.length>0){ cards=retryCards; }
+                            else { document.getElementById('ideasOutput').innerHTML=`<div class="empty-state"><div class="empty-icon">💎</div><div class="empty-title">No valid gems found</div><div class="empty-sub">Claude kept picking stocks above $45. Scan again — each attempt picks different stocks.</div></div>`; return; }
+                        }catch(retryErr){ document.getElementById('ideasOutput').innerHTML=`<div class="empty-state"><div class="empty-icon">💎</div><div class="empty-title">No valid gems found</div><div class="empty-sub">Claude picked stocks above $45. Click <strong>⚡ Scan Gems</strong> to try again.</div></div>`; return; }
                     }
                 }
             }catch(enrichErr){
@@ -3016,6 +3054,7 @@ Expiry windows — use DIFFERENT expirations for each of the 3 trades:
 
 Find the TOP 3 best ${isPut ? 'PUT (bearish) trade setups' : 'CALL (bullish) trade setups'} from the price list above — one per timeframe.
 The stocks are listed in order of TODAY'S % price movement (biggest movers first). STRONGLY prefer stocks near the top of the list — real movement today is the #1 signal. Only pick a stock lower on the list if it has a dramatically better technical setup than the top movers.
+🚫 ABSOLUTE RULE: You may ONLY return tickers that appear in the price list above. Do NOT suggest any stock from your training data that is not in that list. If you return a ticker not in the list, the entire response is invalid.
 CRITICAL: Each of the 3 ideas MUST use a DIFFERENT ticker.${excludeTickers&&excludeTickers.length?`\nDo NOT repeat: ${excludeTickers.join(', ')}.`:''}
 ${isPut ? 'Look for: overextended stocks, breaking down technically (RSI overbought + below key MAs), bad news, sector weakness.' : 'Look for: bullish momentum, RSI not yet overbought, above key MAs, positive catalyst, analyst target above current price.'}
 
