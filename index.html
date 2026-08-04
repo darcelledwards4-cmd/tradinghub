@@ -1228,7 +1228,7 @@ const FILTER_META = {
 };
 
 const DISCOVER_CATS = [
-    {key:'gems',      label:'💎 Cheap Gems — Solid Companies at Good Prices',     desc:'cheap stocks under $60/share that are historically strong companies currently undervalued or recovering. Return option_type as CALL and direction as bullish. HARD CONTRACT PRICE LIMIT: The estimated option premium must be $3.00 per share or less ($300 or less per contract total). This is non-negotiable — if a stock\'s ATM or slightly OTM CALL would cost more than $3.00/share, do NOT include it. Pick lower-priced stocks with strikes that keep the contract cost under $3.00/share.'},
+    {key:'gems',      label:'💎 Cheap Gems — Solid Companies at Good Prices',     desc:'STOCK PRICE HARD CAP: Only stocks priced between $5 and $45 per share. DO NOT pick any stock above $45/share — stocks above $45 have options that are too expensive. Examples of invalid picks: HOOD ($90), AXP ($344), NVDA ($100+) — all too expensive. Valid examples: stocks between $5–$45/share like SOFI, PLTR, F, BAC, etc. The stock must be a historically solid company that is currently undervalued or recovering. Return option_type as CALL and direction as bullish. CONTRACT PRICE HARD CAP: The estimated ATM or slightly OTM CALL option premium must be $3.00 per share or less ($300 or less per contract). If a $45 or lower stock still has options above $3.00/share, skip it and pick a cheaper stock. This rule cannot be broken under any circumstances.'},
     {key:'momentum',  label:'🚀 Momentum Movers — High Upside Right Now',          desc:'stocks showing strong bullish momentum, high upside potential, and a clear upward trend. Return option_type as CALL and direction as bullish'},
     {key:'community', label:'🔥 Community Favorites — What People Are Buying',     desc:'stocks that retail traders and investing communities are actively buying and discussing right now. Return option_type as CALL and direction as bullish'},
     {key:'putplays',  label:'📉 Put Plays — Companies Showing Weakness',           desc:'stocks showing significant weakness, breaking down technically, facing bad news or headwinds, or overextended and due for a drop. PUT setups — stocks to go DOWN. Return option_type as PUT and direction as bearish. For entry_low/entry_high use the stock price zone to enter the put. For stop set the price if stock bounces above. For target set the downside price target.'},
@@ -2837,6 +2837,12 @@ async function loadMoreFilter(){
                 if(te) s._techSummary=te.summary;
                 return s;
             });
+            // Hard safety filter for Cheap Gems: drop any stock > $45
+            if(key==='gems') newCards=newCards.filter(c=>{
+                const price=c.current_price||parseFloat(c.entry_high)||999;
+                if(price>45){ console.warn(`[gems] Dropped ${c.ticker} — stock $${price} > $45 cap`); return false; }
+                return true;
+            });
         }
 
         filterCache[key]=newCards;
@@ -2928,6 +2934,13 @@ async function runActiveFilter(){
                     const techEntry=rfDiscTechMap[k];
                     if(techEntry) s._techSummary=techEntry.summary;
                     return s;
+                });
+                // Hard safety filter: Cheap Gems must have stock price ≤ $45
+                // (high-priced stocks always produce contracts over $3.00)
+                if(key==='gems') cards=cards.filter(c=>{
+                    const price=c.current_price||parseFloat(c.entry_high)||999;
+                    if(price>45){ console.warn(`[gems] Dropped ${c.ticker} — stock $${price} > $45 cap`); return false; }
+                    return true;
                 });
             }catch(enrichErr){
                 console.warn('[discover] price/news enrichment failed — showing Claude estimates:', enrichErr.message);
@@ -3135,7 +3148,7 @@ async function scanDiscover(){
     document.getElementById('discoverSection').style.display='block';
     // Show 3 loading placeholders immediately
     const cats=[
-        {key:'gems',      label:'💎 Cheap Gems — Solid Companies at Good Prices',       desc:'cheap stocks under $60/share that are historically strong companies currently undervalued or recovering. Return option_type as CALL and direction as bullish. HARD CONTRACT PRICE LIMIT: The estimated option premium must be $3.00 per share or less ($300 or less per contract total). This is non-negotiable — if a stock\'s ATM or slightly OTM CALL would cost more than $3.00/share, do NOT include it. Pick lower-priced stocks with strikes that keep the contract cost under $3.00/share.'},
+        {key:'gems',      label:'💎 Cheap Gems — Solid Companies at Good Prices',       desc:'STOCK PRICE HARD CAP: Only stocks priced between $5 and $45 per share. DO NOT pick any stock above $45/share — stocks above $45 have options that are too expensive. Examples of invalid picks: HOOD ($90), AXP ($344), NVDA ($100+) — all too expensive. Valid examples: stocks between $5–$45/share like SOFI, PLTR, F, BAC, etc. The stock must be a historically solid company that is currently undervalued or recovering. Return option_type as CALL and direction as bullish. CONTRACT PRICE HARD CAP: The estimated ATM or slightly OTM CALL option premium must be $3.00 per share or less ($300 or less per contract). If a $45 or lower stock still has options above $3.00/share, skip it and pick a cheaper stock. This rule cannot be broken under any circumstances.'},
         {key:'momentum',  label:'🚀 Momentum Movers — High Upside Right Now',            desc:'stocks showing strong bullish momentum, high upside potential, and a clear upward trend. Return option_type as CALL and direction as bullish'},
         {key:'community', label:'🔥 Community Favorites — What People Are Buying',       desc:'stocks that retail traders and investing communities are actively buying and discussing right now. Return option_type as CALL and direction as bullish'},
         {key:'puts',      label:'📉 Put Plays — Companies Showing Weakness',             desc:'stocks that are showing significant weakness, breaking down technically, facing bad news or headwinds, or are overextended and due for a drop. These are PUT trade setups — looking for stocks to go DOWN. Return option_type as PUT and direction as bearish. For entry_low/entry_high put the stock price zone to enter the put. For stop set the price if stock bounces above. For target set the downside price target.'},
