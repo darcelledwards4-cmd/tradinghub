@@ -2829,10 +2829,21 @@ async function loadMoreFilter(){
                 fetchQuotesCached(WATCHLIST),
                 fetchTechnicalsBatch(WATCHLIST)
             ]);
-            const quotes=Object.entries(qMap).map(([ticker,q])=>({ticker,price:q.c,chg:q.dp||0,closes:[q.pc,q.c],high52:q.h||q.c,low52:q.l||q.c,vol:0})).filter(q=>q.price>0);
-            const priceData=quotes.length>0?quotes.map(q=>`${q.ticker}: $${q.price.toFixed(2)} (${q.chg>=0?'+':''}${q.chg.toFixed(2)}% today)`).join('\n'):WATCHLIST.join(', ');
+            const allQuotes=Object.entries(qMap).map(([ticker,q])=>({ticker,price:q.c,chg:q.dp||0,closes:[q.pc,q.c],high52:q.h||q.c,low52:q.l||q.c,vol:0})).filter(q=>q.price>0);
+            // Apply tier filter — same logic as runActiveFilter so Scan More respects the same price range
+            const lmTierMax=activeCostTier==='low'?120:activeCostTier==='mid'?200:Infinity;
+            const lmTierMin=activeCostTier==='mid'?60:activeCostTier==='high'?120:0;
+            let quotes=activeCostTier?allQuotes.filter(q=>q.price>=lmTierMin&&q.price<=lmTierMax):allQuotes;
+            if(quotes.length===0) quotes=allQuotes;
+            const lmAllowed=new Set(quotes.map(q=>q.ticker.toUpperCase()));
+            const priceData=quotes.map(q=>`${q.ticker}: $${q.price.toFixed(2)} (${q.chg>=0?'+':''}${q.chg.toFixed(2)}% today)`).join('\n')||WATCHLIST.join(', ');
             const raw=await callClaude(watchlistScanPrompt(priceData,meta.optType,{},shownTickers,lmTechMap,[], activeCostTier));
-            newCards=injectLivePrices(JSON.parse(stripJSON(raw)),quotes);
+            newCards=JSON.parse(stripJSON(raw));
+            // Hard post-filter — reject any ticker outside the allowed pool
+            if(activeCostTier){
+                newCards=newCards.filter(c=>{const t=(c.ticker||'').toUpperCase();if(!lmAllowed.has(t)){console.warn(`[tier] loadMore dropped ${t}`);return false;}return true;});
+            }
+            newCards=injectLivePrices(newCards,allQuotes);
             const lmTickers=[...new Set(newCards.map(s=>(s.ticker||'').toUpperCase()).filter(Boolean))];
             const newsMap=lmTickers.length?await fetchNewsForPromptBatch(lmTickers):{};
             newCards=newCards.map(s=>{
@@ -2841,11 +2852,12 @@ async function loadMoreFilter(){
                 return s;
             });
         } else if(meta.type==='gems'){
-            // Cheap Gems load-more: use same curated-universe approach
+            // Cheap Gems load-more: use same curated-universe approach, exclude watchlist
             const lmGemQMap = await fetchQuotesCached(GEMS_UNIVERSE);
+            const lmWlSet=new Set(WATCHLIST.map(t=>t.toUpperCase()));
             let lmGemQuotes = Object.entries(lmGemQMap)
                 .map(([ticker,q])=>({ticker, price:q.c, chg:q.dp||0}))
-                .filter(q=>q.price>0 && q.price<=45);
+                .filter(q=>q.price>0 && q.price<=45 && !lmWlSet.has(q.ticker.toUpperCase()));
             lmGemQuotes.sort((a,b)=>Math.abs(b.chg)-Math.abs(a.chg));
             if(lmGemQuotes.length===0){ if(btn) btn.innerHTML='<span>⚠️</span><span style="margin-left:8px">No cheap stocks found</span>'; return; }
             const lmGemAllowed = new Set(lmGemQuotes.map(q=>q.ticker.toUpperCase()));
@@ -2910,10 +2922,11 @@ async function runActiveFilter(){
                 const maR = await fetch('/api/market-active');
                 if(maR.ok){ const maD = await maR.json(); wlMarketCandidates = maD.candidates || []; }
             }catch(e){}
-            // Merge top directional movers into the tickers we fetch prices for
-            // This ensures Claude gets live prices for movers, not just the static watchlist
+            // Merge top directional movers into the tickers we fetch prices for.
+            // Skip movers when a cost tier is active — tier scans should only use the watchlist
+            // so they don't overlap with Cheap Gems (which also finds cheap movers).
             const isPutScan = meta.optType === 'PUT';
-            const moverTickers = wlMarketCandidates
+            const moverTickers = activeCostTier ? [] : wlMarketCandidates
                 .filter(c => isPutScan ? c.direction==='bearish' : c.direction==='bullish')
                 .slice(0, 8).map(c => c.ticker);
             const expandedList = [...new Set([...WATCHLIST, ...moverTickers])];
@@ -2963,11 +2976,12 @@ async function runActiveFilter(){
             });
         } else if(meta.type==='gems'){
             // ── CHEAP GEMS: fetch live prices for curated universe, filter to ≤$45 ──
-            // Claude only sees stocks already confirmed cheap — eliminates hallucination problem
+            // Exclude WATCHLIST tickers so Gems always shows stocks different from Calls/Puts
             const gemQMap = await fetchQuotesCached(GEMS_UNIVERSE);
+            const wlSet=new Set(WATCHLIST.map(t=>t.toUpperCase()));
             let gemQuotes = Object.entries(gemQMap)
                 .map(([ticker,q])=>({ticker, price:q.c, chg:q.dp||0}))
-                .filter(q=>q.price>0 && q.price<=45);
+                .filter(q=>q.price>0 && q.price<=45 && !wlSet.has(q.ticker.toUpperCase()));
             gemQuotes.sort((a,b)=>Math.abs(b.chg)-Math.abs(a.chg));
             if(gemQuotes.length===0){
                 document.getElementById('ideasOutput').innerHTML=`<div class="empty-state"><div class="empty-icon">💎</div><div class="empty-title">No cheap stocks found</div><div class="empty-sub">All stocks in the gems universe are currently above $45. Try again later.</div></div>`;
@@ -3279,13 +3293,15 @@ async function scanDiscover(){
     }catch(e){ console.warn('[Discover] market-active fetch failed:', e.message); }
 
     // Pre-fetch GEMS_UNIVERSE prices once for the gems category
+    // Exclude watchlist tickers — Gems should surface stocks the user doesn't already track
     let discGemQuotes = [];
     let discGemAllowed = new Set();
     try{
         const dgQMap = await fetchQuotesCached(GEMS_UNIVERSE);
+        const dgWlSet=new Set(WATCHLIST.map(t=>t.toUpperCase()));
         discGemQuotes = Object.entries(dgQMap)
             .map(([ticker,q])=>({ticker, price:q.c, chg:q.dp||0}))
-            .filter(q=>q.price>0 && q.price<=45);
+            .filter(q=>q.price>0 && q.price<=45 && !dgWlSet.has(q.ticker.toUpperCase()));
         discGemQuotes.sort((a,b)=>Math.abs(b.chg)-Math.abs(a.chg));
         discGemAllowed = new Set(discGemQuotes.map(q=>q.ticker.toUpperCase()));
     }catch(e){ console.warn('[Discover] gems universe fetch failed:', e.message); }
