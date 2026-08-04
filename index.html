@@ -2266,10 +2266,11 @@ function buildCard(idea, existingCardId=null){
     };
     const initAcct = _cleanAcct(e0 ? (e0.account_sizing || idea.account_sizing) : idea.account_sizing)
                      || 'Re-scan to see trade rationale.';
-    const initEntryLow   = e0 && e0.entry_low   != null ? e0.entry_low   : idea.entry_low;
-    const initEntryHigh  = e0 && e0.entry_high  != null ? e0.entry_high  : idea.entry_high;
-    const initStop       = e0 && e0.stop_loss   != null ? e0.stop_loss   : idea.stop_loss;
-    const initTarget     = e0 && e0.target      != null ? e0.target      : idea.target;
+    const _fmtLvl = v => (v != null && !isNaN(parseFloat(v))) ? parseFloat(v).toFixed(2) : null;
+    const initEntryLow   = _fmtLvl(e0?.entry_low   ?? idea.entry_low);
+    const initEntryHigh  = _fmtLvl(e0?.entry_high  ?? idea.entry_high);
+    const initStop       = _fmtLvl(e0?.stop_loss    ?? idea.stop_loss);
+    const initTarget     = _fmtLvl(e0?.target       ?? idea.target);
 
     // Potential rating (starts from initial slot)
     const pot = initPot;
@@ -2327,15 +2328,15 @@ function buildCard(idea, existingCardId=null){
         <div class="card-levels">
             <div class="level-row">
                 <div class="level-left"><div class="level-icon">📥</div><div><div class="level-lbl">Enter Between</div><div class="level-hint">Buy the option when stock enters this zone</div></div></div>
-                <div class="level-val ev" id="el-${cardId}">$${initEntryLow} – $${initEntryHigh}</div>
+                <div class="level-val ev" id="el-${cardId}">${initEntryLow&&initEntryHigh?`$${initEntryLow} – $${initEntryHigh}`:'<span style="color:var(--muted);font-size:12px">Re-scan for levels</span>'}</div>
             </div>
             <div class="level-row">
                 <div class="level-left"><div class="level-icon">🛑</div><div><div class="level-lbl">Get Out If It Drops Below</div><div class="level-hint">Stock stop — exit option if stock hits here</div></div></div>
-                <div class="level-val sv" id="sl-${cardId}">$${initStop}</div>
+                <div class="level-val sv" id="sl-${cardId}">${initStop?`$${initStop}`:'<span style="color:var(--muted);font-size:12px">—</span>'}</div>
             </div>
             <div class="level-row">
                 <div class="level-left"><div class="level-icon">🎯</div><div><div class="level-lbl">Take Profit At</div><div class="level-hint">Stock target — consider selling option here</div></div></div>
-                <div class="level-val tv" id="tl-${cardId}">$${initTarget}</div>
+                <div class="level-val tv" id="tl-${cardId}">${initTarget?`$${initTarget}`:'<span style="color:var(--muted);font-size:12px">—</span>'}</div>
             </div>
         </div>
         ${expiryHtml}
@@ -2838,11 +2839,13 @@ async function loadMoreFilter(){
                 return s;
             });
             // Hard safety filter for Cheap Gems: drop any stock > $45
-            if(key==='gems') newCards=newCards.filter(c=>{
-                const price=c.current_price||parseFloat(c.entry_high)||999;
-                if(price>45){ console.warn(`[gems] Dropped ${c.ticker} — stock $${price} > $45 cap`); return false; }
-                return true;
-            });
+            if(key==='gems'){
+                newCards=newCards.filter(c=>{
+                    const price=c.current_price||parseFloat(c.entry_high)||999;
+                    if(price>45){ console.warn(`[gems] Dropped ${c.ticker} — stock $${price} > $45 cap`); return false; }
+                    return true;
+                });
+            }
         }
 
         filterCache[key]=newCards;
@@ -2884,8 +2887,18 @@ async function runActiveFilter(){
             let quotes=Object.entries(qMap).map(([ticker,q])=>({ticker,price:q.c,chg:q.dp||0,closes:[q.pc,q.c],high52:q.h||q.c,low52:q.l||q.c,vol:0})).filter(q=>q.price>0);
             // Sort biggest movers first — Claude picks from the top of this list
             quotes.sort((a,b)=>Math.abs(b.chg)-Math.abs(a.chg));
-            const priceData=quotes.length>0
-                ?quotes.map(q=>`${q.ticker}: $${q.price.toFixed(2)} (${q.chg>=0?'+':''}${q.chg.toFixed(2)}% today)`).join('\n')
+            // Filter stock pool by price range matching the selected contract cost tier
+            // ATM 1-month option premium ≈ 3-6% of stock price, so:
+            //   $3-$6 contracts → stocks under $120 (6% of $100 = $6)
+            //   $6-$10 contracts → stocks $80-$200
+            //   $10+ contracts  → stocks over $150
+            let tierQuotes = quotes;
+            if(activeCostTier==='low')  tierQuotes = quotes.filter(q=>q.price<=120);
+            else if(activeCostTier==='mid')  tierQuotes = quotes.filter(q=>q.price>=60&&q.price<=200);
+            else if(activeCostTier==='high') tierQuotes = quotes.filter(q=>q.price>=120);
+            if(tierQuotes.length===0) tierQuotes = quotes; // fallback if nothing in range
+            const priceData=tierQuotes.length>0
+                ?tierQuotes.map(q=>`${q.ticker}: $${q.price.toFixed(2)} (${q.chg>=0?'+':''}${q.chg.toFixed(2)}% today)`).join('\n')
                 :WATCHLIST.join(', ')+' — use your latest knowledge';
             const raw=await callClaude(watchlistScanPrompt(priceData, meta.optType, {}, [], rfTechMap, wlMarketCandidates, activeCostTier));
             cards=JSON.parse(stripJSON(raw));
@@ -2937,11 +2950,18 @@ async function runActiveFilter(){
                 });
                 // Hard safety filter: Cheap Gems must have stock price ≤ $45
                 // (high-priced stocks always produce contracts over $3.00)
-                if(key==='gems') cards=cards.filter(c=>{
-                    const price=c.current_price||parseFloat(c.entry_high)||999;
-                    if(price>45){ console.warn(`[gems] Dropped ${c.ticker} — stock $${price} > $45 cap`); return false; }
-                    return true;
-                });
+                if(key==='gems'){
+                    const before=cards.length;
+                    cards=cards.filter(c=>{
+                        const price=c.current_price||parseFloat(c.entry_high)||999;
+                        if(price>45){ console.warn(`[gems] Dropped ${c.ticker} — stock $${price} > $45 cap`); return false; }
+                        return true;
+                    });
+                    if(cards.length===0&&before>0){
+                        document.getElementById('ideasOutput').innerHTML=`<div class="empty-state"><div class="empty-icon">💎</div><div class="empty-title">No valid gems found</div><div class="empty-sub">Claude picked stocks above $45 — all filtered out. Click <strong>⚡ Scan Gems</strong> again to get a fresh batch of cheaper picks.</div></div>`;
+                        return;
+                    }
+                }
             }catch(enrichErr){
                 console.warn('[discover] price/news enrichment failed — showing Claude estimates:', enrichErr.message);
                 // cards stays as Claude's initial output — still renders correctly below
