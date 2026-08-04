@@ -1221,7 +1221,7 @@ async function fetchQuotesCached(tickers){
 const FILTER_META = {
     calls:     { scanLabel:'Scan Calls',      type:'watchlist', optType:'CALL',  sectionLabel:'📈 CALL IDEAS — Bullish Setups' },
     puts:      { scanLabel:'Scan Puts',       type:'watchlist', optType:'PUT',   sectionLabel:'📉 PUT IDEAS — Bearish Setups' },
-    gems:      { scanLabel:'Scan Gems',       type:'discover',  key:'gems',      sectionLabel:'💎 Cheap Gems — Solid Companies at Good Prices' },
+    gems:      { scanLabel:'Scan Gems',       type:'gems',                       sectionLabel:'💎 Cheap Gems — Solid Companies at Good Prices' },
     momentum:  { scanLabel:'Scan Momentum',   type:'discover',  key:'momentum',  sectionLabel:'🚀 Momentum Movers — High Upside Right Now' },
     community: { scanLabel:'Scan Community',  type:'discover',  key:'community', sectionLabel:'🔥 Community Favorites — What People Are Buying' },
     putplays:  { scanLabel:'Scan Put Plays',  type:'discover',  key:'putplays',  sectionLabel:'📉 Put Plays — Companies Showing Weakness' },
@@ -2378,6 +2378,20 @@ function getExpiryContext(){
 const DEFAULT_WATCHLIST=['NVDA','SPY','QQQ','AAPL','MSFT','META','AMD','GOOGL','ARM','PLTR'];
 let WATCHLIST=JSON.parse(localStorage.getItem('darcell_watchlist')||'null')||[...DEFAULT_WATCHLIST];
 
+// Curated universe of solid companies typically priced under $45/share.
+// Live price filter at ≤$45 screens any that have moved up — Claude only sees cheap ones.
+const GEMS_UNIVERSE=[
+    'SOFI','UPST','PLTR','F','RIVN','LCID','AAL','JBLU','NCLH','CCL',
+    'KEY','RF','FITB','HBAN','ZION','CFG','ALLY',
+    'PFE','MRNA','NVAX','VTRS',
+    'M','KSS','BBWI','WBA',
+    'AI','SOUN','BBAI','IONQ','ARRY',
+    'BTU','SWN','RRC','MRO',
+    'T','LUMN',
+    'VALE','PBR','ITUB','BBD',
+    'MO','SNAP','PINS','LYFT','OPEN',
+];
+
 function saveWatchlist(){localStorage.setItem('darcell_watchlist',JSON.stringify(WATCHLIST));}
 
 function renderWLChips(){
@@ -2826,6 +2840,23 @@ async function loadMoreFilter(){
                 if(n&&n.items&&n.items.length) s._newsItems=n.items.slice(0,2);
                 return s;
             });
+        } else if(meta.type==='gems'){
+            // Cheap Gems load-more: use same curated-universe approach
+            const lmGemQMap = await fetchQuotesCached(GEMS_UNIVERSE);
+            let lmGemQuotes = Object.entries(lmGemQMap)
+                .map(([ticker,q])=>({ticker, price:q.c, chg:q.dp||0}))
+                .filter(q=>q.price>0 && q.price<=45);
+            lmGemQuotes.sort((a,b)=>Math.abs(b.chg)-Math.abs(a.chg));
+            if(lmGemQuotes.length===0){ if(btn) btn.innerHTML='<span>⚠️</span><span style="margin-left:8px">No cheap stocks found</span>'; return; }
+            const lmGemAllowed = new Set(lmGemQuotes.map(q=>q.ticker.toUpperCase()));
+            const lmGemPriceData = lmGemQuotes.map(q=>`${q.ticker}: $${q.price.toFixed(2)} (${q.chg>=0?'+':''}${q.chg.toFixed(2)}% today)`).join('\n');
+            const lmGemRaw = await callClaude(gemsPrompt(lmGemPriceData, getDNAPromptBlock(), shownTickers));
+            newCards = JSON.parse(stripJSON(lmGemRaw));
+            newCards = newCards.filter(c=>{ const t=(c.ticker||'').toUpperCase(); if(!lmGemAllowed.has(t)){ console.warn(`[gems] Dropped ${t}`); return false; } return true; });
+            newCards = injectLivePrices(newCards, lmGemQuotes);
+            const lmGemTickers=[...new Set(newCards.map(s=>(s.ticker||'').toUpperCase()).filter(Boolean))];
+            const lmGemNews = lmGemTickers.length ? await fetchNewsForPromptBatch(lmGemTickers) : {};
+            newCards = newCards.map(s=>{ const n=lmGemNews[(s.ticker||'').toUpperCase()]; if(n&&n.items&&n.items.length) s._newsItems=n.items.slice(0,2); return s; });
         } else {
             const cat=DISCOVER_CATS.find(c=>c.key===key);
             let lmMarketCandidates = [];
@@ -2852,14 +2883,6 @@ async function loadMoreFilter(){
                 if(te) s._techSummary=te.summary;
                 return s;
             });
-            // Hard safety filter for Cheap Gems: drop any stock > $45
-            if(key==='gems'){
-                newCards=newCards.filter(c=>{
-                    const price=c.current_price||parseFloat(c.entry_high)||999;
-                    if(price>45){ console.warn(`[gems] Dropped ${c.ticker} — stock $${price} > $45 cap`); return false; }
-                    return true;
-                });
-            }
         }
 
         filterCache[key]=newCards;
@@ -2938,6 +2961,32 @@ async function runActiveFilter(){
                 if(n&&n.items&&n.items.length) s._newsItems=n.items.slice(0,2);
                 return s;
             });
+        } else if(meta.type==='gems'){
+            // ── CHEAP GEMS: fetch live prices for curated universe, filter to ≤$45 ──
+            // Claude only sees stocks already confirmed cheap — eliminates hallucination problem
+            const gemQMap = await fetchQuotesCached(GEMS_UNIVERSE);
+            let gemQuotes = Object.entries(gemQMap)
+                .map(([ticker,q])=>({ticker, price:q.c, chg:q.dp||0}))
+                .filter(q=>q.price>0 && q.price<=45);
+            gemQuotes.sort((a,b)=>Math.abs(b.chg)-Math.abs(a.chg));
+            if(gemQuotes.length===0){
+                document.getElementById('ideasOutput').innerHTML=`<div class="empty-state"><div class="empty-icon">💎</div><div class="empty-title">No cheap stocks found</div><div class="empty-sub">All stocks in the gems universe are currently above $45. Try again later.</div></div>`;
+                return;
+            }
+            const gemAllowed = new Set(gemQuotes.map(q=>q.ticker.toUpperCase()));
+            const gemPriceData = gemQuotes.map(q=>`${q.ticker}: $${q.price.toFixed(2)} (${q.chg>=0?'+':''}${q.chg.toFixed(2)}% today)`).join('\n');
+            const gemRaw = await callClaude(gemsPrompt(gemPriceData, getDNAPromptBlock()));
+            cards = JSON.parse(stripJSON(gemRaw));
+            // Hard JS post-filter — reject any ticker not in the live-verified cheap pool
+            cards = cards.filter(c=>{
+                const t=(c.ticker||'').toUpperCase();
+                if(!gemAllowed.has(t)){ console.warn(`[gems] Dropped ${t} — not in cheap universe`); return false; }
+                return true;
+            });
+            cards = injectLivePrices(cards, gemQuotes);
+            const gemCardTickers=[...new Set(cards.map(s=>(s.ticker||'').toUpperCase()).filter(Boolean))];
+            const gemNewsMap = gemCardTickers.length ? await fetchNewsForPromptBatch(gemCardTickers) : {};
+            cards = cards.map(s=>{ const n=gemNewsMap[(s.ticker||'').toUpperCase()]; if(n&&n.items&&n.items.length) s._newsItems=n.items.slice(0,2); return s; });
         } else {
             const cat=DISCOVER_CATS.find(c=>c.key===key);
             // Fetch market-active data so Claude uses real movers, not defaults
@@ -2949,8 +2998,7 @@ async function runActiveFilter(){
             const raw=await callClaude(discoverPrompt(cat.desc, [], {}, rfMarketCandidates, activeCostTier));
             cards=JSON.parse(stripJSON(raw));
             cards=cards.map(s=>({...s, category:cat.label}));
-            // Fetch live prices + news + technicals — wrapped in nested try/catch so
-            // a failed fetch never clears the cards Claude already found
+            // Fetch live prices + news + technicals
             const discTickers=[...new Set(cards.map(s=>(s.ticker||'').toUpperCase()).filter(Boolean))];
             try{
                 const [discPriceMap, discNewsMap, rfDiscTechMap] = await Promise.all([
@@ -2975,34 +3023,8 @@ async function runActiveFilter(){
                     if(techEntry) s._techSummary=techEntry.summary;
                     return s;
                 });
-                // Hard safety filter: Cheap Gems must have stock price ≤ $45
-                // (high-priced stocks always produce contracts over $3.00)
-                if(key==='gems'){
-                    const before=cards.length;
-                    cards=cards.filter(c=>{
-                        const price=c.current_price||parseFloat(c.entry_high)||999;
-                        if(price>45){ console.warn(`[gems] Dropped ${c.ticker} — stock $${price} > $45 cap`); return false; }
-                        return true;
-                    });
-                    if(cards.length===0&&before>0){
-                        // Auto-retry once before showing failure message
-                        console.warn('[gems] All cards filtered — auto-retrying scan...');
-                        document.getElementById('ideasOutput').innerHTML=`<div class="loading-state"><div class="spinner"></div><div class="loading-text">Finding cheaper gems...</div></div>`;
-                        try{
-                            const retryRaw=await callClaude(discoverPrompt(cat.desc, [], {}, rfMarketCandidates, activeCostTier));
-                            let retryCards=JSON.parse(stripJSON(retryRaw)).map(s=>({...s,category:cat.label}));
-                            const retryTickers=[...new Set(retryCards.map(s=>(s.ticker||'').toUpperCase()).filter(Boolean))];
-                            const [rPriceMap]=await Promise.all([retryTickers.length?fetchQuotesCached(retryTickers):Promise.resolve({})]);
-                            retryCards=retryCards.map(s=>{const k=(s.ticker||'').toUpperCase();const q=rPriceMap[k];if(q&&q.c){s=sanitizePriceLevels(s,q.c);s.current_price=q.c;s.price_change=q.dp||0;s._priceIsLive=q._isLive!==false;}return s;});
-                            retryCards=retryCards.filter(c=>(c.current_price||parseFloat(c.entry_high)||999)<=45);
-                            if(retryCards.length>0){ cards=retryCards; }
-                            else { document.getElementById('ideasOutput').innerHTML=`<div class="empty-state"><div class="empty-icon">💎</div><div class="empty-title">No valid gems found</div><div class="empty-sub">Claude kept picking stocks above $45. Scan again — each attempt picks different stocks.</div></div>`; return; }
-                        }catch(retryErr){ document.getElementById('ideasOutput').innerHTML=`<div class="empty-state"><div class="empty-icon">💎</div><div class="empty-title">No valid gems found</div><div class="empty-sub">Claude picked stocks above $45. Click <strong>⚡ Scan Gems</strong> to try again.</div></div>`; return; }
-                    }
-                }
             }catch(enrichErr){
                 console.warn('[discover] price/news enrichment failed — showing Claude estimates:', enrichErr.message);
-                // cards stays as Claude's initial output — still renders correctly below
             }
         }
         filterCache[key]=cards;
@@ -3155,7 +3177,34 @@ async function scanWatchlist(){
     btn.disabled=false; btn.innerHTML='<span>⚡</span><span>Scan My Watchlist</span>';
 }
 
-/// ── DISCOVER: BEYOND YOUR WATCHLIST ──────────────────────────
+//// ── CHEAP GEMS PROMPT — constrained to GEMS_UNIVERSE, live-price-filtered ──
+function gemsPrompt(priceData, dnaBlock='', shownTickers=[]){
+    const exclusionBlock = shownTickers.length>0
+        ? `\n⚠️ Do NOT return any of these already-shown tickers: ${shownTickers.join(', ')}\n` : '';
+    const exp = getExpiryContext();
+    return `You are an options trading analyst. Find the best 3 CALL option setups from the stocks listed below. All are verified under $45/share right now — cheap enough to produce affordable contracts.
+
+LIVE STOCK PRICES — pick ONLY from this list:
+${priceData}
+
+🚫 ABSOLUTE RULE: You may ONLY return tickers that appear in the list above. Any ticker not on this list will be auto-rejected by the system. Zero exceptions — do not use your training data to add stocks.
+${exclusionBlock}${dnaBlock}
+CONTRACT PRICE REQUIREMENT: The estimated ATM or slightly OTM CALL premium must be $3.00 per share or LESS ($300/contract max). These are "Cheap Gems" — affordable for small accounts.
+
+Pick the 3 stocks with the strongest bullish setup today. Favor: momentum, technical breakouts, positive news catalysts, volume spikes.
+
+Return ONLY a raw JSON array of exactly 3 objects. No markdown, no code fences, no explanation before or after.
+
+Each object must have:
+ticker, company, current_price (number), price_change (number), direction ("bullish"), summary (1 sentence why this is a gem), pros (array of 2 short strings), cons (array of 1 short string), potential ("high"|"moderate"|"avoid"), entry_low (number), entry_high (number), stop_loss (number), target (number), option_type ("CALL"), option_detail (same as expiry_options[0].option_detail), account_sizing (same as expiry_options[0].account_sizing), confidence ("high"|"medium"|"low"), risk_reward (string e.g. "1:2.5"),
+expiry_options (array of EXACTLY 3 objects):
+  [0] {"label":"1 Mo · Aggressive",   "entry_low":number,"entry_high":number,"stop_loss":number,"target":number,"option_detail":"$X Call · Expires [options Friday around ${exp.aggressive}] · Est. $X.XX/contract (under $3)","account_sizing":"1-sentence rationale","potential":"high"|"moderate"|"avoid"}
+  [1] {"label":"3 Mo · Moderate",     "entry_low":number,"entry_high":number,"stop_loss":number,"target":number,"option_detail":"$X Call · Expires [options Friday around ${exp.moderate}] · Est. $X.XX/contract (under $3)","account_sizing":"1-sentence rationale","potential":"high"|"moderate"|"avoid"}
+  [2] {"label":"6 Mo · Conservative", "entry_low":number,"entry_high":number,"stop_loss":number,"target":number,"option_detail":"$X Call · Expires [options Friday around ${exp.sixMonth}] · Est. $X.XX/contract (under $3)","account_sizing":"1-sentence rationale","potential":"high"|"moderate"|"avoid"}
+Use DIFFERENT strikes and levels per timeframe. Your ENTIRE response must be a single JSON array starting with [ and ending with ].`;
+}
+
+// ── DISCOVER: BEYOND YOUR WATCHLIST ──────────────────────────
 // Shared prompt for a single discover category — returns a JSON array of 3 stocks
 function discoverPrompt(categoryDesc, extraExclude=[], techMap={}, marketCandidates=[], costTier=null){
     const seenTickers = getSeenDiscoverTickers().slice(0, 25); // cap at 25 to keep prompt short
@@ -3207,7 +3256,7 @@ async function scanDiscover(){
     document.getElementById('discoverSection').style.display='block';
     // Show 3 loading placeholders immediately
     const cats=[
-        {key:'gems',      label:'💎 Cheap Gems — Solid Companies at Good Prices',       desc:'STOCK PRICE HARD CAP: Only stocks priced between $5 and $45 per share. DO NOT pick any stock above $45/share — stocks above $45 have options that are too expensive. Examples of invalid picks: HOOD ($90), AXP ($344), NVDA ($100+) — all too expensive. Valid examples: stocks between $5–$45/share like SOFI, PLTR, F, BAC, etc. The stock must be a historically solid company that is currently undervalued or recovering. Return option_type as CALL and direction as bullish. CONTRACT PRICE HARD CAP: The estimated ATM or slightly OTM CALL option premium must be $3.00 per share or less ($300 or less per contract). If a $45 or lower stock still has options above $3.00/share, skip it and pick a cheaper stock. This rule cannot be broken under any circumstances.'},
+        {key:'gems',      label:'💎 Cheap Gems — Solid Companies at Good Prices',       type:'gems'},
         {key:'momentum',  label:'🚀 Momentum Movers — High Upside Right Now',            desc:'stocks showing strong bullish momentum, high upside potential, and a clear upward trend. Return option_type as CALL and direction as bullish'},
         {key:'community', label:'🔥 Community Favorites — What People Are Buying',       desc:'stocks that retail traders and investing communities are actively buying and discussing right now. Return option_type as CALL and direction as bullish'},
         {key:'puts',      label:'📉 Put Plays — Companies Showing Weakness',             desc:'stocks that are showing significant weakness, breaking down technically, facing bad news or headwinds, or are overextended and due for a drop. These are PUT trade setups — looking for stocks to go DOWN. Return option_type as PUT and direction as bearish. For entry_low/entry_high put the stock price zone to enter the put. For stop set the price if stock bounces above. For target set the downside price target.'},
@@ -3229,14 +3278,37 @@ async function scanDiscover(){
         }
     }catch(e){ console.warn('[Discover] market-active fetch failed:', e.message); }
 
+    // Pre-fetch GEMS_UNIVERSE prices once for the gems category
+    let discGemQuotes = [];
+    let discGemAllowed = new Set();
+    try{
+        const dgQMap = await fetchQuotesCached(GEMS_UNIVERSE);
+        discGemQuotes = Object.entries(dgQMap)
+            .map(([ticker,q])=>({ticker, price:q.c, chg:q.dp||0}))
+            .filter(q=>q.price>0 && q.price<=45);
+        discGemQuotes.sort((a,b)=>Math.abs(b.chg)-Math.abs(a.chg));
+        discGemAllowed = new Set(discGemQuotes.map(q=>q.ticker.toUpperCase()));
+    }catch(e){ console.warn('[Discover] gems universe fetch failed:', e.message); }
+
     // Step 1: fire Claude calls sequentially so each category excludes tickers from previous ones
     // This prevents the same stock appearing in multiple sections in one scan
     const catStocks = [];
     const alreadyPickedThisScan = [];
     for(const cat of cats){
         try{
-            const raw = await callClaude(discoverPrompt(cat.desc, alreadyPickedThisScan, {}, marketCandidates));
-            const stocks = JSON.parse(stripJSON(raw));
+            let raw, stocks;
+            if(cat.type==='gems'){
+                // Gems: constrained to live-verified cheap universe — no hallucination possible
+                if(discGemQuotes.length===0){ catStocks.push([]); continue; }
+                const dgPriceData = discGemQuotes.map(q=>`${q.ticker}: $${q.price.toFixed(2)} (${q.chg>=0?'+':''}${q.chg.toFixed(2)}% today)`).join('\n');
+                raw = await callClaude(gemsPrompt(dgPriceData, getDNAPromptBlock(), alreadyPickedThisScan));
+                stocks = JSON.parse(stripJSON(raw));
+                // Hard post-filter: only keep tickers that were in the live-priced cheap list
+                stocks = stocks.filter(s=>discGemAllowed.has((s.ticker||'').toUpperCase()));
+            } else {
+                raw = await callClaude(discoverPrompt(cat.desc, alreadyPickedThisScan, {}, marketCandidates));
+                stocks = JSON.parse(stripJSON(raw));
+            }
             if(Array.isArray(stocks) && stocks.length){
                 const batch = stocks.map(s=>({...s, category:cat.label}));
                 catStocks.push(batch);
