@@ -2745,6 +2745,39 @@ function updateTierRow(){
 const TIER_STOCK_MAX = { low: 120, mid: 300, high: Infinity };
 const TIER_STOCK_MIN = { low: 0,   mid: 60,  high: 150   };
 
+// Actual option premium ranges per tier (per share; 1 contract = 100 shares)
+const TIER_OPT_MIN = { low: 3.00, mid: 6.00,  high: 10.00 };
+const TIER_OPT_MAX = { low: 6.00, mid: 10.00, high: Infinity };
+
+// Fetch real 30-day ATM option price for each card and drop any that fall outside
+// the selected tier's contract price range. Falls back to keeping the card if
+// the API returns no usable price (benefit of the doubt).
+async function verifyCardsInTier(cards, optType, tierKey){
+    if(!tierKey || !cards.length) return cards;
+    const optMin = TIER_OPT_MIN[tierKey] ?? 0;
+    const optMax = TIER_OPT_MAX[tierKey] ?? Infinity;
+    const results = await Promise.all(cards.map(async c=>{
+        try{
+            const r = await fetchRealOption(c.ticker, c.current_price||0, optType, '30d');
+            if(r && r.ask != null){
+                const inRange = r.ask >= optMin && r.ask <= optMax;
+                if(inRange){
+                    console.log(`[tier verify] ✓ ${c.ticker} 30d ask $${r.ask} in $${optMin}–${optMax===Infinity?'∞':optMax}`);
+                    // Stamp the verified price so the card can display it
+                    c._verifiedAsk30d = r.ask;
+                } else {
+                    console.warn(`[tier verify] ✗ ${c.ticker} 30d ask $${r.ask} outside $${optMin}–${optMax===Infinity?'∞':optMax} — dropped`);
+                }
+                return inRange ? c : null;
+            }
+            // No price data returned — keep the card (benefit of doubt)
+            console.warn(`[tier verify] ? ${c.ticker} no ask returned — kept`);
+        }catch(e){ console.warn('[tier verify] error', c.ticker, e.message); }
+        return c;
+    }));
+    return results.filter(Boolean);
+}
+
 function getCostTierBlock(){
     if(!activeCostTier) return '';
     const map = {
@@ -2860,18 +2893,22 @@ async function loadMoreFilter(){
                     if(ne&&ne.items&&ne.items.length) s._newsItems=ne.items.slice(0,2);
                     return s;
                 });
-                // Stock-price proxy filter — drop cards where stock price makes tier impossible
+                // Layer 1 — Stock-price proxy filter (instant)
                 if(activeCostTier){
                     const tMax=TIER_STOCK_MAX[activeCostTier]??Infinity;
                     const tMin=TIER_STOCK_MIN[activeCostTier]??0;
                     newCards=newCards.filter(c=>{
                         const sp=c.current_price||0;
                         if(sp>0&&(sp>tMax||sp<tMin)){
-                            console.warn(`[freeform tier] loadMore dropped ${c.ticker} $${sp}`);
+                            console.warn(`[freeform tier] loadMore proxy drop ${c.ticker} $${sp}`);
                             return false;
                         }
                         return true;
                     });
+                }
+                // Layer 2 — Real option chain verification
+                if(activeCostTier && newCards.length){
+                    newCards = await verifyCardsInTier(newCards, meta.optType||'CALL', activeCostTier);
                 }
             }catch(e){ console.warn('[freeform loadMore] enrichment failed:', e.message); }
         } else if(meta.type==='watchlist'){
@@ -2989,18 +3026,23 @@ async function runActiveFilter(){
                     if(ne&&ne.items&&ne.items.length) s._newsItems=ne.items.slice(0,2);
                     return s;
                 });
-                // Stock-price proxy filter — drop cards where stock price makes tier impossible
+                // Layer 1 — Stock-price proxy filter (instant): eliminates obviously wrong stocks
                 if(activeCostTier){
                     const tMax=TIER_STOCK_MAX[activeCostTier]??Infinity;
                     const tMin=TIER_STOCK_MIN[activeCostTier]??0;
                     cards=cards.filter(c=>{
                         const sp=c.current_price||0;
                         if(sp>0&&(sp>tMax||sp<tMin)){
-                            console.warn(`[freeform tier] Dropped ${c.ticker} $${sp} (tier ${activeCostTier}: $${tMin}–$${tMax==='Infinity'?'∞':tMax})`);
+                            console.warn(`[freeform tier] proxy drop ${c.ticker} $${sp} (need $${tMin}–${tMax===Infinity?'∞':tMax})`);
                             return false;
                         }
                         return true;
                     });
+                }
+                // Layer 2 — Real option chain verification: fetch live 30d ATM ask and confirm
+                // the contract price actually falls in the selected tier range.
+                if(activeCostTier && cards.length){
+                    cards = await verifyCardsInTier(cards, meta.optType||'CALL', activeCostTier);
                 }
                 if(ffTickers.length) addSeenDiscoverTickers(ffTickers);
             }catch(enrichErr){ console.warn('[freeform] enrichment failed:', enrichErr.message); }
