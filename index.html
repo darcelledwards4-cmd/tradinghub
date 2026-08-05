@@ -58,6 +58,23 @@
         .search-btn { background:var(--blue); color:#000; border:none; border-radius:8px; padding:11px 20px; font-size:13px; font-weight:700; cursor:pointer; white-space:nowrap; transition:opacity .15s; }
         .search-btn:hover { opacity:.85; }
         .search-btn:disabled { opacity:.5; cursor:not-allowed; }
+        /* ── Ticker Search Modal ──────────────────────────────── */
+        .srch-modal { position:fixed;inset:0;z-index:9000;background:rgba(0,0,0,.82);backdrop-filter:blur(6px);display:flex;align-items:flex-start;justify-content:center;padding:52px 16px 40px;overflow-y:auto; }
+        .srch-modal-box { background:var(--bg1);border:1px solid var(--border);border-radius:16px;width:100%;max-width:980px;animation:srchIn .18s ease; }
+        @keyframes srchIn { from{opacity:0;transform:translateY(-12px)} to{opacity:1;transform:translateY(0)} }
+        .srch-modal-head { display:flex;align-items:center;gap:10px;padding:20px 20px 16px;border-bottom:1px solid var(--border); }
+        .srch-modal-input { flex:1;background:var(--bg2);border:1px solid var(--border);color:var(--text);border-radius:9px;padding:13px 16px;font-size:15px;font-weight:500;font-family:inherit;outline:none;transition:border-color .15s; }
+        .srch-modal-input:focus { border-color:var(--blue); }
+        .srch-modal-input::placeholder { color:var(--muted); }
+        .srch-modal-go { background:var(--blue);color:#000;border:none;border-radius:9px;padding:13px 22px;font-size:13px;font-weight:700;cursor:pointer;white-space:nowrap;transition:opacity .15s; }
+        .srch-modal-go:hover { opacity:.85; } .srch-modal-go:disabled { opacity:.5;cursor:not-allowed; }
+        .srch-modal-close { background:var(--bg3);border:1px solid var(--border);color:var(--muted);border-radius:8px;padding:11px 15px;font-size:15px;cursor:pointer;transition:all .15s;line-height:1; }
+        .srch-modal-close:hover { border-color:var(--red);color:var(--red); }
+        .srch-modal-body { padding:20px 20px 28px;min-height:160px; }
+        .srch-section-lbl { font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:var(--muted);margin:0 0 14px;padding-bottom:8px;border-bottom:1px solid var(--border); }
+        .srch-trigger-btn { width:100%;background:var(--bg2);border:1px dashed var(--border);color:var(--muted);border-radius:10px;padding:14px 18px;font-size:14px;font-family:inherit;cursor:pointer;display:flex;align-items:center;gap:10px;transition:all .15s;margin-bottom:20px;text-align:left; }
+        .srch-trigger-btn:hover { border-color:var(--blue);color:var(--blue); }
+        .srch-trigger-hint { margin-left:auto;font-size:11px;opacity:.55;white-space:nowrap; }
         .scan-row { display:flex; align-items:center; justify-content:space-between; margin-bottom:16px; }
         .scan-title { font-size:16px; font-weight:700; }
         .scan-btn { background:var(--bg3); border:1px solid var(--border); color:var(--text); border-radius:7px; padding:8px 16px; font-size:12px; font-weight:600; cursor:pointer; transition:all .15s; display:flex; align-items:center; gap:6px; }
@@ -552,11 +569,12 @@
     <div class="tab active" id="tab-ideas">
         <div class="scroll">
             <div class="ideas-wrap">
-                <div class="search-row">
-                    <input class="search-input" id="searchTicker" placeholder="🔍  Search any ticker — e.g. TSLA, AMZN, SMCI..." onkeydown="if(event.key==='Enter')analyzeSingle()" />
-                    <button class="search-btn" onclick="analyzeSingle()" id="searchBtn">Analyze This Stock →</button>
-                </div>
-                <div id="singleResult" style="margin-bottom:20px;display:none;"></div>
+                <button class="srch-trigger-btn" onclick="openSearchModal()">
+                    <span style="font-size:17px">🔍</span>
+                    <span style="font-weight:600;color:var(--text)">Search any ticker</span>
+                    <span class="srch-trigger-hint">TSLA · AAPL · PLTR · any US symbol</span>
+                </button>
+                <div id="singleResult" style="display:none;"></div>
                 <div class="scan-row" style="margin-bottom:14px">
                     <div>
                         <div class="scan-title">Today's Trade Ideas <span class="dna-badge" id="dnaBadge" style="display:none">🧠 Personalized</span></div>
@@ -2694,7 +2712,7 @@ ACCOUNT_SIZING — mandatory 3-sentence structure for every expiry_option. Each 
 Return ONLY a raw JSON object. No markdown. No code fences.
 
 Required keys:
-ticker, company, current_price (number), price_change (number), direction ("${isPut?'bearish':'bullish'}"), summary (1-2 plain English sentences — why this ${isPut?'PUT':'CALL'} setup makes sense; if referencing a news headline, end with (Source: [publication, date])), pros (array of 2 strings), cons (array of 1 string — the main risk), potential ("high"/"moderate"/"avoid"), entry_low (number), entry_high (number), stop_loss (number), target (number), option_type ("${optType}"), option_detail (same as expiry_options[0].option_detail for compat), account_sizing (same as expiry_options[0].account_sizing for compat), confidence ("high"/"medium"/"low"), risk_reward (string e.g. "1:2"),
+ticker, company, sector (industry/sector name e.g. "EV / Auto" or "Technology" or "Healthcare"), current_price (number), price_change (number), direction ("${isPut?'bearish':'bullish'}"), summary (1-2 plain English sentences — why this ${isPut?'PUT':'CALL'} setup makes sense; if referencing a news headline, end with (Source: [publication, date])), pros (array of 2 strings), cons (array of 1 string — the main risk), potential ("high"/"moderate"/"avoid"), entry_low (number), entry_high (number), stop_loss (number), target (number), option_type ("${optType}"), option_detail (same as expiry_options[0].option_detail for compat), account_sizing (same as expiry_options[0].account_sizing for compat), confidence ("high"/"medium"/"low"), risk_reward (string e.g. "1:2"),
 expiry_options (array of EXACTLY 3 objects — each with its own strikes, expiry date, and price levels):
   [0] {"label":"1 Mo · Aggressive",   "entry_low":number, "entry_high":number, "stop_loss":number, "target":number, "option_detail":"$X ${optType} · Expires [options Friday around ${exp.aggressive}] · Est. $X.XX/contract",  "account_sizing":"[Sentence 1: actual RSI number + which specific MA price is near/supporting. E.g. 'RSI at 41 with price bouncing off the 50-day MA at $X.'] [Sentence 2: name the exact strike dollar amount, say ATM or OTM vs today's price, explain what that means for cost and required move. E.g. 'The $X strike is OTM — stock needs to move $Y to break even, keeping premium lower.'] [Sentence 3: why a 1-month window fits — name the specific catalyst or fast move and why 30 days is enough. NO calendar months.]", "potential":"high"/"moderate"/"avoid"}
   [1] {"label":"3 Mo · Moderate",     "entry_low":number, "entry_high":number, "stop_loss":number, "target":number, "option_detail":"$X ${optType} · Expires [options Friday around ${exp.moderate}] · Est. $X.XX/contract", "account_sizing":"[Sentence 1: actual RSI number + which specific MA price is near/supporting.] [Sentence 2: name the exact strike dollar amount, ATM or OTM vs today's price, cost and required move in plain terms.] [Sentence 3: why a 3-month window — the specific trend duration or catalyst timeline, no generic phrases. NO calendar months.]", "potential":"high"/"moderate"/"avoid"}
@@ -5163,6 +5181,176 @@ window.addEventListener('load',()=>{
     // Show DNA badge on Ideas tab if model is already trained
     if(getDNA()){ const b=document.getElementById('dnaBadge'); if(b) b.style.display='inline-flex'; }
 });
+
+
+// ── TICKER SEARCH MODAL ────────────────────────────────────────
+
+function openSearchModal(){
+    document.getElementById('srchModal').style.display='flex';
+    document.body.style.overflow='hidden';
+    setTimeout(()=>{ const i=document.getElementById('srchInput'); if(i) i.focus(); }, 60);
+}
+function closeSearchModal(){
+    document.getElementById('srchModal').style.display='none';
+    document.body.style.overflow='';
+}
+document.addEventListener('keydown', e=>{ if(e.key==='Escape') closeSearchModal(); });
+
+function similarPlaysPrompt(ticker, price, sector, dnaBlock=''){
+    const exp = getExpiryContext();
+    const sectorCtx = sector ? ` in the ${sector} sector` : '';
+    return `You are a trading analyst. The user just searched ${ticker} at $${price.toFixed(2)}${sectorCtx}.
+
+Find 2-3 OTHER companies in the same sector/industry that have strong option plays RIGHT NOW.
+For each, pick the best direction — CALL if bullish setup, PUT if bearish.
+Do NOT include ${ticker} itself.
+${dnaBlock}
+
+Return a JSON array of 2-3 objects. Each must follow this EXACT schema (no extra keys):
+[
+  {
+    "ticker":"XXXX",
+    "company":"Full Name",
+    "sector":"${sector||'same as '+ticker}",
+    "option_type":"CALL or PUT",
+    "direction":"bullish or bearish",
+    "confidence":"high or medium or low",
+    "current_price": estimated_price_number,
+    "price_change": estimated_daily_change_percent,
+    "summary":"Why this play makes sense now — 1-2 sentences.",
+    "pros":["reason 1","reason 2"],
+    "cons":["main risk"],
+    "potential":"high or moderate or avoid",
+    "entry_low":number,"entry_high":number,"stop_loss":number,"target":number,
+    "option_detail":"same as expiry_options[0].option_detail",
+    "account_sizing":"same as expiry_options[0].account_sizing",
+    "risk_reward":"e.g. 1:2.5",
+    "expiry_options":[
+      {"label":"1 Mo · Aggressive",   "entry_low":number,"entry_high":number,"stop_loss":number,"target":number,"option_detail":"$X CALL/PUT · Expires [options Friday around ${exp.aggressive}] · Est. $X.XX/contract","account_sizing":"Why this 1-month window fits.","potential":"high|moderate|avoid"},
+      {"label":"3 Mo · Moderate",     "entry_low":number,"entry_high":number,"stop_loss":number,"target":number,"option_detail":"$X CALL/PUT · Expires [options Friday around ${exp.moderate}] · Est. $X.XX/contract","account_sizing":"Why this 3-month window fits.","potential":"high|moderate|avoid"},
+      {"label":"6 Mo · Conservative", "entry_low":number,"entry_high":number,"stop_loss":number,"target":number,"option_detail":"$X CALL/PUT · Expires [options Friday around ${exp.sixMonth}] · Est. $X.XX/contract","account_sizing":"Why this 6-month window fits.","potential":"high|moderate|avoid"}
+    ]
+  }
+]
+
+Return ONLY the JSON array. No markdown, no explanation.`;
+}
+
+async function runSearchModal(){
+    const ticker=(document.getElementById('srchInput').value||'').trim().toUpperCase().replace(/[^A-Z.]/g,'');
+    if(!ticker){ document.getElementById('srchInput').focus(); return; }
+
+    const body  = document.getElementById('srchBody');
+    const goBtn = document.getElementById('srchGoBtn');
+    goBtn.disabled=true; goBtn.textContent='Searching...';
+    body.innerHTML=`<div class="loading-state"><div class="spinner"></div><div class="loading-text">Fetching CALL & PUT analysis for ${ticker}...</div></div>`;
+
+    try{
+        const [q, newsResult, techData] = await Promise.all([
+            fetchQuote(ticker),
+            fetchNewsForPrompt(ticker),
+            fetchTechnicals(ticker)
+        ]);
+        if(!q) throw new Error(`No data found for "${ticker}" — check the symbol.`);
+
+        const newsCtx   = newsResult.text  || '';
+        const newsItems = newsResult.items || [];
+        const techCtx   = techData?.summary || '';
+
+        // Call + Put for the searched ticker in parallel
+        const [callRaw, putRaw] = await Promise.all([
+            callClaude(singleDirPrompt(ticker, q.price, q.chg, 'CALL', newsCtx, techCtx)),
+            callClaude(singleDirPrompt(ticker, q.price, q.chg, 'PUT',  newsCtx, techCtx))
+        ]);
+
+        let callIdea=null, putIdea=null;
+        try{ callIdea=JSON.parse(stripJSON(callRaw)); }catch(e){}
+        try{ putIdea =JSON.parse(stripJSON(putRaw));  }catch(e){}
+        if(!callIdea && !putIdea) throw new Error('Could not parse analysis — try again.');
+
+        if(callIdea){ callIdea.current_price=q.price; callIdea.price_change=q.chg; callIdea._priceIsLive=true; callIdea._newsItems=newsItems; }
+        if(putIdea) { putIdea.current_price =q.price; putIdea.price_change =q.chg; putIdea._priceIsLive=true;  putIdea._newsItems=newsItems; }
+
+        const cardId='c'+(++_cardIdCounter);
+        window._cardData[cardId]={ call:callIdea, put:putIdea, ticker, current_price:q.price, price_change:q.chg, activeDir:'call' };
+        const displayIdea = callIdea||putIdea;
+        const sector = callIdea?.sector || putIdea?.sector || '';
+
+        body.innerHTML=`
+            <div class="srch-section-lbl" style="margin-top:4px">
+                📊 ${ticker} — $${q.price.toFixed(2)}
+                <span style="font-weight:400;text-transform:none;letter-spacing:0;margin-left:6px">Use the toggle on the card to switch CALL ↔ PUT</span>
+            </div>
+            <div class="ideas-grid">${buildCard(displayIdea, cardId)}</div>
+            <div id="srchSimilar">
+                <div class="srch-section-lbl" style="margin-top:28px">🔀 Similar Plays${sector?' — '+sector:''}</div>
+                <div class="loading-state" style="padding:16px 0"><div class="spinner"></div><div class="loading-text">Finding similar plays in the same sector...</div></div>
+            </div>`;
+
+        enrichOneCard(cardId).catch(()=>{});
+
+        // Similar plays — runs after main card renders
+        try{
+            const simRaw = await callClaude(similarPlaysPrompt(ticker, q.price, sector, getDNAPromptBlock()));
+            let simCards=[];
+            try{ simCards=JSON.parse(stripJSON(simRaw)); }catch(e){}
+
+            const simSec = document.getElementById('srchSimilar');
+            if(Array.isArray(simCards) && simCards.length && simSec){
+                const simTickers=[...new Set(simCards.map(s=>(s.ticker||'').toUpperCase()).filter(Boolean))];
+                const [simPriceMap, simNewsMap] = await Promise.all([
+                    simTickers.length ? fetchQuotesCached(simTickers) : Promise.resolve({}),
+                    simTickers.length ? fetchNewsForPromptBatch(simTickers) : Promise.resolve({})
+                ]);
+                simCards=simCards.map(s=>{
+                    const k=(s.ticker||'').toUpperCase();
+                    const sq=simPriceMap[k];
+                    if(sq&&sq.c){ s=sanitizePriceLevels(s,sq.c); s.current_price=sq.c; s.price_change=sq.dp||0; s._priceIsLive=sq._isLive!==false; }
+                    else s._priceIsLive=false;
+                    const sn=simNewsMap[k];
+                    if(sn&&sn.items) s._newsItems=sn.items.slice(0,2);
+                    return s;
+                });
+                simSec.innerHTML=`
+                    <div class="srch-section-lbl" style="margin-top:28px">🔀 Similar Plays${sector?' — '+sector:''}</div>
+                    <div class="ideas-grid">${simCards.map(s=>buildCard(s)).join('')}</div>`;
+            } else if(simSec){
+                simSec.innerHTML='';
+            }
+        }catch(simErr){
+            const simSec=document.getElementById('srchSimilar');
+            if(simSec) simSec.innerHTML='';
+            console.warn('[search] similar plays error:', simErr.message);
+        }
+
+    }catch(e){
+        body.innerHTML=`<div class="empty-state"><div class="empty-icon">⚠️</div><div class="empty-title">Error</div><div class="empty-sub">${e.message}</div></div>`;
+    }
+    goBtn.disabled=false; goBtn.textContent='Search →';
+}
+
 </script>
+
+<!-- ── TICKER SEARCH MODAL ───────────────────────────────────── -->
+<div id="srchModal" class="srch-modal" style="display:none" onclick="if(event.target===this)closeSearchModal()">
+    <div class="srch-modal-box">
+        <div class="srch-modal-head">
+            <input class="srch-modal-input" id="srchInput"
+                   placeholder="Enter ticker — TSLA, AAPL, PLTR, SMCI..."
+                   maxlength="7"
+                   oninput="this.value=this.value.toUpperCase().replace(/[^A-Z.]/g,'')"
+                   onkeydown="if(event.key==='Enter')runSearchModal()" />
+            <button class="srch-modal-go" onclick="runSearchModal()" id="srchGoBtn">Search →</button>
+            <button class="srch-modal-close" onclick="closeSearchModal()">✕</button>
+        </div>
+        <div class="srch-modal-body" id="srchBody">
+            <div style="text-align:center;padding:44px 20px;color:var(--muted)">
+                <div style="font-size:38px;margin-bottom:14px">🔍</div>
+                <div style="font-size:14px;line-height:1.7">Type any US ticker to get a full CALL + PUT breakdown<br>and see similar plays from the same sector.</div>
+            </div>
+        </div>
+    </div>
+</div>
+
 </body>
 </html>
