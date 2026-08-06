@@ -1163,7 +1163,8 @@ function restoreLastSession(){
     // Auto-refresh prices + news in the background
     const tickers = [...new Set(cards.map(c=>(c.ticker||'').toUpperCase()).filter(Boolean))];
     if(tickers.length){
-        // Phase 1 — prices + news (fast)
+        // Phase 1 — prices + news, then chain Phase 2 (tech + flow) so pills
+        // are always injected AFTER the final renderFilterResult — no race condition.
         Promise.all([
             fetchQuotesCached(tickers),
             fetchNewsForPromptBatch(tickers)
@@ -1181,19 +1182,22 @@ function restoreLastSession(){
             renderFilterResult(lastKey,updated);
             saveCardsToStorage(lastKey,updated);
             const now=new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'});
-            document.getElementById('lastScan').textContent=`Restored · prices & news refreshed ${now} — hit ⚡ to rescan`;
+            document.getElementById('lastScan').textContent=`Restored · prices & news refreshed ${now} — fetching signals…`;
             document.getElementById('lastUpdated').textContent=`Prices live · ${now}`;
+            // Phase 2 — runs AFTER Phase 1's renderFilterResult so DOM is stable
+            return Promise.all([
+                fetchTechnicalsBatch(tickers),
+                fetchFlowBatch(tickers)
+            ]);
+        }).then(([techMap, flowMap])=>{
+            if(!techMap && !flowMap) return;
+            injectTechPillsIntoCards(techMap||{}, flowMap||{});
+            const now=new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'});
+            document.getElementById('lastScan').textContent=`Restored · signals loaded ${now} — hit ⚡ to rescan`;
         }).catch(()=>{
             fetchQuotesCached(tickers).then(()=>refreshVisiblePrices());
             document.getElementById('lastScan').textContent='Restored from last session — hit ⚡ to rescan';
         });
-        // Phase 2 — technicals + flow injected directly into rendered cards (no re-render needed)
-        Promise.all([
-            fetchTechnicalsBatch(tickers),
-            fetchFlowBatch(tickers)
-        ]).then(([techMap, flowMap])=>{
-            injectTechPillsIntoCards(techMap, flowMap);
-        }).catch(()=>{});
     } else {
         document.getElementById('lastScan').textContent = 'Restored from last session — hit ⚡ to rescan';
     }
