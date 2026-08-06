@@ -75,6 +75,16 @@
         .srch-trigger-btn { width:100%;background:var(--bg2);border:1px dashed var(--border);color:var(--muted);border-radius:10px;padding:14px 18px;font-size:14px;font-family:inherit;cursor:pointer;display:flex;align-items:center;gap:10px;transition:all .15s;margin-bottom:20px;text-align:left; }
         .srch-trigger-btn:hover { border-color:var(--blue);color:var(--blue); }
         .srch-trigger-hint { margin-left:auto;font-size:11px;opacity:.55;white-space:nowrap; }
+        /* ── Chart Signals strip on cards ──────────────────────── */
+        .card-tech { margin:12px 0 4px;padding:10px 12px;background:var(--bg3);border-radius:8px;border:1px solid var(--border); }
+        .card-tech-lbl { font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);margin-bottom:7px; }
+        .card-tech-pills { display:flex;flex-wrap:wrap;gap:5px; }
+        .tpill { font-size:11px;font-weight:600;padding:3px 8px;border-radius:5px;border:1px solid;white-space:nowrap; }
+        .tpill-hot  { border-color:#ef4444;color:#ef4444; }
+        .tpill-cold { border-color:#60a5fa;color:#60a5fa; }
+        .tpill-neu  { border-color:var(--muted);color:var(--muted); }
+        .tpill-up   { border-color:var(--green);color:var(--green); }
+        .tpill-dn   { border-color:var(--red);color:var(--red); }
         .scan-row { display:flex; align-items:center; justify-content:space-between; margin-bottom:16px; }
         .scan-title { font-size:16px; font-weight:700; }
         .scan-btn { background:var(--bg3); border:1px solid var(--border); color:var(--text); border-radius:7px; padding:8px 16px; font-size:12px; font-weight:600; cursor:pointer; transition:all .15s; display:flex; align-items:center; gap:6px; }
@@ -2343,6 +2353,38 @@ function buildCard(idea, existingCardId=null){
             return `<div class="card-news-cite"><div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--muted);margin-bottom:3px">📰 Live News Used</div>${rows}</div>`;
         })()}
         ${pcSection}
+        ${(()=>{
+            const tech=idea._techData;
+            if(!tech) return '';
+            const pills=[];
+            if(tech.rsi!=null){
+                const hot=tech.rsi>=70,cold=tech.rsi<=30;
+                const cls=hot?'hot':cold?'cold':'neu';
+                const lbl=hot?'Overbought ⚠':cold?'Oversold — dip buy':'Neutral';
+                pills.push(`<span class="tpill tpill-${cls}">RSI ${tech.rsi} · ${lbl}</span>`);
+            }
+            if(tech.currentClose&&tech.ma50){
+                const pct=((tech.currentClose-tech.ma50)/tech.ma50*100);
+                pills.push(`<span class="tpill tpill-${pct>=0?'up':'dn'}">${pct>=0?'+':''}${pct.toFixed(1)}% vs 50d MA $${tech.ma50}</span>`);
+            }
+            if(tech.currentClose&&tech.ma200){
+                const above=tech.currentClose>tech.ma200;
+                pills.push(`<span class="tpill tpill-${above?'up':'dn'}">${above?'Above':'Below'} 200d MA $${tech.ma200}</span>`);
+            }
+            if(tech.high30&&tech.low30){
+                pills.push(`<span class="tpill tpill-neu">30d range $${tech.low30}–$${tech.high30}</span>`);
+            }
+            if(tech.analystTarget){
+                const up=tech.currentClose?((tech.analystTarget-tech.currentClose)/tech.currentClose*100):null;
+                const upStr=up!=null?` (${up>=0?'+':''}${up.toFixed(1)}%)`:'';
+                pills.push(`<span class="tpill tpill-${up>=5?'up':up<0?'dn':'neu'}">🎯 Analyst $${tech.analystTarget}${upStr}</span>`);
+            }
+            if(tech.daysToEarnings!=null&&tech.daysToEarnings>=0&&tech.daysToEarnings<=60){
+                pills.push(`<span class="tpill tpill-neu">📅 Earnings in ${tech.daysToEarnings}d</span>`);
+            }
+            if(!pills.length) return '';
+            return `<div class="card-tech"><div class="card-tech-lbl">📊 Chart Signals — Entry Timing</div><div class="card-tech-pills">${pills.join('')}</div></div>`;
+        })()}
         <div class="card-levels">
             <div class="level-row">
                 <div class="level-left"><div class="level-icon">📥</div><div><div class="level-lbl">Enter Between</div><div class="level-hint">Buy the option when stock enters this zone</div></div></div>
@@ -2898,9 +2940,10 @@ async function loadMoreFilter(){
             newCards = JSON.parse(stripJSON(raw));
             const lmFfTickers = [...new Set(newCards.map(s=>(s.ticker||'').toUpperCase()).filter(Boolean))];
             try{
-                const [lmPriceMap, lmNewsMap] = await Promise.all([
+                const [lmPriceMap, lmNewsMap, lmTechMap] = await Promise.all([
                     lmFfTickers.length ? fetchQuotesCached(lmFfTickers) : Promise.resolve({}),
-                    lmFfTickers.length ? fetchNewsForPromptBatch(lmFfTickers) : Promise.resolve({})
+                    lmFfTickers.length ? fetchNewsForPromptBatch(lmFfTickers) : Promise.resolve({}),
+                    lmFfTickers.length ? fetchTechnicalsBatch(lmFfTickers) : Promise.resolve({})
                 ]);
                 newCards = newCards.map(s=>{
                     const k=(s.ticker||'').toUpperCase();
@@ -2909,6 +2952,8 @@ async function loadMoreFilter(){
                     else s._priceIsLive=false;
                     const ne=lmNewsMap[k];
                     if(ne&&ne.items&&ne.items.length) s._newsItems=ne.items.slice(0,2);
+                    const te=lmTechMap[k];
+                    if(te) s._techData=te;
                     return s;
                 });
                 // Layer 1 — Stock-price proxy filter (instant)
@@ -3031,9 +3076,10 @@ async function runActiveFilter(){
             cards = JSON.parse(stripJSON(raw));
             const ffTickers = [...new Set(cards.map(s=>(s.ticker||'').toUpperCase()).filter(Boolean))];
             try{
-                const [ffPriceMap, ffNewsMap] = await Promise.all([
+                const [ffPriceMap, ffNewsMap, ffTechMap] = await Promise.all([
                     ffTickers.length ? fetchQuotesCached(ffTickers) : Promise.resolve({}),
-                    ffTickers.length ? fetchNewsForPromptBatch(ffTickers) : Promise.resolve({})
+                    ffTickers.length ? fetchNewsForPromptBatch(ffTickers) : Promise.resolve({}),
+                    ffTickers.length ? fetchTechnicalsBatch(ffTickers) : Promise.resolve({})
                 ]);
                 cards = cards.map(s=>{
                     const k=(s.ticker||'').toUpperCase();
@@ -3042,6 +3088,8 @@ async function runActiveFilter(){
                     else s._priceIsLive=false;
                     const ne=ffNewsMap[k];
                     if(ne&&ne.items&&ne.items.length) s._newsItems=ne.items.slice(0,2);
+                    const te=ffTechMap[k];
+                    if(te) s._techData=te;
                     return s;
                 });
                 // Layer 1 — Stock-price proxy filter (instant): eliminates obviously wrong stocks
