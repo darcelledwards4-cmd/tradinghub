@@ -2404,11 +2404,11 @@ function buildCard(idea, existingCardId=null){
                 const putU =flow.unusual.filter(u=>u.type==='put');
                 if(callU.length){
                     const u=callU[0];
-                    pills.push(`<span class="tpill tpill-up">🔥 Unusual CALLs $${u.strike} · ${(u.volume/1000).toFixed(1)}k vol${u.ratio?` (${u.ratio}× OI)':''}</span>`);
+                    pills.push(`<span class="tpill tpill-up">🔥 Unusual CALLs $${u.strike} · ${(u.volume/1000).toFixed(1)}k vol${u.ratio?' ('+u.ratio+'× OI)':''}</span>`);
                 }
                 if(putU.length){
                     const u=putU[0];
-                    pills.push(`<span class="tpill tpill-dn">🔥 Unusual PUTs $${u.strike} · ${(u.volume/1000).toFixed(1)}k vol${u.ratio?` (${u.ratio}× OI)`:''}</span>`);
+                    pills.push(`<span class="tpill tpill-dn">🔥 Unusual PUTs $${u.strike} · ${(u.volume/1000).toFixed(1)}k vol${u.ratio?' ('+u.ratio+'× OI)':''}</span>`);
                 }
             }
             // ── Candlestick patterns ─────────────────────────────────────
