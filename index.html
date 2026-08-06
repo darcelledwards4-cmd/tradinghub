@@ -2319,20 +2319,17 @@ function buildTechPillsHTML(tech, flow){
 
 // Injects tech/flow pills into already-rendered cards without a full re-render
 function injectTechPillsIntoCards(techMap, flowMap){
+    // 1. Persist onto stored card objects so ALL future rebuilds include the data
     Object.entries(window._cardData||{}).forEach(([cardId,data])=>{
         const ticker=(data.ticker||'').toUpperCase();
         const tech=techMap[ticker];
         const flow=flowMap[ticker];
         if(!tech && !flow) return;
-        // Persist onto stored card objects so future rebuilds include it
         ['call','put'].forEach(dir=>{
             if(data[dir]){ data[dir]._techData=tech; data[dir]._flowData=flow; }
         });
-        // Directly update the pill container in the DOM
-        const el=document.getElementById('ctech-'+cardId);
-        if(el) el.outerHTML=`<div id="ctech-${cardId}">${buildTechPillsHTML(tech,flow)}</div>`;
     });
-    // Also persist to filterAllCards / localStorage
+    // 2. Persist to filterAllCards / localStorage
     Object.keys(filterAllCards).forEach(key=>{
         filterAllCards[key]=(filterAllCards[key]||[]).map(c=>{
             const k=(c.ticker||'').toUpperCase();
@@ -2342,6 +2339,22 @@ function injectTechPillsIntoCards(techMap, flowMap){
         });
         saveCardsToStorage(key,filterAllCards[key]);
     });
+    // 3. DOM injection — runs now AND after delays to win any race with enrichCardsWithOptionPrices
+    function doInject(){
+        Object.entries(window._cardData||{}).forEach(([cardId,data])=>{
+            const ticker=(data.ticker||'').toUpperCase();
+            const tech=techMap[ticker];
+            const flow=flowMap[ticker];
+            if(!tech && !flow) return;
+            const html=buildTechPillsHTML(tech,flow);
+            if(!html) return;
+            const el=document.getElementById('ctech-'+cardId);
+            if(el) el.outerHTML=`<div id="ctech-${cardId}">${html}</div>`;
+        });
+    }
+    doInject();
+    setTimeout(doInject, 1500);
+    setTimeout(doInject, 4000);
 }
 
 function buildCard(idea, existingCardId=null){
