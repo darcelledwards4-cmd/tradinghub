@@ -1163,39 +1163,37 @@ function restoreLastSession(){
     // Auto-refresh prices + news in the background
     const tickers = [...new Set(cards.map(c=>(c.ticker||'').toUpperCase()).filter(Boolean))];
     if(tickers.length){
+        // Phase 1 — prices + news (fast)
         Promise.all([
             fetchQuotesCached(tickers),
-            fetchNewsForPromptBatch(tickers),
-            fetchTechnicalsBatch(tickers),
-            fetchFlowBatch(tickers)
-        ]).then(([qMap, newsMap, techMap, flowMap])=>{
-            const updated = (filterAllCards[lastKey]||[]).map(c=>{
+            fetchNewsForPromptBatch(tickers)
+        ]).then(([qMap, newsMap])=>{
+            const updated=(filterAllCards[lastKey]||[]).map(c=>{
                 const k=(c.ticker||'').toUpperCase();
                 const q=qMap[k];
                 if(q&&q.c){ c={...c,current_price:q.c,price_change:q.dp||0,_priceIsLive:true}; }
                 const n=newsMap[k];
                 if(n&&n.items&&n.items.length) c={...c,_newsItems:n.items.slice(0,2)};
-                const te=techMap[k];
-                if(te) c={...c,_techData:te};
-                const fl=flowMap[k];
-                if(fl) c={...c,_flowData:fl};
                 return c;
             });
             filterAllCards[lastKey]=updated;
             filterCache[lastKey]=updated;
-            // Re-render with fresh news + prices + technicals + flow
-            renderFilterResult(lastKey, updated);
-            saveCardsToStorage(lastKey, updated);
+            renderFilterResult(lastKey,updated);
+            saveCardsToStorage(lastKey,updated);
             const now=new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'});
             document.getElementById('lastScan').textContent=`Restored · prices & news refreshed ${now} — hit ⚡ to rescan`;
             document.getElementById('lastUpdated').textContent=`Prices live · ${now}`;
         }).catch(()=>{
-            // prices only fallback
-            fetchQuotesCached(tickers).then(qMap=>{
-                refreshVisiblePrices();
-            });
+            fetchQuotesCached(tickers).then(()=>refreshVisiblePrices());
             document.getElementById('lastScan').textContent='Restored from last session — hit ⚡ to rescan';
         });
+        // Phase 2 — technicals + flow injected directly into rendered cards (no re-render needed)
+        Promise.all([
+            fetchTechnicalsBatch(tickers),
+            fetchFlowBatch(tickers)
+        ]).then(([techMap, flowMap])=>{
+            injectTechPillsIntoCards(techMap, flowMap);
+        }).catch(()=>{});
     } else {
         document.getElementById('lastScan').textContent = 'Restored from last session — hit ⚡ to rescan';
     }
@@ -2264,6 +2262,88 @@ async function callClaude(prompt){
 }
 
 // ── BUILD CARD ────────────────────────────────────────────────
+function buildTechPillsHTML(tech, flow){
+    if(!tech && !flow) return '';
+    const pills=[];
+    if(tech?.rsi!=null){
+        const hot=tech.rsi>=70,cold=tech.rsi<=30;
+        pills.push(`<span class="tpill tpill-${hot?'hot':cold?'cold':'neu'}">RSI ${tech.rsi} · ${hot?'Overbought ⚠':cold?'Oversold — dip buy':'Neutral'}</span>`);
+    }
+    if(tech?.currentClose&&tech.ma50){
+        const pct=((tech.currentClose-tech.ma50)/tech.ma50*100);
+        pills.push(`<span class="tpill tpill-${pct>=0?'up':'dn'}">${pct>=0?'+':''}${pct.toFixed(1)}% vs 50d MA $${tech.ma50}</span>`);
+    }
+    if(tech?.currentClose&&tech.ma200){
+        const above=tech.currentClose>tech.ma200;
+        pills.push(`<span class="tpill tpill-${above?'up':'dn'}">${above?'Above':'Below'} 200d MA $${tech.ma200}</span>`);
+    }
+    if(tech?.high52&&tech.low52){
+        const pctHi=tech.currentClose?((tech.high52-tech.currentClose)/tech.high52*100).toFixed(1):null;
+        pills.push(`<span class="tpill tpill-neu">52-wk $${tech.low52}–$${tech.high52}${pctHi!=null?' · '+pctHi+'% off high':''}</span>`);
+    }
+    if(tech?.high90&&tech.low90) pills.push(`<span class="tpill tpill-neu">3-mo $${tech.low90}–$${tech.high90}</span>`);
+    if(flow?.atmIV!=null&&tech?.hv30!=null){
+        const ratio=(flow.atmIV/tech.hv30);
+        const ivrLbl=ratio>=1.5?'Options Expensive ⚠':ratio<=0.8?'Options Cheap 💚':'Fair Value';
+        pills.push(`<span class="tpill tpill-${ratio>=1.5?'hot':ratio<=0.8?'cold':'neu'}">IV ${flow.atmIV}% vs HV ${tech.hv30}% · ${ivrLbl}</span>`);
+    }
+    if(flow?.callFlow!=null){
+        const b=flow.callFlow>60,bear=flow.putFlow>60;
+        pills.push(`<span class="tpill tpill-${b?'up':bear?'dn':'neu'}">🌊 ${b?flow.callFlow+'% Calls — Bullish Flow':bear?flow.putFlow+'% Puts — Bearish Flow':'Balanced Flow'}</span>`);
+    }
+    if(flow?.unusual?.length){
+        const cU=flow.unusual.filter(u=>u.type==='call');
+        const pU=flow.unusual.filter(u=>u.type==='put');
+        if(cU.length){const u=cU[0];pills.push(`<span class="tpill tpill-up">🔥 Unusual CALLs $${u.strike} · ${(u.volume/1000).toFixed(1)}k vol${u.ratio?' ('+u.ratio+'× OI)':''}</span>`);}
+        if(pU.length){const u=pU[0];pills.push(`<span class="tpill tpill-dn">🔥 Unusual PUTs $${u.strike} · ${(u.volume/1000).toFixed(1)}k vol${u.ratio?' ('+u.ratio+'× OI)':''}</span>`);}
+    }
+    if(tech?.patterns?.length) tech.patterns.slice(0,2).forEach(p=>{
+        pills.push(`<span class="tpill tpill-${p.signal==='bullish'?'up':p.signal==='bearish'?'dn':'neu'}" title="${p.desc}">🕯 ${p.name}</span>`);
+    });
+    if(tech?.analystTarget){
+        const up=tech.currentClose?((tech.analystTarget-tech.currentClose)/tech.currentClose*100):null;
+        pills.push(`<span class="tpill tpill-${up>=5?'up':up<0?'dn':'neu'}">🎯 Analyst $${tech.analystTarget}${up!=null?' ('+( up>=0?'+':'')+up.toFixed(1)+'%)':''}</span>`);
+    }
+    if(tech?.daysToEarnings!=null&&tech.daysToEarnings>=0&&tech.daysToEarnings<=60)
+        pills.push(`<span class="tpill tpill-neu">📅 Earnings in ${tech.daysToEarnings}d</span>`);
+    if(tech?.earningsSurprises?.length){
+        const beats=tech.earningsSurprises.filter(e=>e.beat===true).length;
+        const total=tech.earningsSurprises.length;
+        const avg=tech.avgSurprise;
+        const cls=beats>=Math.ceil(total*0.75)?'up':beats<=Math.floor(total*0.25)?'dn':'neu';
+        pills.push(`<span class="tpill tpill-${cls}">📊 Earnings ${beats}/${total} beats${avg!=null?' avg '+(avg>=0?'+':'')+avg+'%':''}</span>`);
+    }
+    if(!pills.length) return '';
+    return `<div class="card-tech"><div class="card-tech-lbl">📊 Market Intelligence — Entry Signals</div><div class="card-tech-pills">${pills.join('')}</div></div>`;
+}
+
+// Injects tech/flow pills into already-rendered cards without a full re-render
+function injectTechPillsIntoCards(techMap, flowMap){
+    Object.entries(window._cardData||{}).forEach(([cardId,data])=>{
+        const ticker=(data.ticker||'').toUpperCase();
+        const tech=techMap[ticker];
+        const flow=flowMap[ticker];
+        if(!tech && !flow) return;
+        // Persist onto stored card objects so future rebuilds include it
+        ['call','put'].forEach(dir=>{
+            if(data[dir]){ data[dir]._techData=tech; data[dir]._flowData=flow; }
+        });
+        // Directly update the pill container in the DOM
+        const el=document.getElementById('ctech-'+cardId);
+        if(el) el.outerHTML=`<div id="ctech-${cardId}">${buildTechPillsHTML(tech,flow)}</div>`;
+    });
+    // Also persist to filterAllCards / localStorage
+    Object.keys(filterAllCards).forEach(key=>{
+        filterAllCards[key]=(filterAllCards[key]||[]).map(c=>{
+            const k=(c.ticker||'').toUpperCase();
+            if(techMap[k]) c={...c,_techData:techMap[k]};
+            if(flowMap[k]) c={...c,_flowData:flowMap[k]};
+            return c;
+        });
+        saveCardsToStorage(key,filterAllCards[key]);
+    });
+}
+
 function buildCard(idea, existingCardId=null){
     const cardId = existingCardId || ('c' + (++_cardIdCounter));
     const optType=(idea.option_type||'CALL').toUpperCase();
@@ -2359,94 +2439,7 @@ function buildCard(idea, existingCardId=null){
             return `<div class="card-news-cite"><div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--muted);margin-bottom:3px">📰 Live News Used</div>${rows}</div>`;
         })()}
         ${pcSection}
-        ${(()=>{
-            const tech=idea._techData;
-            const flow=idea._flowData;
-            console.log('[buildCard]',idea.ticker,'_techData=',!!tech,'_flowData=',!!flow, tech?.rsi, flow?.callFlow);
-            if(!tech && !flow) return '';
-            const pills=[];
-
-            // ── RSI ──────────────────────────────────────────────────────
-            if(tech?.rsi!=null){
-                const hot=tech.rsi>=70,cold=tech.rsi<=30;
-                const cls=hot?'hot':cold?'cold':'neu';
-                const lbl=hot?'Overbought ⚠':cold?'Oversold — dip buy':'Neutral';
-                pills.push(`<span class="tpill tpill-${cls}">RSI ${tech.rsi} · ${lbl}</span>`);
-            }
-            // ── Moving averages ──────────────────────────────────────────
-            if(tech?.currentClose&&tech.ma50){
-                const pct=((tech.currentClose-tech.ma50)/tech.ma50*100);
-                pills.push(`<span class="tpill tpill-${pct>=0?'up':'dn'}">${pct>=0?'+':''}${pct.toFixed(1)}% vs 50d MA $${tech.ma50}</span>`);
-            }
-            if(tech?.currentClose&&tech.ma200){
-                const above=tech.currentClose>tech.ma200;
-                pills.push(`<span class="tpill tpill-${above?'up':'dn'}">${above?'Above':'Below'} 200d MA $${tech.ma200}</span>`);
-            }
-            // ── Support / resistance ─────────────────────────────────────
-            if(tech?.high52&&tech.low52){
-                const pctHi=tech.currentClose?((tech.high52-tech.currentClose)/tech.high52*100).toFixed(1):null;
-                const pos=pctHi!=null?` · ${pctHi}% off high`:'';
-                pills.push(`<span class="tpill tpill-neu">52-wk $${tech.low52}–$${tech.high52}${pos}</span>`);
-            }
-            if(tech?.high90&&tech.low90){
-                pills.push(`<span class="tpill tpill-neu">3-mo $${tech.low90}–$${tech.high90}</span>`);
-            }
-            // ── IVR approximation (ATM IV vs HV30) ──────────────────────
-            if(flow?.atmIV!=null&&tech?.hv30!=null){
-                const ratio=(flow.atmIV/tech.hv30);
-                const ivrLbl=ratio>=1.5?'Options Expensive ⚠':ratio<=0.8?'Options Cheap 💚':'Fair Value';
-                const ivrCls=ratio>=1.5?'hot':ratio<=0.8?'cold':'neu';
-                pills.push(`<span class="tpill tpill-${ivrCls}">IV ${flow.atmIV}% vs HV ${tech.hv30}% · ${ivrLbl}</span>`);
-            }
-            // ── Options flow bias ────────────────────────────────────────
-            if(flow?.callFlow!=null){
-                const bullBias=flow.callFlow>60,bearBias=flow.putFlow>60;
-                const fCls=bullBias?'up':bearBias?'dn':'neu';
-                const fLbl=bullBias?`${flow.callFlow}% Calls — Bullish Flow`:bearBias?`${flow.putFlow}% Puts — Bearish Flow`:`Balanced Flow`;
-                pills.push(`<span class="tpill tpill-${fCls}">🌊 ${fLbl}</span>`);
-            }
-            // ── Unusual activity ─────────────────────────────────────────
-            if(flow?.unusual?.length){
-                const callU=flow.unusual.filter(u=>u.type==='call');
-                const putU =flow.unusual.filter(u=>u.type==='put');
-                if(callU.length){
-                    const u=callU[0];
-                    pills.push(`<span class="tpill tpill-up">🔥 Unusual CALLs $${u.strike} · ${(u.volume/1000).toFixed(1)}k vol${u.ratio?' ('+u.ratio+'× OI)':''}</span>`);
-                }
-                if(putU.length){
-                    const u=putU[0];
-                    pills.push(`<span class="tpill tpill-dn">🔥 Unusual PUTs $${u.strike} · ${(u.volume/1000).toFixed(1)}k vol${u.ratio?' ('+u.ratio+'× OI)':''}</span>`);
-                }
-            }
-            // ── Candlestick patterns ─────────────────────────────────────
-            if(tech?.patterns?.length){
-                tech.patterns.slice(0,2).forEach(p=>{
-                    const cls=p.signal==='bullish'?'up':p.signal==='bearish'?'dn':'neu';
-                    pills.push(`<span class="tpill tpill-${cls}" title="${p.desc}">🕯 ${p.name}</span>`);
-                });
-            }
-            // ── Analyst target ───────────────────────────────────────────
-            if(tech?.analystTarget){
-                const up=tech.currentClose?((tech.analystTarget-tech.currentClose)/tech.currentClose*100):null;
-                const upStr=up!=null?` (${up>=0?'+':''}${up.toFixed(1)}%)`:'';
-                pills.push(`<span class="tpill tpill-${up>=5?'up':up<0?'dn':'neu'}">🎯 Analyst $${tech.analystTarget}${upStr}</span>`);
-            }
-            // ── Earnings: next date + beat/miss history ──────────────────
-            if(tech?.daysToEarnings!=null&&tech.daysToEarnings>=0&&tech.daysToEarnings<=60){
-                pills.push(`<span class="tpill tpill-neu">📅 Earnings in ${tech.daysToEarnings}d</span>`);
-            }
-            if(tech?.earningsSurprises?.length){
-                const beats=tech.earningsSurprises.filter(e=>e.beat===true).length;
-                const total=tech.earningsSurprises.length;
-                const avg=tech.avgSurprise;
-                const cls=beats>=Math.ceil(total*0.75)?'up':beats<=Math.floor(total*0.25)?'dn':'neu';
-                const avgStr=avg!=null?` avg ${avg>=0?'+':''}${avg}%`:'';
-                pills.push(`<span class="tpill tpill-${cls}">📊 Earnings ${beats}/${total} beats${avgStr}</span>`);
-            }
-
-            if(!pills.length) return '';
-            return `<div class="card-tech"><div class="card-tech-lbl">📊 Market Intelligence — Entry Signals</div><div class="card-tech-pills">${pills.join('')}</div></div>`;
-        })()}
+        <div id="ctech-${cardId}">${buildTechPillsHTML(idea._techData,idea._flowData)}</div>
         <div class="card-levels">
             <div class="level-row">
                 <div class="level-left"><div class="level-icon">📥</div><div><div class="level-lbl">Enter Between</div><div class="level-hint">Buy the option when stock enters this zone</div></div></div>
