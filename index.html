@@ -1165,19 +1165,25 @@ function restoreLastSession(){
     if(tickers.length){
         Promise.all([
             fetchQuotesCached(tickers),
-            fetchNewsForPromptBatch(tickers)   // re-fetch news stripped by localStorage
-        ]).then(([qMap, newsMap])=>{
+            fetchNewsForPromptBatch(tickers),
+            fetchTechnicalsBatch(tickers),
+            fetchFlowBatch(tickers)
+        ]).then(([qMap, newsMap, techMap, flowMap])=>{
             const updated = (filterAllCards[lastKey]||[]).map(c=>{
                 const k=(c.ticker||'').toUpperCase();
                 const q=qMap[k];
                 if(q&&q.c){ c={...c,current_price:q.c,price_change:q.dp||0,_priceIsLive:true}; }
                 const n=newsMap[k];
                 if(n&&n.items&&n.items.length) c={...c,_newsItems:n.items.slice(0,2)};
+                const te=techMap[k];
+                if(te) c={...c,_techData:te};
+                const fl=flowMap[k];
+                if(fl) c={...c,_flowData:fl};
                 return c;
             });
             filterAllCards[lastKey]=updated;
             filterCache[lastKey]=updated;
-            // Re-render with fresh news + prices
+            // Re-render with fresh news + prices + technicals + flow
             renderFilterResult(lastKey, updated);
             saveCardsToStorage(lastKey, updated);
             const now=new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'});
