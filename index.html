@@ -4805,7 +4805,7 @@ function buildJournalCard(trade){
         </div>
     </div>`;
 }
-function journalAnalysisPrompt(trade,currentPrice,priceChange,newsText,optData){
+function journalAnalysisPrompt(trade,currentPrice,priceChange,newsText,optData,techData,flowData){
     const isCall=(trade.type||'CALL')==='CALL';
     const dir=isCall?'CALL (bullish — profit if stock goes UP)':'PUT (bearish — profit if stock goes DOWN)';
     const stopLoss=parseFloat(trade.stop_loss)||0;
@@ -4896,6 +4896,33 @@ STOCK PRICE CONTEXT (secondary — use to assess thesis direction):
 ${stockVsEntry?'- '+stockVsEntry:''}
 
 ${newsText?'\nRecent news:\n'+newsText:'No recent news available.'}
+${(()=>{
+    const parts=[];
+    if(techData){
+        if(techData.rsi!=null) parts.push(`RSI(14): ${techData.rsi}${techData.rsi>70?' — overbought, momentum may stall':techData.rsi<30?' — oversold, potential reversal':' — neutral momentum'}`);
+        if(techData.ma50!=null && currentPrice>0) parts.push(`50d MA: $${techData.ma50} (stock ${currentPrice>techData.ma50?'above — bullish':'below — bearish'} short-term trend)`);
+        if(techData.ma200!=null) parts.push(`200d MA: $${techData.ma200} (stock ${currentPrice>techData.ma200?'above — long-term uptrend':'below — long-term downtrend'})`);
+        if(techData.high52!=null && techData.low52!=null) parts.push(`52-wk range: $${techData.low52}–$${techData.high52} (stock at ${Math.round((currentPrice-techData.low52)/(techData.high52-techData.low52)*100)}% of range)`);
+        if(techData.hv30!=null) parts.push(`HV30: ${techData.hv30}% (30-day historical volatility)`);
+        if(techData.patterns && techData.patterns.length) parts.push(`Recent candlestick patterns: ${techData.patterns.map(p=>p.name+' ('+p.signal+')').join(', ')}`);
+        if(techData.beatCount!=null && techData.avgSurprise!=null) parts.push(`Earnings history: ${techData.beatCount}/4 beats, avg surprise ${techData.avgSurprise>0?'+':''}${techData.avgSurprise}%`);
+    }
+    if(flowData){
+        if(flowData.atmIV!=null && techData?.hv30!=null){
+            const ratio=(flowData.atmIV/techData.hv30).toFixed(2);
+            const label=ratio>1.5?'expensive (IV crush risk if thesis plays out)':ratio<0.8?'cheap (favorable risk/reward)':'fair value';
+            parts.push(`IVR: ATM IV ${flowData.atmIV}% vs HV30 ${techData.hv30}% (ratio ${ratio}) — options ${label}`);
+        }
+        if(flowData.callFlow!=null) parts.push(`Options flow: ${flowData.callFlow}% calls / ${100-flowData.callFlow}% puts — ${flowData.callFlow>60?'bullish':flowData.callFlow<40?'bearish':'neutral'} bias`);
+        if(flowData.unusual && flowData.unusual.length){
+            const calls=flowData.unusual.filter(u=>u.type==='call');
+            const puts=flowData.unusual.filter(u=>u.type==='put');
+            if(calls.length) parts.push(`Unusual CALL activity: $${calls[0].strike} strike, ${calls[0].volume.toLocaleString()} contracts${calls[0].ratio?' ('+calls[0].ratio+'× OI)':''} — large bullish bet`);
+            if(puts.length) parts.push(`Unusual PUT activity: $${puts[0].strike} strike, ${puts[0].volume.toLocaleString()} contracts${puts[0].ratio?' ('+puts[0].ratio+'× OI)':''} — large bearish/hedge bet`);
+        }
+    }
+    return parts.length ? '\nTECHNICALS & OPTIONS FLOW CONTEXT:\n'+parts.map(p=>'- '+p).join('\n') : '';
+})()}
 
 IMPORTANT — stop/target are OPTION CONTRACT PRICES:
 The stop ($${stopLoss||'not set'}) and target ($${target||'not set'}) are the option contract prices the trader chose as exit levels. If the live option price hits or drops below stop → exit. If it reaches target → take profit.
@@ -4905,13 +4932,14 @@ Based on ALL the facts above, assess whether to hold, adjust, or exit.
 - If option price ≤ stop: exit signal triggered
 - If option price ≥ target: take profit signal
 - Also assess Greeks: theta decay, delta (how sensitive to stock move), vega (IV impact)
-- If stop/target not set, give a recommendation based on P&L% and Greeks alone
+- If technicals/flow data is present: factor RSI, MA trend, IVR (cheap/expensive options), and unusual flow into your confidence level
+- If stop/target not set, give a recommendation based on P&L%, Greeks, and technicals
 
 Return ONLY this JSON (no markdown):
-{"recommendation":"hold","reason":"2-3 sentences — reference option price vs stop/target, P&L%, and at least one Greek if available","rating":"moderate","action":"1 specific actionable sentence with the option price level to act on","option_summary":"1 plain-English sentence: option price vs stop/target, P&L%, and one key Greek insight"}
+{"recommendation":"hold","reason":"2-3 sentences — reference option price vs stop/target, P&L%, a Greek, and 1 technical or flow signal if available","rating":"moderate","action":"1 specific actionable sentence with the option price level to act on","option_summary":"1 plain-English sentence covering option price vs stop/target, P&L%, and one key signal (Greek, RSI, IVR, or flow)"}
 
 recommendation: "hold", "adjust", or "exit" only
-rating: "high" (option above stop, moving toward target), "moderate" (mixed signals), "low" (option near stop or bleeding from theta), or "exit" (stop hit or thesis failed)`;
+rating: "high" (option above stop, moving toward target, technicals confirm), "moderate" (mixed signals), "low" (option near stop or bleeding from theta), or "exit" (stop hit or thesis failed)`;
 }
 // Fetch live option price + Greeks for a specific logged trade
 async function fetchLiveOptionData(trade){
@@ -4976,9 +5004,11 @@ async function analyzeOpenTrades(){
     renderJournal();
     try{
         const tickers=[...new Set(open.map(t=>t.ticker).filter(Boolean))];
-        const [priceMap,newsMap]=await Promise.all([
+        const [priceMap,newsMap,jTechMap,jFlowMap]=await Promise.all([
             tickers.length?fetchQuotes(tickers):Promise.resolve({}),
-            tickers.length?fetchNewsForPromptBatch(tickers):Promise.resolve({})
+            tickers.length?fetchNewsForPromptBatch(tickers):Promise.resolve({}),
+            tickers.length?fetchTechnicalsBatch(tickers):Promise.resolve({}),
+            tickers.length?fetchFlowBatch(tickers):Promise.resolve({})
         ]);
         for(const trade of open){
             try{
@@ -4987,11 +5017,13 @@ async function analyzeOpenTrades(){
                 const priceChange=q?.dp||0;
                 const newsEntry=newsMap[(trade.ticker||'').toUpperCase()];
                 const newsText=newsEntry?.text||'';
+                const jTech=jTechMap[(trade.ticker||'').toUpperCase()]||null;
+                const jFlow=jFlowMap[(trade.ticker||'').toUpperCase()]||null;
                 // Fetch live option data + Greeks for this specific contract
                 // Attach live stock price so Black-Scholes fallback has it
                 trade._liveStockPrice = currentPrice;
                 const optData=await fetchLiveOptionData(trade);
-                const raw=await callClaude(journalAnalysisPrompt(trade,currentPrice,priceChange,newsText,optData));
+                const raw=await callClaude(journalAnalysisPrompt(trade,currentPrice,priceChange,newsText,optData,jTech,jFlow));
                 const result=JSON.parse(stripJSON(raw));
                 const idx=trades.findIndex(t=>t.id===trade.id);
                 if(idx>=0){
