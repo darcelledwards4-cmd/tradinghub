@@ -2362,6 +2362,7 @@ function buildCard(idea, existingCardId=null){
         ${(()=>{
             const tech=idea._techData;
             const flow=idea._flowData;
+            console.log('[buildCard]',idea.ticker,'_techData=',!!tech,'_flowData=',!!flow, tech?.rsi, flow?.callFlow);
             if(!tech && !flow) return '';
             const pills=[];
 
