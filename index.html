@@ -2355,41 +2355,90 @@ function buildCard(idea, existingCardId=null){
         ${pcSection}
         ${(()=>{
             const tech=idea._techData;
-            if(!tech) return '';
+            const flow=idea._flowData;
+            if(!tech && !flow) return '';
             const pills=[];
-            if(tech.rsi!=null){
+
+            // ── RSI ──────────────────────────────────────────────────────
+            if(tech?.rsi!=null){
                 const hot=tech.rsi>=70,cold=tech.rsi<=30;
                 const cls=hot?'hot':cold?'cold':'neu';
                 const lbl=hot?'Overbought ⚠':cold?'Oversold — dip buy':'Neutral';
                 pills.push(`<span class="tpill tpill-${cls}">RSI ${tech.rsi} · ${lbl}</span>`);
             }
-            if(tech.currentClose&&tech.ma50){
+            // ── Moving averages ──────────────────────────────────────────
+            if(tech?.currentClose&&tech.ma50){
                 const pct=((tech.currentClose-tech.ma50)/tech.ma50*100);
                 pills.push(`<span class="tpill tpill-${pct>=0?'up':'dn'}">${pct>=0?'+':''}${pct.toFixed(1)}% vs 50d MA $${tech.ma50}</span>`);
             }
-            if(tech.currentClose&&tech.ma200){
+            if(tech?.currentClose&&tech.ma200){
                 const above=tech.currentClose>tech.ma200;
                 pills.push(`<span class="tpill tpill-${above?'up':'dn'}">${above?'Above':'Below'} 200d MA $${tech.ma200}</span>`);
             }
-            if(tech.high52&&tech.low52){
+            // ── Support / resistance ─────────────────────────────────────
+            if(tech?.high52&&tech.low52){
                 const pctHi=tech.currentClose?((tech.high52-tech.currentClose)/tech.high52*100).toFixed(1):null;
-                const pctLo=tech.currentClose?((tech.currentClose-tech.low52)/tech.low52*100).toFixed(1):null;
                 const pos=pctHi!=null?` · ${pctHi}% off high`:'';
                 pills.push(`<span class="tpill tpill-neu">52-wk $${tech.low52}–$${tech.high52}${pos}</span>`);
             }
-            if(tech.high90&&tech.low90){
+            if(tech?.high90&&tech.low90){
                 pills.push(`<span class="tpill tpill-neu">3-mo $${tech.low90}–$${tech.high90}</span>`);
             }
-            if(tech.analystTarget){
+            // ── IVR approximation (ATM IV vs HV30) ──────────────────────
+            if(flow?.atmIV!=null&&tech?.hv30!=null){
+                const ratio=(flow.atmIV/tech.hv30);
+                const ivrLbl=ratio>=1.5?'Options Expensive ⚠':ratio<=0.8?'Options Cheap 💚':'Fair Value';
+                const ivrCls=ratio>=1.5?'hot':ratio<=0.8?'cold':'neu';
+                pills.push(`<span class="tpill tpill-${ivrCls}">IV ${flow.atmIV}% vs HV ${tech.hv30}% · ${ivrLbl}</span>`);
+            }
+            // ── Options flow bias ────────────────────────────────────────
+            if(flow?.callFlow!=null){
+                const bullBias=flow.callFlow>60,bearBias=flow.putFlow>60;
+                const fCls=bullBias?'up':bearBias?'dn':'neu';
+                const fLbl=bullBias?`${flow.callFlow}% Calls — Bullish Flow`:bearBias?`${flow.putFlow}% Puts — Bearish Flow`:`Balanced Flow`;
+                pills.push(`<span class="tpill tpill-${fCls}">🌊 ${fLbl}</span>`);
+            }
+            // ── Unusual activity ─────────────────────────────────────────
+            if(flow?.unusual?.length){
+                const callU=flow.unusual.filter(u=>u.type==='call');
+                const putU =flow.unusual.filter(u=>u.type==='put');
+                if(callU.length){
+                    const u=callU[0];
+                    pills.push(`<span class="tpill tpill-up">🔥 Unusual CALLs $${u.strike} · ${(u.volume/1000).toFixed(1)}k vol${u.ratio?` (${u.ratio}× OI)':''}</span>`);
+                }
+                if(putU.length){
+                    const u=putU[0];
+                    pills.push(`<span class="tpill tpill-dn">🔥 Unusual PUTs $${u.strike} · ${(u.volume/1000).toFixed(1)}k vol${u.ratio?` (${u.ratio}× OI)`:''}</span>`);
+                }
+            }
+            // ── Candlestick patterns ─────────────────────────────────────
+            if(tech?.patterns?.length){
+                tech.patterns.slice(0,2).forEach(p=>{
+                    const cls=p.signal==='bullish'?'up':p.signal==='bearish'?'dn':'neu';
+                    pills.push(`<span class="tpill tpill-${cls}" title="${p.desc}">🕯 ${p.name}</span>`);
+                });
+            }
+            // ── Analyst target ───────────────────────────────────────────
+            if(tech?.analystTarget){
                 const up=tech.currentClose?((tech.analystTarget-tech.currentClose)/tech.currentClose*100):null;
                 const upStr=up!=null?` (${up>=0?'+':''}${up.toFixed(1)}%)`:'';
                 pills.push(`<span class="tpill tpill-${up>=5?'up':up<0?'dn':'neu'}">🎯 Analyst $${tech.analystTarget}${upStr}</span>`);
             }
-            if(tech.daysToEarnings!=null&&tech.daysToEarnings>=0&&tech.daysToEarnings<=60){
+            // ── Earnings: next date + beat/miss history ──────────────────
+            if(tech?.daysToEarnings!=null&&tech.daysToEarnings>=0&&tech.daysToEarnings<=60){
                 pills.push(`<span class="tpill tpill-neu">📅 Earnings in ${tech.daysToEarnings}d</span>`);
             }
+            if(tech?.earningsSurprises?.length){
+                const beats=tech.earningsSurprises.filter(e=>e.beat===true).length;
+                const total=tech.earningsSurprises.length;
+                const avg=tech.avgSurprise;
+                const cls=beats>=Math.ceil(total*0.75)?'up':beats<=Math.floor(total*0.25)?'dn':'neu';
+                const avgStr=avg!=null?` avg ${avg>=0?'+':''}${avg}%`:'';
+                pills.push(`<span class="tpill tpill-${cls}">📊 Earnings ${beats}/${total} beats${avgStr}</span>`);
+            }
+
             if(!pills.length) return '';
-            return `<div class="card-tech"><div class="card-tech-lbl">📊 Chart Signals — Entry Timing</div><div class="card-tech-pills">${pills.join('')}</div></div>`;
+            return `<div class="card-tech"><div class="card-tech-lbl">📊 Market Intelligence — Entry Signals</div><div class="card-tech-pills">${pills.join('')}</div></div>`;
         })()}
         <div class="card-levels">
             <div class="level-row">
@@ -2946,10 +2995,11 @@ async function loadMoreFilter(){
             newCards = JSON.parse(stripJSON(raw));
             const lmFfTickers = [...new Set(newCards.map(s=>(s.ticker||'').toUpperCase()).filter(Boolean))];
             try{
-                const [lmPriceMap, lmNewsMap, lmTechMap] = await Promise.all([
+                const [lmPriceMap, lmNewsMap, lmTechMap, lmFlowMap] = await Promise.all([
                     lmFfTickers.length ? fetchQuotesCached(lmFfTickers) : Promise.resolve({}),
                     lmFfTickers.length ? fetchNewsForPromptBatch(lmFfTickers) : Promise.resolve({}),
-                    lmFfTickers.length ? fetchTechnicalsBatch(lmFfTickers) : Promise.resolve({})
+                    lmFfTickers.length ? fetchTechnicalsBatch(lmFfTickers) : Promise.resolve({}),
+                    lmFfTickers.length ? fetchFlowBatch(lmFfTickers) : Promise.resolve({})
                 ]);
                 newCards = newCards.map(s=>{
                     const k=(s.ticker||'').toUpperCase();
@@ -2960,6 +3010,8 @@ async function loadMoreFilter(){
                     if(ne&&ne.items&&ne.items.length) s._newsItems=ne.items.slice(0,2);
                     const te=lmTechMap[k];
                     if(te) s._techData=te;
+                    const fl=lmFlowMap[k];
+                    if(fl) s._flowData=fl;
                     return s;
                 });
                 // Layer 1 — Stock-price proxy filter (instant)
@@ -3082,10 +3134,11 @@ async function runActiveFilter(){
             cards = JSON.parse(stripJSON(raw));
             const ffTickers = [...new Set(cards.map(s=>(s.ticker||'').toUpperCase()).filter(Boolean))];
             try{
-                const [ffPriceMap, ffNewsMap, ffTechMap] = await Promise.all([
+                const [ffPriceMap, ffNewsMap, ffTechMap, ffFlowMap] = await Promise.all([
                     ffTickers.length ? fetchQuotesCached(ffTickers) : Promise.resolve({}),
                     ffTickers.length ? fetchNewsForPromptBatch(ffTickers) : Promise.resolve({}),
-                    ffTickers.length ? fetchTechnicalsBatch(ffTickers) : Promise.resolve({})
+                    ffTickers.length ? fetchTechnicalsBatch(ffTickers) : Promise.resolve({}),
+                    ffTickers.length ? fetchFlowBatch(ffTickers) : Promise.resolve({})
                 ]);
                 cards = cards.map(s=>{
                     const k=(s.ticker||'').toUpperCase();
@@ -3096,6 +3149,8 @@ async function runActiveFilter(){
                     if(ne&&ne.items&&ne.items.length) s._newsItems=ne.items.slice(0,2);
                     const te=ffTechMap[k];
                     if(te) s._techData=te;
+                    const fl=ffFlowMap[k];
+                    if(fl) s._flowData=fl;
                     return s;
                 });
                 // Layer 1 — Stock-price proxy filter (instant): eliminates obviously wrong stocks
@@ -3892,6 +3947,26 @@ async function fetchTechnicalsBatch(tickers){
         if(data) results[t] = data;
         if(i < uniq.length - 1) await new Promise(r=>setTimeout(r, 150));
     }
+    return results;
+}
+
+// ── FLOW DATA ─────────────────────────────────────────────────────────────
+async function fetchFlow(ticker){
+    try{
+        const r = await fetch(`/api/flow?ticker=${encodeURIComponent(ticker)}`);
+        if(!r.ok) return null;
+        return await r.json();
+    }catch(e){ console.warn('[flow] failed for', ticker, e.message); return null; }
+}
+
+async function fetchFlowBatch(tickers){
+    const uniq = [...new Set(tickers.map(t=>t.toUpperCase()))];
+    const results = {};
+    // Run in parallel — flow endpoint is cached for 15 min
+    await Promise.all(uniq.map(async t=>{
+        const data = await fetchFlow(t);
+        if(data) results[t] = data;
+    }));
     return results;
 }
 
