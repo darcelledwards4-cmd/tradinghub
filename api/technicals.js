@@ -46,7 +46,7 @@ module.exports = async function handler(req, res) {
     // ── Date helpers ────────────────────────────────────────────────────────
     const today    = new Date();
     const toDate   = fmt(today);
-    const fromDate = fmt(new Date(Date.now() - 280 * 86400000)); // 280 days → enough for 200d MA
+    const fromDate = fmt(new Date(Date.now() - 380 * 86400000)); // 380 days → enough for 200d MA + full 52-wk range
     const earn90   = fmt(new Date(Date.now() +  90 * 86400000));
 
     // ── Parallel fetch: Tradier history + Finnhub targets + Finnhub earnings ──
@@ -58,7 +58,9 @@ module.exports = async function handler(req, res) {
 
     // ── OHLCV → compute technicals ─────────────────────────────────────────
     let rsi = null, ma20 = null, ma50 = null, ma200 = null;
-    let high30 = null, low30 = null, currentClose = null, vol10Avg = null;
+    let high52 = null, low52 = null;   // 52-week (≈252 trading days) — major S/R
+    let high90 = null, low90 = null;   // 3-month (≈63 trading days)  — near-term S/R
+    let currentClose = null, vol10Avg = null;
 
     const candles = histRes.status === 'fulfilled' ? (histRes.value || []) : [];
     if (candles.length >= 15) {
@@ -73,10 +75,17 @@ module.exports = async function handler(req, res) {
         if (closes.length >= 50)  ma50  = avg(closes.slice(-50));
         if (closes.length >= 200) ma200 = avg(closes.slice(-200));
 
-        const recent30H = highs.slice(-30);
-        const recent30L = lows.slice(-30);
-        high30 = Math.max(...recent30H);
-        low30  = Math.min(...recent30L);
+        // 52-week high/low — use up to 252 trading-day candles (major support & resistance)
+        const w52 = highs.slice(-252);
+        const w52L = lows.slice(-252);
+        high52 = Math.max(...w52);
+        low52  = Math.min(...w52L);
+
+        // 3-month high/low — use up to 63 trading-day candles (near-term S/R)
+        const w90 = highs.slice(-63);
+        const w90L = lows.slice(-63);
+        high90 = Math.max(...w90);
+        low90  = Math.min(...w90L);
 
         vol10Avg = avg(volumes.slice(-10));
     }
@@ -112,8 +121,16 @@ module.exports = async function handler(req, res) {
     if (currentClose && ma200) {
         parts.push(`${currentClose > ma200 ? 'above' : 'below'} 200-day MA ($${round2(ma200)})`);
     }
-    if (high30 && low30) {
-        parts.push(`30-day range: $${round2(low30)}–$${round2(high30)} (support/resistance)`);
+    if (high52 && low52) {
+        const pctFromHigh = currentClose ? ((high52 - currentClose) / high52 * 100).toFixed(1) : null;
+        const pctFromLow  = currentClose ? ((currentClose - low52)  / low52  * 100).toFixed(1) : null;
+        const posStr = pctFromHigh != null && pctFromLow != null
+            ? ` — ${pctFromHigh}% below 52-wk high, ${pctFromLow}% above 52-wk low`
+            : '';
+        parts.push(`52-week range: $${round2(low52)}–$${round2(high52)}${posStr}`);
+    }
+    if (high90 && low90) {
+        parts.push(`3-month range: $${round2(low90)}–$${round2(high90)} (near-term support/resistance)`);
     }
     if (analystTarget) {
         const upside = currentClose ? ((analystTarget - currentClose) / currentClose * 100).toFixed(1) : null;
@@ -136,6 +153,10 @@ module.exports = async function handler(req, res) {
         high30: high30 ? round2(high30) : null,
         low30:  low30  ? round2(low30)  : null,
         vol10Avg: vol10Avg ? Math.round(vol10Avg) : null,
+        high52: high52 ? round2(high52) : null,
+        low52:  low52  ? round2(low52)  : null,
+        high90: high90 ? round2(high90) : null,
+        low90:  low90  ? round2(low90)  : null,
         analystTarget, analystHigh, analystLow, analystCount,
         nextEarnings, daysToEarnings,
         summary,

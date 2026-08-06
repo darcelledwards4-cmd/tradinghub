@@ -2371,8 +2371,14 @@ function buildCard(idea, existingCardId=null){
                 const above=tech.currentClose>tech.ma200;
                 pills.push(`<span class="tpill tpill-${above?'up':'dn'}">${above?'Above':'Below'} 200d MA $${tech.ma200}</span>`);
             }
-            if(tech.high30&&tech.low30){
-                pills.push(`<span class="tpill tpill-neu">30d range $${tech.low30}–$${tech.high30}</span>`);
+            if(tech.high52&&tech.low52){
+                const pctHi=tech.currentClose?((tech.high52-tech.currentClose)/tech.high52*100).toFixed(1):null;
+                const pctLo=tech.currentClose?((tech.currentClose-tech.low52)/tech.low52*100).toFixed(1):null;
+                const pos=pctHi!=null?` · ${pctHi}% off high`:'';
+                pills.push(`<span class="tpill tpill-neu">52-wk $${tech.low52}–$${tech.high52}${pos}</span>`);
+            }
+            if(tech.high90&&tech.low90){
+                pills.push(`<span class="tpill tpill-neu">3-mo $${tech.low90}–$${tech.high90}</span>`);
             }
             if(tech.analystTarget){
                 const up=tech.currentClose?((tech.analystTarget-tech.currentClose)/tech.currentClose*100):null;
