@@ -5743,10 +5743,11 @@ async function runSearchModal(){
     body.innerHTML=`<div class="loading-state"><div class="spinner"></div><div class="loading-text">Fetching CALL & PUT analysis for ${ticker}...</div></div>`;
 
     try{
-        const [q, newsResult, techData] = await Promise.all([
+        const [q, newsResult, techData, flowData] = await Promise.all([
             fetchQuote(ticker),
             fetchNewsForPrompt(ticker),
-            fetchTechnicals(ticker)
+            fetchTechnicals(ticker),
+            fetchFlow(ticker)
         ]);
         if(!q) throw new Error(`No data found for "${ticker}" — check the symbol.`);
 
@@ -5765,8 +5766,17 @@ async function runSearchModal(){
         try{ putIdea =JSON.parse(stripJSON(putRaw));  }catch(e){}
         if(!callIdea && !putIdea) throw new Error('Could not parse analysis — try again.');
 
-        if(callIdea){ callIdea.current_price=q.price; callIdea.price_change=q.chg; callIdea._priceIsLive=true; callIdea._newsItems=newsItems; }
-        if(putIdea) { putIdea.current_price =q.price; putIdea.price_change =q.chg; putIdea._priceIsLive=true;  putIdea._newsItems=newsItems; }
+        // Attach tech + flow so buildCard renders MI inline
+        if(callIdea){ callIdea.current_price=q.price; callIdea.price_change=q.chg; callIdea._priceIsLive=true; callIdea._newsItems=newsItems; callIdea._techData=techData; callIdea._flowData=flowData; }
+        if(putIdea) { putIdea.current_price =q.price; putIdea.price_change =q.chg; putIdea._priceIsLive=true;  putIdea._newsItems=newsItems;  putIdea._techData=techData;  putIdea._flowData=flowData; }
+
+        // Populate the persistent store so MI survives card toggles
+        if(techData||flowData){
+            window._techFlowStore[ticker]=window._techFlowStore[ticker]||{};
+            if(techData) window._techFlowStore[ticker].tech=techData;
+            if(flowData) window._techFlowStore[ticker].flow=flowData;
+            saveTechFlowStore();
+        }
 
         const cardId='c'+(++_cardIdCounter);
         window._cardData[cardId]={ call:callIdea, put:putIdea, ticker, current_price:q.price, price_change:q.chg, activeDir:'call' };
@@ -5795,9 +5805,11 @@ async function runSearchModal(){
             const simSec = document.getElementById('srchSimilar');
             if(Array.isArray(simCards) && simCards.length && simSec){
                 const simTickers=[...new Set(simCards.map(s=>(s.ticker||'').toUpperCase()).filter(Boolean))];
-                const [simPriceMap, simNewsMap] = await Promise.all([
+                const [simPriceMap, simNewsMap, simTechMap, simFlowMap] = await Promise.all([
                     simTickers.length ? fetchQuotesCached(simTickers) : Promise.resolve({}),
-                    simTickers.length ? fetchNewsForPromptBatch(simTickers) : Promise.resolve({})
+                    simTickers.length ? fetchNewsForPromptBatch(simTickers) : Promise.resolve({}),
+                    simTickers.length ? fetchTechnicalsBatch(simTickers) : Promise.resolve({}),
+                    simTickers.length ? fetchFlowBatch(simTickers) : Promise.resolve({})
                 ]);
                 simCards=simCards.map(s=>{
                     const k=(s.ticker||'').toUpperCase();
@@ -5806,8 +5818,12 @@ async function runSearchModal(){
                     else s._priceIsLive=false;
                     const sn=simNewsMap[k];
                     if(sn&&sn.items) s._newsItems=sn.items.slice(0,2);
+                    if(simTechMap[k]) s._techData=simTechMap[k];
+                    if(simFlowMap[k]) s._flowData=simFlowMap[k];
                     return s;
                 });
+                // Persist sim card MI to store
+                injectTechPillsIntoCards(simTechMap||{}, simFlowMap||{});
                 simSec.innerHTML=`
                     <div class="srch-section-lbl" style="margin-top:28px">🔀 Similar Plays${sector?' — '+sector:''}</div>
                     <div class="ideas-grid">${simCards.map(s=>buildCard(s)).join('')}</div>`;
