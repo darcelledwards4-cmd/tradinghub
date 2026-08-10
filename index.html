@@ -76,15 +76,21 @@
         .srch-trigger-btn:hover { border-color:var(--blue);color:var(--blue); }
         .srch-trigger-hint { margin-left:auto;font-size:11px;opacity:.55;white-space:nowrap; }
         /* ── Chart Signals strip on cards ──────────────────────── */
-        .card-tech { margin:12px 0 4px;padding:10px 12px;background:var(--bg3);border-radius:8px;border:1px solid var(--border); }
-        .card-tech-lbl { font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);margin-bottom:7px; }
-        .card-tech-pills { display:flex;flex-wrap:wrap;gap:5px; }
-        .tpill { font-size:11px;font-weight:600;padding:3px 8px;border-radius:5px;border:1px solid;white-space:nowrap; }
-        .tpill-hot  { border-color:#ef4444;color:#ef4444; }
-        .tpill-cold { border-color:#60a5fa;color:#60a5fa; }
-        .tpill-neu  { border-color:var(--muted);color:var(--muted); }
-        .tpill-up   { border-color:var(--green);color:var(--green); }
-        .tpill-dn   { border-color:var(--red);color:var(--red); }
+        /* ── Market Intelligence panel ── */
+        .card-mi { margin:12px 0 6px;padding:10px 12px;background:var(--bg3);border-radius:8px;border:1px solid var(--border); }
+        .card-mi-header { display:flex;justify-content:space-between;align-items:center;margin-bottom:2px; }
+        .card-mi-title { font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:var(--muted); }
+        .card-mi-rating { font-size:11px;font-weight:800;letter-spacing:.2px; }
+        .card-mi-tf { font-size:9px;color:var(--muted);margin-bottom:8px;opacity:.7; }
+        .mi-rows { display:flex;flex-direction:column;gap:6px; }
+        .mi-row { display:grid;grid-template-columns:18px 58px 1fr;align-items:baseline;gap:4px;font-size:12px;line-height:1.4; }
+        .mi-icon { font-size:11px; }
+        .mi-lbl { font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--muted);padding-top:1px; }
+        .mi-val { flex:1;color:var(--text); }
+        .mi-val.up { color:var(--green); }
+        .mi-val.dn { color:var(--red); }
+        .mi-val.warn { color:#f59e0b; }
+        .mi-val.muted { color:var(--muted); }
         .scan-row { display:flex; align-items:center; justify-content:space-between; margin-bottom:16px; }
         .scan-title { font-size:16px; font-weight:700; }
         .scan-btn { background:var(--bg3); border:1px solid var(--border); color:var(--text); border-radius:7px; padding:8px 16px; font-size:12px; font-weight:600; cursor:pointer; transition:all .15s; display:flex; align-items:center; gap:6px; }
@@ -2280,60 +2286,167 @@ async function callClaude(prompt){
     return d.content[0].text;
 }
 
-// ── BUILD CARD ────────────────────────────────────────────────
-function buildTechPillsHTML(tech, flow){
+// ── MARKET INTELLIGENCE PANEL ─────────────────────────────────
+// expiryIdx: 0=1Mo Aggressive, 1=3Mo Moderate, 2=6Mo Conservative
+// optType:   'CALL' or 'PUT'
+function buildTechPillsHTML(tech, flow, expiryIdx=0, optType='CALL'){
     if(!tech && !flow) return '';
-    const pills=[];
+    const isCall = (optType||'CALL').toUpperCase() !== 'PUT';
+    const tfLabels = ['1 Mo · Aggressive','3 Mo · Moderate','6 Mo · Conservative'];
+    const tfLabel  = tfLabels[expiryIdx] || tfLabels[0];
+
+    // ── Entry Score (0–10) ──────────────────────────────────────
+    let score=0, possible=0;
+
+    // RSI: not overbought for calls, not oversold for puts
     if(tech?.rsi!=null){
-        const hot=tech.rsi>=70,cold=tech.rsi<=30;
-        pills.push(`<span class="tpill tpill-${hot?'hot':cold?'cold':'neu'}">RSI ${tech.rsi} · ${hot?'Overbought ⚠':cold?'Oversold — dip buy':'Neutral'}</span>`);
+        possible+=2;
+        if(isCall) score += tech.rsi<65 ? (tech.rsi<50?2:1) : 0;
+        else       score += tech.rsi>35 ? (tech.rsi>50?2:1) : 0;
     }
-    if(tech?.currentClose&&tech.ma50){
-        const pct=((tech.currentClose-tech.ma50)/tech.ma50*100);
-        pills.push(`<span class="tpill tpill-${pct>=0?'up':'dn'}">${pct>=0?'+':''}${pct.toFixed(1)}% vs 50d MA $${tech.ma50}</span>`);
+    // MA trend: 50d for short/mid, 200d for long
+    const useMa = expiryIdx<=1 ? tech?.ma50 : tech?.ma200;
+    if(useMa && tech?.currentClose){
+        possible+=2;
+        const above = tech.currentClose > useMa;
+        if(isCall) score += above?2:(tech.currentClose/useMa>0.97?1:0);
+        else       score += !above?2:(tech.currentClose/useMa<1.03?1:0);
     }
-    if(tech?.currentClose&&tech.ma200){
-        const above=tech.currentClose>tech.ma200;
-        pills.push(`<span class="tpill tpill-${above?'up':'dn'}">${above?'Above':'Below'} 200d MA $${tech.ma200}</span>`);
+    // Options pricing: cheaper is better for buyers
+    if(flow?.atmIV!=null && tech?.hv30!=null){
+        possible+=2;
+        const r=flow.atmIV/tech.hv30;
+        score += r<=1.0?2 : r<=1.3?1 : 0;
     }
-    if(tech?.high52&&tech.low52){
-        const pctHi=tech.currentClose?((tech.high52-tech.currentClose)/tech.high52*100).toFixed(1):null;
-        pills.push(`<span class="tpill tpill-neu">52-wk $${tech.low52}–$${tech.high52}${pctHi!=null?' · '+pctHi+'% off high':''}</span>`);
-    }
-    if(tech?.high90&&tech.low90) pills.push(`<span class="tpill tpill-neu">3-mo $${tech.low90}–$${tech.high90}</span>`);
-    if(flow?.atmIV!=null&&tech?.hv30!=null){
-        const ratio=(flow.atmIV/tech.hv30);
-        const ivrLbl=ratio>=1.5?'Options Expensive ⚠':ratio<=0.8?'Options Cheap 💚':'Fair Value';
-        pills.push(`<span class="tpill tpill-${ratio>=1.5?'hot':ratio<=0.8?'cold':'neu'}">IV ${flow.atmIV}% vs HV ${tech.hv30}% · ${ivrLbl}</span>`);
-    }
+    // Flow alignment
     if(flow?.callFlow!=null){
-        const b=flow.callFlow>60,bear=flow.putFlow>60;
-        pills.push(`<span class="tpill tpill-${b?'up':bear?'dn':'neu'}">🌊 ${b?flow.callFlow+'% Calls — Bullish Flow':bear?flow.putFlow+'% Puts — Bearish Flow':'Balanced Flow'}</span>`);
+        possible+=2;
+        if(isCall) score += flow.callFlow>60?2:flow.callFlow>50?1:0;
+        else       score += flow.putFlow>60?2:flow.putFlow>50?1:0;
     }
-    if(flow?.unusual?.length){
-        const cU=flow.unusual.filter(u=>u.type==='call');
-        const pU=flow.unusual.filter(u=>u.type==='put');
-        if(cU.length){const u=cU[0];pills.push(`<span class="tpill tpill-up">🔥 Unusual CALLs $${u.strike} · ${(u.volume/1000).toFixed(1)}k vol${u.ratio?' ('+u.ratio+'× OI)':''}</span>`);}
-        if(pU.length){const u=pU[0];pills.push(`<span class="tpill tpill-dn">🔥 Unusual PUTs $${u.strike} · ${(u.volume/1000).toFixed(1)}k vol${u.ratio?' ('+u.ratio+'× OI)':''}</span>`);}
+
+    const pct = possible>0 ? score/possible : 0.5;
+    let rating, ratingCls;
+    if(pct>=0.75){ rating='Strong Entry ✅'; ratingCls='up'; }
+    else if(pct>=0.5){ rating='Good Entry 🟡'; ratingCls='warn'; }
+    else if(pct>=0.3){ rating='Wait ⚠️'; ratingCls='warn'; }
+    else { rating='Caution ❌'; ratingCls='dn'; }
+
+    // ── Row builder ─────────────────────────────────────────────
+    const rows=[];
+    function row(icon,lbl,val,cls){ rows.push({icon,lbl,val,cls:cls||''}); }
+
+    // Row 1: Momentum / Trend (timeframe-specific)
+    if(expiryIdx===0){
+        // 1Mo: RSI + 3mo range context
+        if(tech?.rsi!=null){
+            const hot=tech.rsi>=70, cold=tech.rsi<=30;
+            let extra='';
+            if(tech?.currentClose && tech?.high90 && tech?.low90){
+                const range=tech.high90-tech.low90;
+                const pos=range>0?((tech.currentClose-tech.low90)/range*100).toFixed(0):50;
+                extra=` · ${pos}% through 3mo range`;
+            }
+            const cls=hot?'dn':cold?'up':'';
+            row('📈','Momentum',`RSI ${tech.rsi} — ${hot?'Overbought ⚠':cold?'Oversold 💚':'Neutral'}${extra}`,cls);
+        }
+        // Unusual activity front & center for 1Mo
+        if(flow?.unusual?.length){
+            const u=flow.unusual[0];
+            const cls=u.type==='call'?'up':'dn';
+            const vol=u.volume>=1000?(u.volume/1000).toFixed(1)+'k':u.volume;
+            row('🔥','Smart $',`Unusual ${u.type.toUpperCase()}s $${u.strike} — ${vol} vol${u.ratio?' ('+u.ratio+'× OI)':''}`,cls);
+        }
+    } else if(expiryIdx===1){
+        // 3Mo: RSI + MA50
+        if(tech?.rsi!=null && tech?.ma50 && tech?.currentClose){
+            const ma50pct=((tech.currentClose-tech.ma50)/tech.ma50*100);
+            const above=ma50pct>=0;
+            const cls=isCall?(above?'up':'dn'):(above?'dn':'up');
+            row('📈','Trend',`RSI ${tech.rsi} · ${above?'+':''}${ma50pct.toFixed(1)}% vs 50d MA $${tech.ma50} — ${above?'bullish':'bearish'} bias`,cls);
+        }
+    } else {
+        // 6Mo: MA200 + 52wk context
+        if(tech?.currentClose && tech?.ma200){
+            const above=tech.currentClose>tech.ma200;
+            let extra='';
+            if(tech?.high52 && tech?.low52){
+                const pctHi=((tech.high52-tech.currentClose)/tech.high52*100).toFixed(0);
+                extra=` · ${pctHi}% off 52wk high`;
+            }
+            const cls=isCall?(above?'up':'dn'):(above?'dn':'up');
+            row('📈','Long-term',`${above?'Above ✅':'Below ⚠'} 200d MA $${tech.ma200}${extra}`,cls);
+        }
     }
-    if(tech?.patterns?.length) tech.patterns.slice(0,2).forEach(p=>{
-        pills.push(`<span class="tpill tpill-${p.signal==='bullish'?'up':p.signal==='bearish'?'dn':'neu'}" title="${p.desc}">🕯 ${p.name}</span>`);
-    });
-    if(tech?.analystTarget){
-        const up=tech.currentClose?((tech.analystTarget-tech.currentClose)/tech.currentClose*100):null;
-        pills.push(`<span class="tpill tpill-${up>=5?'up':up<0?'dn':'neu'}">🎯 Analyst $${tech.analystTarget}${up!=null?' ('+( up>=0?'+':'')+up.toFixed(1)+'%)':''}</span>`);
+
+    // Row 2: Options value (all timeframes)
+    if(flow?.atmIV!=null && tech?.hv30!=null){
+        const ratio=flow.atmIV/tech.hv30;
+        const expensive=ratio>=1.5, cheap=ratio<=0.8;
+        const lbl=expensive?'Expensive ⚠ — premium is inflated':cheap?'Cheap 💚 — good time to buy':'Fair Value — options fairly priced';
+        row('💰','Options',`IV ${flow.atmIV}% vs HV ${tech.hv30}% — ${lbl}`,expensive?'dn':cheap?'up':'muted');
     }
-    if(tech?.daysToEarnings!=null&&tech.daysToEarnings>=0&&tech.daysToEarnings<=60)
-        pills.push(`<span class="tpill tpill-neu">📅 Earnings in ${tech.daysToEarnings}d</span>`);
+
+    // Row 3: Flow / positioning (all timeframes)
+    if(flow?.callFlow!=null){
+        const bullish=flow.callFlow>60, bearish=flow.putFlow>60;
+        let txt = bullish ? `${flow.callFlow}% call flow — bullish positioning` :
+                  bearish ? `${flow.putFlow}% put flow — bearish positioning` : 'Balanced flow — no clear directional bias';
+        // Add unusual activity inline for 3Mo/6Mo (already shown as own row for 1Mo)
+        if(expiryIdx>0 && flow?.unusual?.length){
+            const u=flow.unusual[0];
+            const vol=u.volume>=1000?(u.volume/1000).toFixed(1)+'k':u.volume;
+            txt+=` · 🔥 Unusual ${u.type.toUpperCase()}s $${u.strike} (${vol} vol)`;
+        }
+        const cls = (bullish&&isCall)||(bearish&&!isCall) ? 'up' : (bearish&&isCall)||(bullish&&!isCall) ? 'dn' : 'muted';
+        row('🌊','Flow',txt,cls);
+    }
+
+    // Row 4: Catalyst / pattern (timeframe-filtered)
+    const catalysts=[];
+    // Candlestick pattern
+    if(tech?.patterns?.length){
+        const p=tech.patterns[0];
+        catalysts.push(`🕯 ${p.name} (${p.signal})`);
+    }
+    // Earnings — show only if within timeframe window
+    const earningsWindows=[45,90,180];
+    if(tech?.daysToEarnings!=null && tech.daysToEarnings>=0 && tech.daysToEarnings<=earningsWindows[expiryIdx]){
+        const urgency=tech.daysToEarnings<=14?'⚡':tech.daysToEarnings<=30?'📅':'📅';
+        catalysts.push(`${urgency} Earnings in ${tech.daysToEarnings}d`);
+    }
+    // Earnings history
     if(tech?.earningsSurprises?.length){
-        const beats=tech.earningsSurprises.filter(e=>e.beat===true).length;
-        const total=tech.earningsSurprises.length;
+        const b=tech.beatCount, t=tech.earningsSurprises.length;
         const avg=tech.avgSurprise;
-        const cls=beats>=Math.ceil(total*0.75)?'up':beats<=Math.floor(total*0.25)?'dn':'neu';
-        pills.push(`<span class="tpill tpill-${cls}">📊 Earnings ${beats}/${total} beats${avg!=null?' avg '+(avg>=0?'+':'')+avg+'%':''}</span>`);
+        catalysts.push(`${b}/${t} earnings beats${avg!=null?' (avg '+(avg>=0?'+':'')+avg+'%)':''}`);
     }
-    if(!pills.length) return '';
-    return `<div class="card-tech"><div class="card-tech-lbl">📊 Market Intelligence — Entry Signals</div><div class="card-tech-pills">${pills.join('')}</div></div>`;
+    // Analyst target — only 6Mo
+    if(expiryIdx>=2 && tech?.analystTarget && tech?.currentClose){
+        const up=((tech.analystTarget-tech.currentClose)/tech.currentClose*100).toFixed(1);
+        catalysts.push(`🎯 Analyst $${tech.analystTarget} (${up>=0?'+':''}${up}%)`);
+    }
+    if(catalysts.length){
+        const hasUrgentEarnings=tech?.daysToEarnings!=null&&tech.daysToEarnings>=0&&tech.daysToEarnings<=14;
+        row('📅','Catalyst',catalysts.join(' · '),hasUrgentEarnings?'warn':'muted');
+    }
+
+    if(!rows.length) return '';
+
+    const rowsHtml=rows.map(r=>`<div class="mi-row">
+        <span class="mi-icon">${r.icon}</span>
+        <span class="mi-lbl">${r.lbl}</span>
+        <span class="mi-val ${r.cls}">${r.val}</span>
+    </div>`).join('');
+
+    return `<div class="card-mi">
+        <div class="card-mi-header">
+            <span class="card-mi-title">📊 Market Intelligence</span>
+            <span class="card-mi-rating ${ratingCls}">${rating}</span>
+        </div>
+        <div class="card-mi-tf">${tfLabel} · signals for this timeframe</div>
+        <div class="mi-rows">${rowsHtml}</div>
+    </div>`;
 }
 
 // Injects tech/flow pills into already-rendered cards without a full re-render
@@ -2375,10 +2488,16 @@ function injectTechPillsIntoCards(techMap, flowMap){
             const tech=techMap[ticker];
             const flow=flowMap[ticker];
             if(!tech && !flow) return;
-            const html=buildTechPillsHTML(tech,flow);
+            // Detect which expiry tab is active so MI shows the right timeframe
+            const tabEls=document.querySelectorAll(`#etabs-${cardId} .expiry-tab`);
+            let activeIdx=0;
+            tabEls.forEach((t,i)=>{ if(t.classList.contains('active')) activeIdx=i; });
+            const idea=data[data.activeDir||'call']||data.call||{};
+            const optType=(idea.option_type||'CALL').toUpperCase();
+            const html=buildTechPillsHTML(tech,flow,activeIdx,optType);
             if(!html) return;
             const el=document.getElementById('ctech-'+cardId);
-            if(el) el.outerHTML=`<div id="ctech-${cardId}">${html}</div>`;
+            if(el) el.innerHTML=html;
         });
     }
     doInject();
@@ -2483,7 +2602,8 @@ function buildCard(idea, existingCardId=null){
         ${pcSection}
         <div id="ctech-${cardId}">${buildTechPillsHTML(
             idea._techData || (window._techFlowStore[(idea.ticker||'').toUpperCase()]||{}).tech,
-            idea._flowData || (window._techFlowStore[(idea.ticker||'').toUpperCase()]||{}).flow
+            idea._flowData || (window._techFlowStore[(idea.ticker||'').toUpperCase()]||{}).flow,
+            0, optType
         )}</div>
         <div class="card-levels">
             <div class="level-row">
@@ -2775,6 +2895,19 @@ function switchCardExpiry(cardId, idx){
         const potLbl=pot==='high'?'🟢 High Potential':pot==='avoid'?'🔴 High Risk':'🟡 Moderate';
         pb.className='pot-badge '+potCls;
         pb.textContent=potLbl;
+    }
+
+    // Refresh Market Intelligence for the new timeframe
+    const ctechEl=document.getElementById('ctech-'+cardId);
+    if(ctechEl){
+        const ticker=(idea.ticker||'').toUpperCase();
+        const store=window._techFlowStore[ticker]||{};
+        const tech=idea._techData||store.tech;
+        const flow=idea._flowData||store.flow;
+        if(tech||flow){
+            const optType=(idea.option_type||'CALL').toUpperCase();
+            ctechEl.innerHTML=buildTechPillsHTML(tech,flow,idx,optType);
+        }
     }
 }
 
@@ -4940,31 +5073,60 @@ ${stockVsEntry?'- '+stockVsEntry:''}
 
 ${newsText?'\nRecent news:\n'+newsText:'No recent news available.'}
 ${(()=>{
+    if(!techData && !flowData) return '';
+    // Determine timeframe from days-to-expiry
+    const daysToExp = trade.exp ? Math.round((new Date(trade.exp)-Date.now())/86400000) : 60;
+    const tfIdx = daysToExp<=45?0:daysToExp<=90?1:2;
+    const tfLabel = ['Short-term (≤45d)','Medium-term (45-90d)','Long-term (90d+)'][tfIdx];
+
     const parts=[];
-    if(techData){
-        if(techData.rsi!=null) parts.push(`RSI(14): ${techData.rsi}${techData.rsi>70?' — overbought, momentum may stall':techData.rsi<30?' — oversold, potential reversal':' — neutral momentum'}`);
-        if(techData.ma50!=null && currentPrice>0) parts.push(`50d MA: $${techData.ma50} (stock ${currentPrice>techData.ma50?'above — bullish':'below — bearish'} short-term trend)`);
-        if(techData.ma200!=null) parts.push(`200d MA: $${techData.ma200} (stock ${currentPrice>techData.ma200?'above — long-term uptrend':'below — long-term downtrend'})`);
-        if(techData.high52!=null && techData.low52!=null) parts.push(`52-wk range: $${techData.low52}–$${techData.high52} (stock at ${Math.round((currentPrice-techData.low52)/(techData.high52-techData.low52)*100)}% of range)`);
-        if(techData.hv30!=null) parts.push(`HV30: ${techData.hv30}% (30-day historical volatility)`);
-        if(techData.patterns && techData.patterns.length) parts.push(`Recent candlestick patterns: ${techData.patterns.map(p=>p.name+' ('+p.signal+')').join(', ')}`);
-        if(techData.beatCount!=null && techData.avgSurprise!=null) parts.push(`Earnings history: ${techData.beatCount}/4 beats, avg surprise ${techData.avgSurprise>0?'+':''}${techData.avgSurprise}%`);
-    }
-    if(flowData){
-        if(flowData.atmIV!=null && techData?.hv30!=null){
-            const ratio=(flowData.atmIV/techData.hv30).toFixed(2);
-            const label=ratio>1.5?'expensive (IV crush risk if thesis plays out)':ratio<0.8?'cheap (favorable risk/reward)':'fair value';
-            parts.push(`IVR: ATM IV ${flowData.atmIV}% vs HV30 ${techData.hv30}% (ratio ${ratio}) — options ${label}`);
-        }
-        if(flowData.callFlow!=null) parts.push(`Options flow: ${flowData.callFlow}% calls / ${100-flowData.callFlow}% puts — ${flowData.callFlow>60?'bullish':flowData.callFlow<40?'bearish':'neutral'} bias`);
-        if(flowData.unusual && flowData.unusual.length){
-            const calls=flowData.unusual.filter(u=>u.type==='call');
-            const puts=flowData.unusual.filter(u=>u.type==='put');
-            if(calls.length) parts.push(`Unusual CALL activity: $${calls[0].strike} strike, ${calls[0].volume.toLocaleString()} contracts${calls[0].ratio?' ('+calls[0].ratio+'× OI)':''} — large bullish bet`);
-            if(puts.length) parts.push(`Unusual PUT activity: $${puts[0].strike} strike, ${puts[0].volume.toLocaleString()} contracts${puts[0].ratio?' ('+puts[0].ratio+'× OI)':''} — large bearish/hedge bet`);
+    // --- TREND (timeframe-matched) ---
+    if(tfIdx===0 && techData?.rsi!=null){
+        parts.push(`Momentum: RSI ${techData.rsi}${techData.rsi>70?' — OVERBOUGHT ⚠ momentum stalling':techData.rsi<30?' — OVERSOLD, potential bounce':' — neutral'}`);
+        if(techData?.high90&&techData?.low90&&currentPrice>0){
+            const pos=Math.round((currentPrice-techData.low90)/(techData.high90-techData.low90)*100);
+            parts.push(`3-month range: $${techData.low90}–$${techData.high90} · stock at ${pos}% of range`);
         }
     }
-    return parts.length ? '\nTECHNICALS & OPTIONS FLOW CONTEXT:\n'+parts.map(p=>'- '+p).join('\n') : '';
+    if(tfIdx>=1 && techData?.ma50!=null && currentPrice>0){
+        const pct=((currentPrice-techData.ma50)/techData.ma50*100).toFixed(1);
+        parts.push(`50d MA: $${techData.ma50} — stock ${currentPrice>techData.ma50?'above (bullish bias)':'below (bearish bias)'} by ${Math.abs(pct)}%`);
+    }
+    if(tfIdx>=1 && techData?.rsi!=null) parts.push(`RSI: ${techData.rsi}${techData.rsi>70?' — overbought':techData.rsi<30?' — oversold':' — neutral'}`);
+    if(tfIdx===2 && techData?.ma200!=null) parts.push(`200d MA: $${techData.ma200} — stock ${currentPrice>techData.ma200?'in long-term uptrend':'below long-term trend'}`);
+    if(tfIdx===2 && techData?.high52&&techData?.low52&&currentPrice>0){
+        const pos=Math.round((currentPrice-techData.low52)/(techData.high52-techData.low52)*100);
+        parts.push(`52-wk range: $${techData.low52}–$${techData.high52} · stock at ${pos}% of range`);
+    }
+
+    // --- OPTIONS VALUE ---
+    if(flowData?.atmIV!=null && techData?.hv30!=null){
+        const ratio=(flowData.atmIV/techData.hv30).toFixed(2);
+        const label=ratio>1.5?'EXPENSIVE — IV crush risk if stock doesn\'t move fast':ratio<0.8?'cheap — favorable for buyers':'fair value';
+        parts.push(`Option pricing: IV ${flowData.atmIV}% vs HV30 ${techData.hv30}% (ratio ${ratio}) — ${label}`);
+    }
+
+    // --- FLOW / SMART MONEY ---
+    if(flowData?.callFlow!=null){
+        const bullish=flowData.callFlow>60, bearish=flowData.putFlow>60;
+        parts.push(`Market flow: ${flowData.callFlow}% calls / ${flowData.putFlow||100-flowData.callFlow}% puts — ${bullish?'bullish positioning':bearish?'bearish positioning':'neutral/balanced'}`);
+    }
+    if(flowData?.unusual?.length){
+        const u=flowData.unusual[0];
+        const vol=u.volume>=1000?(u.volume/1000).toFixed(1)+'k':u.volume;
+        parts.push(`Unusual ${u.type.toUpperCase()} activity: $${u.strike} strike, ${vol} contracts${u.ratio?' ('+u.ratio+'× normal OI)':''} — watch for continuation`);
+    }
+
+    // --- PATTERNS & CATALYST ---
+    if(techData?.patterns?.length) parts.push(`Candlestick pattern: ${techData.patterns[0].name} (${techData.patterns[0].signal})`);
+    if(techData?.daysToEarnings!=null && techData.daysToEarnings>=0 && techData.daysToEarnings<=90) parts.push(`Earnings in ${techData.daysToEarnings} days — ${techData.daysToEarnings<=14?'imminent catalyst/risk ⚡':'upcoming catalyst'}`);
+    if(techData?.beatCount!=null) parts.push(`Earnings track record: ${techData.beatCount}/${techData.earningsSurprises?.length||4} beats, avg ${techData.avgSurprise>0?'+':''}${techData.avgSurprise}%`);
+
+    return `\nMARKET INTELLIGENCE (${tfLabel} context matching this trade's expiry):
+${parts.map(p=>'- '+p).join('\n')}
+
+SIGNAL ALIGNMENT CHECK — does this still support the original ${isCall?'CALL (bullish)':'PUT (bearish)'} thesis?
+Compare: was the entry made when signals were favorable? Are they still favorable now? If signals have reversed (e.g., was bullish flow, now bearish; was below MA50, now above for a PUT), flag this as thesis degradation.`;
 })()}
 
 IMPORTANT — stop/target are OPTION CONTRACT PRICES:
