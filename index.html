@@ -91,6 +91,7 @@
         .mi-info-panel h4:first-child { margin-top:0; }
         .mi-info-panel p { margin:0 0 4px;color:var(--text);opacity:.85; }
         .mi-info-panel .mi-note { margin-top:8px;padding-top:8px;border-top:1px solid var(--border);font-size:10px;opacity:.6; }
+        .mi-guide { font-size:10px;color:var(--muted);margin:3px 0 10px;padding:6px 8px;background:var(--bg3);border-radius:4px;border-left:2px solid var(--border);line-height:1.5; }
         .mi-row { display:grid;grid-template-columns:18px 58px 1fr;align-items:baseline;gap:4px;font-size:12px;line-height:1.4; }
         .mi-icon { font-size:11px; }
         .mi-lbl { font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--muted);padding-top:1px; }
@@ -2485,7 +2486,8 @@ function buildTechPillsHTML(tech, flow, expiryIdx=0, optType='CALL'){
             else if(r>35) rsiMsg=`RSI is <strong>${r}</strong> — neutral. For a ${dir}, you're not chasing a falling knife, but momentum isn't screaming down either. <strong>Proceed with your thesis.</strong>`;
             else          rsiMsg=`RSI is <strong>${r}</strong> — oversold. For a ${dir}, this is a <strong>caution flag</strong> — stocks at this level often bounce. You may be too late on the downside.`;
         }
-        infoItems.push({icon:'📈',label:'Momentum (RSI)',msg:rsiMsg});
+        infoItems.push({icon:'📈',label:'Momentum (RSI)',msg:rsiMsg,
+            guide:`RSI is a 0–100 scale measuring how overbought or oversold a stock is. <strong>Below 30</strong> = oversold (beaten down, bounce potential). <strong>30–50</strong> = weak but not stretched. <strong>50–65</strong> = neutral/healthy — ideal entry zone. <strong>65–70</strong> = getting warm, proceed with caution. <strong>Above 70</strong> = overbought, high pullback risk. The "% through 3mo range" shows where price sits between its 3-month low and high — near 0% = near support, near 100% = near resistance.`});
     }
 
     // Unusual activity insight
@@ -2500,7 +2502,8 @@ function buildTechPillsHTML(tech, flow, expiryIdx=0, optType='CALL'){
         } else {
             smartMsg=`Unusual <strong>${u.type.toUpperCase()}s at $${u.strike}</strong> (${vol} contracts, ${u.ratio}× normal) — big money is betting <strong>against your ${dir}</strong>. Someone with significant capital is positioned in the opposite direction. This is a <strong>warning signal</strong> — consider sizing smaller or waiting for the flow to shift.`;
         }
-        infoItems.push({icon:'🔥',label:'Smart $ (Unusual Activity)',msg:smartMsg});
+        infoItems.push({icon:'🔥',label:'Smart $ (Unusual Activity)',msg:smartMsg,
+            guide:`Unusual activity flags when options volume is significantly larger than normal open interest — a sign of intentional, large-scale positioning rather than random trading. <strong>Unusual CALLs</strong> = big money betting the stock goes UP. <strong>Unusual PUTs</strong> = big money betting DOWN. A ratio of 2× or higher means twice the normal activity; 5× or more is a strong signal. Alignment with your trade direction = confirmation. Conflict = warning.`});
     }
 
     // IV vs HV insight
@@ -2510,7 +2513,8 @@ function buildTechPillsHTML(tech, flow, expiryIdx=0, optType='CALL'){
         if(ratio>1.5)      ivMsg=`Options are <strong>expensive</strong> right now — IV is ${flow.atmIV}% vs the stock's actual recent volatility of ${tech.hv30}%. You're paying a <strong>premium for this contract</strong>. To profit, the stock needs to move significantly and fast, otherwise time decay eats into your gains even if you're directionally right.`;
         else if(ratio<0.8) ivMsg=`Options are <strong>cheap</strong> right now — IV is ${flow.atmIV}% vs the stock's recent volatility of ${tech.hv30}%. This is an <strong>ideal time to buy</strong> — you're getting good value on the contract, and if volatility picks up (which it often does), your option gains extra value even before the stock moves much.`;
         else               ivMsg=`Options are <strong>fairly priced</strong> — IV is ${flow.atmIV}% vs the stock's recent volatility of ${tech.hv30}%. No particular pricing edge, but no disadvantage either. Your profit depends primarily on the stock moving in your direction within your timeframe.`;
-        infoItems.push({icon:'💰',label:'Options Pricing (IV vs HV)',msg:ivMsg});
+        infoItems.push({icon:'💰',label:'Options Pricing (IV vs HV)',msg:ivMsg,
+            guide:`<strong>IV (Implied Volatility)</strong> is what the options market expects future price swings to be — it's baked into the option's price. <strong>HV (Historical Volatility)</strong> is what the stock has actually been doing. The ratio tells you if you're getting a deal: <strong>IV/HV below 0.8</strong> = cheap options, great time to buy. <strong>0.8–1.3</strong> = fair value, normal pricing. <strong>1.3–1.5</strong> = slightly elevated, factor this into your sizing. <strong>Above 1.5</strong> = expensive, the stock needs to make a big move fast or decay will hurt you even if you're right on direction.`});
     }
 
     // Flow insight
@@ -2522,20 +2526,24 @@ function buildTechPillsHTML(tech, flow, expiryIdx=0, optType='CALL'){
         else if(pf>65 && !isCall) flowMsg=`<strong>${pf}% of all options activity is puts</strong> — most money is betting bearish, which <strong>aligns with your ${dir}</strong>. The crowd is positioned with you. Strong confirmation.`;
         else if(pf>65 && isCall)  flowMsg=`<strong>${pf}% of all options activity is puts</strong> — the market is leaning bearish while your ${dir} needs the stock to go up. This is a conflict. Make sure your thesis has a specific edge the market isn't seeing.`;
         else                       flowMsg=`<strong>Balanced flow — ${cf}% calls / ${pf}% puts.</strong> No strong directional lean from the options market. This means you're not fighting the crowd, but you're also not getting crowd confirmation. Your trade lives or dies on your own thesis here.`;
-        infoItems.push({icon:'🌊',label:'Options Flow',msg:flowMsg});
+        infoItems.push({icon:'🌊',label:'Options Flow',msg:flowMsg,
+            guide:`Flow measures the overall split of call vs. put buying across all strikes for this stock right now. <strong>Above 65% calls</strong> = strongly bullish crowd positioning. <strong>40–65% calls</strong> = balanced or slight lean. <strong>Below 40% calls</strong> = strongly bearish positioning. Flow that aligns with your trade adds conviction. Flow that conflicts with your trade isn't a dealbreaker, but it means you're swimming against the current — you need a stronger specific reason to be right when the crowd disagrees.`});
     }
 
     // Catalyst insight
     const catalystParts=[];
+    let catalystGuide='';
     if(tech?.patterns?.length){
         const p=tech.patterns[0];
         if(p.name.toLowerCase().includes('inside')) catalystParts.push(`The <strong>Inside Bar pattern</strong> means the stock's price range today fit entirely inside yesterday's range — it's pausing, coiling up. This often precedes a bigger move in either direction. For a ${dir}, watch for a breakout ${isCall?'above':'below'} the range.`);
         else catalystParts.push(`A <strong>${p.name}</strong> pattern was detected — a ${p.signal} candlestick signal.`);
+        catalystGuide+=`<strong>Candlestick patterns</strong> are visual signals in price action. Inside Bar = consolidation before a move. Bullish Engulfing = buyers overpowered sellers. Bearish Engulfing = sellers took control. Doji = indecision, could break either way. Patterns are one signal — they work best when confirmed by RSI and flow pointing the same direction. `;
     }
     if(tech?.daysToEarnings!=null && tech.daysToEarnings>=0 && tech.daysToEarnings<=earningsWindows[expiryIdx]){
         const d=tech.daysToEarnings;
         if(d<=14) catalystParts.push(`<strong>Earnings in ${d} days</strong> — this is imminent. A beat could ${isCall?'surge your CALL':'hurt your PUT'}; a miss does the opposite. High risk, high reward. Size accordingly and don't hold through earnings unless that's your strategy.`);
         else      catalystParts.push(`<strong>Earnings in ${d} days</strong> — within your trade window. A positive surprise could act as a strong tailwind for your ${dir}.`);
+        catalystGuide+=`<strong>Earnings</strong> are the biggest single catalyst for most stocks. Within 14 days = imminent, treat it like a binary event. 15–45 days = upcoming, factor it into your thesis. Beyond 90 days = less relevant for shorter trades. `;
     }
     if(tech?.beatCount!=null){
         const b=tech.beatCount, t=tech.earningsSurprises?.length||4;
@@ -2543,18 +2551,22 @@ function buildTechPillsHTML(tech, flow, expiryIdx=0, optType='CALL'){
         else if(b<=1 && isCall)  catalystParts.push(`<strong>${b}/${t} earnings beats</strong> — this company has a history of disappointing. For a ${dir}, earnings is a risk factor to watch.`);
         else if(b>=3 && !isCall) catalystParts.push(`<strong>${b}/${t} earnings beats</strong> — the company usually beats, which is a <strong>headwind for your ${dir}</strong>. Be cautious around earnings.`);
         else                      catalystParts.push(`<strong>${b}/${t} earnings beats</strong> — mixed track record.`);
+        catalystGuide+=`<strong>Earnings beat rate</strong>: 4/4 = company almost always surprises positively, stock often pops. 3/4 = reliable but not guaranteed. 2/4 = coin flip. 1/4 or 0/4 = history of disappointing, extra risk for CALL trades.`;
     }
-    if(catalystParts.length) infoItems.push({icon:'📅',label:'Catalyst',msg:catalystParts.join(' ')});
+    if(catalystParts.length) infoItems.push({icon:'📅',label:'Catalyst',msg:catalystParts.join(' '),guide:catalystGuide||'Catalysts are events that can cause the stock to move significantly — earnings reports, product launches, macro events. A positive catalyst within your timeframe supports a CALL; a negative one supports a PUT.'});
 
     const infoBodyHtml = infoItems.length
-        ? infoItems.map(item=>`<h4>${item.icon} ${item.label}</h4><p>${item.msg}</p>`).join('')
+        ? infoItems.map(item=>`
+            <h4>${item.icon} ${item.label}</h4>
+            <p>${item.msg}</p>
+            <div class="mi-guide">📖 <em>${item.guide}</em></div>`).join('')
         : '<p>Run a fresh scan to load personalised signal data for this card.</p>';
 
     const infoPanel = `<div class="mi-info-panel" id="mi-info-${uid}">
-        <h4>📊 Overall: ${rating}</h4>
-        <p>This score is calculated live from the signals below. Here's what each one means <strong>specifically for this trade</strong>:</p>
+        <h4>📊 Overall Rating: ${rating}</h4>
+        <p>Scored live from the signals below. Each section shows <strong>what it means for this specific trade</strong>, followed by a 📖 general guide so you know how to read it in any situation.</p>
         ${infoBodyHtml}
-        <div class="mi-note">Live data from Tradier + Finnhub. The entry zone &amp; stop/target below come from the AI scan — MI tells you if right now is a good time to act on them.</div>
+        <div class="mi-note">All signals are live — pulled from Tradier (price history + options chain) and Finnhub (earnings data). The entry zone, stop, and target below come from the AI scan and are set at scan time. Market Intelligence tells you whether right now is still a good moment to act on them.</div>
     </div>`;
 
     return `<div class="card-mi">
