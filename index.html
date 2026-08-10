@@ -83,6 +83,14 @@
         .card-mi-rating { font-size:11px;font-weight:800;letter-spacing:.2px; }
         .card-mi-tf { font-size:9px;color:var(--muted);margin-bottom:8px;opacity:.7; }
         .mi-rows { display:flex;flex-direction:column;gap:6px; }
+        .mi-info-btn { background:none;border:1px solid var(--border);border-radius:50%;width:14px;height:14px;font-size:9px;color:var(--muted);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;margin-left:4px;padding:0;line-height:1;flex-shrink:0;transition:color .15s,border-color .15s; }
+        .mi-info-btn:hover { color:var(--text);border-color:var(--text); }
+        .mi-info-panel { display:none;margin-top:8px;padding:10px 12px;background:var(--bg2);border-radius:6px;border:1px solid var(--border);font-size:11px;line-height:1.55;color:var(--text); }
+        .mi-info-panel.open { display:block; }
+        .mi-info-panel h4 { font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin:8px 0 3px; }
+        .mi-info-panel h4:first-child { margin-top:0; }
+        .mi-info-panel p { margin:0 0 4px;color:var(--text);opacity:.85; }
+        .mi-info-panel .mi-note { margin-top:8px;padding-top:8px;border-top:1px solid var(--border);font-size:10px;opacity:.6; }
         .mi-row { display:grid;grid-template-columns:18px 58px 1fr;align-items:baseline;gap:4px;font-size:12px;line-height:1.4; }
         .mi-icon { font-size:11px; }
         .mi-lbl { font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--muted);padding-top:1px; }
@@ -2289,6 +2297,14 @@ async function callClaude(prompt){
 // ── MARKET INTELLIGENCE PANEL ─────────────────────────────────
 // expiryIdx: 0=1Mo Aggressive, 1=3Mo Moderate, 2=6Mo Conservative
 // optType:   'CALL' or 'PUT'
+function toggleMIInfo(id){
+    const el=document.getElementById('mi-info-'+id);
+    const btn=document.getElementById('mi-info-btn-'+id);
+    if(!el) return;
+    const open=el.classList.toggle('open');
+    if(btn) btn.style.color=open?'var(--text)':'';
+}
+
 function buildTechPillsHTML(tech, flow, expiryIdx=0, optType='CALL'){
     if(!tech && !flow) return '';
     console.log('[MI]', {rsi:tech?.rsi, ma50:tech?.ma50, hv30:tech?.hv30, atmIV:flow?.atmIV, callFlow:flow?.callFlow, unusual:(flow?.unusual||[]).length});
@@ -2446,13 +2462,39 @@ function buildTechPillsHTML(tech, flow, expiryIdx=0, optType='CALL'){
         <span class="mi-val ${r.cls}">${r.val}</span>
     </div>`).join('');
 
+    // Unique ID for info panel toggle (use timestamp + random to avoid collisions)
+    const uid = Math.random().toString(36).slice(2,7);
+
+    const infoPanel = `<div class="mi-info-panel" id="mi-info-${uid}">
+        <h4>📊 What is Market Intelligence?</h4>
+        <p>This panel pulls <strong>live market data</strong> right now to tell you whether conditions support getting into the trade. The Entry Rating (top right) is scored from all signals below — think of it as a green/yellow/red light.</p>
+
+        <h4>📈 Momentum (RSI)</h4>
+        <p><strong>RSI</strong> measures how overbought or oversold a stock is on a 0–100 scale. <strong>Below 30</strong> = beaten down, potential bounce. <strong>Above 70</strong> = running hot, could pull back soon. <strong>40–60</strong> = neutral, healthy. The "X% through 3mo range" tells you where the stock sits between its 3-month low and high — near 0% means near support, near 100% means near resistance.</p>
+
+        <h4>🔥 Smart $ (Unusual Activity)</h4>
+        <p>When someone places an options bet much larger than normal, it shows up here. <strong>Unusual CALLs</strong> = big money betting the stock goes UP. <strong>Unusual PUTs</strong> = big money betting the stock goes DOWN. If you're looking at a CALL trade and Smart $ shows unusual PUTs, that's a warning sign — hedge funds or institutions may be positioning against the direction you're looking at.</p>
+
+        <h4>💰 Options (IV vs HV)</h4>
+        <p><strong>IV (Implied Volatility)</strong> is what the options market expects future price swings to be. <strong>HV (Historical Volatility)</strong> is what the stock has actually been doing. If IV is much higher than HV, options are expensive — you're overpaying. <strong>Fair Value</strong> means options are reasonably priced. <strong>Cheap</strong> means good time to buy — you're getting more bang for your dollar.</p>
+
+        <h4>🌊 Flow</h4>
+        <p>The overall split of call vs. put buying across all strikes. <strong>70%+ calls</strong> = most money is betting bullish. <strong>70%+ puts</strong> = most money is betting bearish. Balanced = no strong lean either way. This reflects what the crowd and institutions are actually doing with their money right now.</p>
+
+        <h4>📅 Catalyst</h4>
+        <p><strong>Earnings beats</strong> shows how often the company has beaten Wall Street's profit estimates — more beats = more likely to surprise positively. <strong>Candlestick patterns</strong> (like Inside Bar) show what price action looked like recently — Inside Bar means the stock is pausing/consolidating before its next move. <strong>Earnings in X days</strong> is a hard catalyst — a big move (up or down) is coming.</p>
+
+        <div class="mi-note">All signals pull live from Tradier (price history + options chain) and Finnhub (earnings). The Entry Rating and entry zone below are independent — MI tells you if NOW is a good time to act on that zone.</div>
+    </div>`;
+
     return `<div class="card-mi">
         <div class="card-mi-header">
-            <span class="card-mi-title">📊 Market Intelligence</span>
+            <span class="card-mi-title" style="display:flex;align-items:center;gap:0">📊 Market Intelligence<button class="mi-info-btn" id="mi-info-btn-${uid}" onclick="toggleMIInfo('${uid}')" title="What does this mean?">i</button></span>
             <span class="card-mi-rating ${ratingCls}">${rating}</span>
         </div>
         <div class="card-mi-tf">${tfLabel} · signals for this timeframe</div>
         <div class="mi-rows">${rowsHtml}</div>
+        ${infoPanel}
     </div>`;
 }
 
