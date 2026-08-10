@@ -3048,7 +3048,10 @@ async function switchCardDir(cardId, dir){
     if (!data || data.activeDir === dir) return;
 
     if (data[dir]) {
-        // Already cached — re-render in place then re-enrich (outerHTML replaces DOM)
+        // Already cached — patch in tech/flow from store if missing, then re-render
+        const storedMI = window._techFlowStore[(data.ticker||'').toUpperCase()]||{};
+        if(!data[dir]._techData && storedMI.tech) data[dir]._techData = storedMI.tech;
+        if(!data[dir]._flowData && storedMI.flow) data[dir]._flowData = storedMI.flow;
         const wrap = document.getElementById('cwrap-'+cardId);
         if (wrap) wrap.outerHTML = buildCard(data[dir], cardId);
         enrichOneCard(cardId).catch(()=>{}); // re-fetch options for the new direction
@@ -3070,18 +3073,29 @@ async function switchCardDir(cardId, dir){
         const pchg  = freshQ ? freshQ.chg   : parseFloat(data.price_change||0);
         if(freshQ){ data.current_price=freshQ.price; data.price_change=freshQ.chg; }
 
-        // Fetch news + technicals alongside this direction
-        const [newsResult, techData] = await Promise.all([
+        // Fetch news + technicals + flow alongside the Claude call
+        const [newsResult, techData, flowData] = await Promise.all([
             fetchNewsForPrompt(data.ticker).catch(()=>({text:'',items:[]})),
-            fetchTechnicals(data.ticker).catch(()=>null)
+            fetchTechnicals(data.ticker).catch(()=>null),
+            fetchFlow(data.ticker).catch(()=>null)
         ]);
         const raw = await callClaude(singleDirPrompt(data.ticker, price, pchg, dir.toUpperCase(), newsResult.text||'', techData?.summary||''));
         const idea = JSON.parse(stripJSON(raw));
-        // ✅ Force real price + news onto the Claude-returned card
+        // ✅ Force real price + news + MI onto the Claude-returned card
         idea.current_price = price;
         idea.price_change  = pchg;
         idea._priceIsLive  = !!freshQ;
         if(newsResult.items&&newsResult.items.length) idea._newsItems=newsResult.items.slice(0,2);
+        // Attach MI so buildCard renders it inline
+        if(techData) idea._techData = techData;
+        if(flowData)  idea._flowData  = flowData;
+        // Persist to store for future toggles
+        if(techData||flowData){
+            window._techFlowStore[(data.ticker||'').toUpperCase()] = window._techFlowStore[(data.ticker||'').toUpperCase()]||{};
+            if(techData) window._techFlowStore[(data.ticker||'').toUpperCase()].tech = techData;
+            if(flowData)  window._techFlowStore[(data.ticker||'').toUpperCase()].flow  = flowData;
+            saveTechFlowStore();
+        }
         data[dir] = idea;
         const wrap2 = document.getElementById('cwrap-'+cardId);
         if (wrap2) wrap2.outerHTML = buildCard(idea, cardId);
