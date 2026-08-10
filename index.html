@@ -270,7 +270,7 @@
         .rev-month-bar { height:3px; border-radius:2px; }
 
         /* ── MODAL ── */
-        .overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,.75); z-index:200; align-items:center; justify-content:center; }
+        .overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,.75); z-index:9500; align-items:center; justify-content:center; }
         .overlay.open { display:flex; }
         .modal { background:var(--bg2); border:1px solid var(--border); border-radius:10px; padding:22px; width:520px; max-width:92vw; }
         .modal-title { font-size:15px; font-weight:700; margin-bottom:16px; }
@@ -5061,6 +5061,9 @@ function logTradeFromCard(cardId){
     document.getElementById('m-entry').value='';
     document.getElementById('m-exit').value='';
     document.getElementById('m-thesis').value=idea.summary||'';
+    // Close search modal if open so the log modal isn't stacked behind it
+    const srchModal=document.getElementById('srchModal');
+    if(srchModal&&srchModal.style.display!=='none') srchModal.style.display='none';
     document.getElementById('modal').classList.add('open');
 }
 function buildJournalCard(trade){
