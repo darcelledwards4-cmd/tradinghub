@@ -3564,8 +3564,11 @@ async function runActiveFilter(){
             const cardTickers=[...new Set(cards.map(s=>(s.ticker||'').toUpperCase()).filter(Boolean))];
             const newsMap = cardTickers.length ? await fetchNewsForPromptBatch(cardTickers) : {};
             cards=cards.map(s=>{
-                const n=newsMap[(s.ticker||'').toUpperCase()];
+                const k=(s.ticker||'').toUpperCase();
+                const n=newsMap[k];
                 if(n&&n.items&&n.items.length) s._newsItems=n.items.slice(0,2);
+                // Attach tech data from the pre-fetched rfTechMap so buildCard renders MI inline
+                if(rfTechMap[k]) s._techData=rfTechMap[k];
                 return s;
             });
         } else if(meta.type==='gems'){
@@ -3628,7 +3631,7 @@ async function runActiveFilter(){
                     const newsEntry=discNewsMap[k];
                     if(newsEntry&&newsEntry.items&&newsEntry.items.length) s._newsItems=newsEntry.items.slice(0,2);
                     const techEntry=rfDiscTechMap[k];
-                    if(techEntry) s._techSummary=techEntry.summary;
+                    if(techEntry){ s._techData=techEntry; s._techSummary=techEntry.summary; }
                     return s;
                 });
             }catch(enrichErr){
@@ -3638,8 +3641,22 @@ async function runActiveFilter(){
         filterCache[key]=cards;
         renderFilterResult(key, cards);
         const now=new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'});
-        document.getElementById('lastScan').textContent=`Last scanned at ${now} — ${meta.sectionLabel}`;
+        document.getElementById('lastScan').textContent=`Last scanned at ${now} — ${meta.sectionLabel} · fetching signals…`;
         document.getElementById('lastUpdated').textContent=`Prices live · ${now}`;
+        // Post-render MI enrichment — runs for ALL scan types, fills in any cards that didn't get inline MI
+        const miTickers=[...new Set(cards.map(c=>(c.ticker||'').toUpperCase()).filter(Boolean))];
+        if(miTickers.length){
+            Promise.all([
+                fetchTechnicalsBatch(miTickers).catch(()=>({})),
+                fetchFlowBatch(miTickers).catch(()=>({}))
+            ]).then(([tMap,fMap])=>{
+                injectTechPillsIntoCards(tMap||{},fMap||{});
+                const t2=new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'});
+                document.getElementById('lastScan').textContent=`Last scanned at ${t2} — ${meta.sectionLabel}`;
+            }).catch(()=>{
+                document.getElementById('lastScan').textContent=`Last scanned at ${now} — ${meta.sectionLabel}`;
+            });
+        }
     }catch(e){
         document.getElementById('ideasOutput').innerHTML=`<div class="empty-state"><div class="empty-icon">⚠️</div><div class="empty-title">Error</div><div class="empty-sub">${e.message}</div></div>`;
     }
