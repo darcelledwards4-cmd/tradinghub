@@ -1157,8 +1157,8 @@ function restoreLastSession(){
     // Silently seed cache + render without triggering a new API scan
     filterAllCards[lastKey] = cards;
     filterCache[lastKey]    = cards;
-    selectFilter(lastKey);          // updates pill + button label
-    renderFilterResult(lastKey, cards); // renders cards + calls refreshVisiblePrices automatically
+    selectFilter(lastKey);   // updates pill + button label AND calls renderFilterResult internally
+    // NOTE: selectFilter already renders cards via filterCache — do NOT call renderFilterResult again here
     document.getElementById('lastScan').textContent = 'Restored — refreshing prices…';
     // Auto-refresh prices + news in the background
     const tickers = [...new Set(cards.map(c=>(c.ticker||'').toUpperCase()).filter(Boolean))];
@@ -3953,17 +3953,15 @@ async function fetchTechnicals(ticker){
     }
 }
 
-// Fetches technicals for multiple tickers in parallel (rate-limited to avoid Polygon hammering)
+// Fetches technicals for multiple tickers — runs in parallel since /api/technicals
+// has its own server-side cache and Tradier rate limiting, so client-side sequencing is unnecessary.
 async function fetchTechnicalsBatch(tickers){
     const uniq = [...new Set(tickers.map(t=>t.toUpperCase()))];
-    // Stagger requests slightly to avoid bursting Polygon
     const results = {};
-    for(let i = 0; i < uniq.length; i++){
-        const t = uniq[i];
+    await Promise.all(uniq.map(async t=>{
         const data = await fetchTechnicals(t);
         if(data) results[t] = data;
-        if(i < uniq.length - 1) await new Promise(r=>setTimeout(r, 150));
-    }
+    }));
     return results;
 }
 
