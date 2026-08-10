@@ -2291,6 +2291,7 @@ async function callClaude(prompt){
 // optType:   'CALL' or 'PUT'
 function buildTechPillsHTML(tech, flow, expiryIdx=0, optType='CALL'){
     if(!tech && !flow) return '';
+    console.log('[MI]', {rsi:tech?.rsi, ma50:tech?.ma50, hv30:tech?.hv30, atmIV:flow?.atmIV, callFlow:flow?.callFlow, unusual:(flow?.unusual||[]).length});
     const isCall = (optType||'CALL').toUpperCase() !== 'PUT';
     const tfLabels = ['1 Mo · Aggressive','3 Mo · Moderate','6 Mo · Conservative'];
     const tfLabel  = tfLabels[expiryIdx] || tfLabels[0];
@@ -2431,7 +2432,13 @@ function buildTechPillsHTML(tech, flow, expiryIdx=0, optType='CALL'){
         row('📅','Catalyst',catalysts.join(' · '),hasUrgentEarnings?'warn':'muted');
     }
 
-    if(!rows.length) return '';
+    // Fallback: if no rows built yet (sparse data), show whatever we have
+    if(!rows.length){
+        if(tech?.rsi!=null) row('📈','Momentum',`RSI ${tech.rsi} — ${tech.rsi>=70?'Overbought ⚠':tech.rsi<=30?'Oversold 💚':'Neutral'}`,tech.rsi>=70?'dn':tech.rsi<=30?'up':'');
+        if(flow?.callFlow!=null) row('🌊','Flow',`${flow.callFlow}% calls / ${flow.putFlow||100-flow.callFlow}% puts`,(flow.callFlow>60&&isCall)||(flow.putFlow>60&&!isCall)?'up':(flow.callFlow>60&&!isCall)||(flow.putFlow>60&&isCall)?'dn':'muted');
+        if(tech?.currentClose && tech?.ma50) row('📊','vs MA50',`$${tech.currentClose} vs $${tech.ma50} — ${tech.currentClose>tech.ma50?'Above (bullish)':'Below (bearish)'}`,isCall?(tech.currentClose>tech.ma50?'up':'dn'):(tech.currentClose>tech.ma50?'dn':'up'));
+        if(!rows.length) return ''; // truly no data
+    }
 
     const rowsHtml=rows.map(r=>`<div class="mi-row">
         <span class="mi-icon">${r.icon}</span>
