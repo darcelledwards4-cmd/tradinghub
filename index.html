@@ -1055,6 +1055,21 @@ const filterAllCards = {};   // all accumulated cards per filter key (for Load M
 window._cardData = {};
 let _cardIdCounter = 0;
 
+// ── TECH/FLOW STORE — persists signal data across page loads ──────────────
+// After Phase 2 fetches tech+flow, we cache it here AND in localStorage.
+// buildCard reads from this store as fallback so pills render inline on every
+// subsequent load — no async injection needed.
+window._techFlowStore = {};
+(function loadTechFlowStore(){
+    try{
+        const raw=localStorage.getItem('th_techflow');
+        if(raw) window._techFlowStore=JSON.parse(raw);
+    }catch(e){}
+})();
+function saveTechFlowStore(){
+    try{ localStorage.setItem('th_techflow',JSON.stringify(window._techFlowStore)); }catch(e){}
+}
+
 // ── PERSIST FILTER RESULTS TO LOCALSTORAGE ────────────────────
 // Cards survive page refresh; prices auto-refresh to Live on load
 const LS_PREFIX = 'th_cards_';
@@ -2323,6 +2338,16 @@ function buildTechPillsHTML(tech, flow){
 
 // Injects tech/flow pills into already-rendered cards without a full re-render
 function injectTechPillsIntoCards(techMap, flowMap){
+    // 0. Populate the persistent tech/flow store so buildCard renders pills inline on future loads
+    Object.entries(techMap||{}).forEach(([ticker,tech])=>{
+        window._techFlowStore[ticker]=window._techFlowStore[ticker]||{};
+        window._techFlowStore[ticker].tech=tech;
+    });
+    Object.entries(flowMap||{}).forEach(([ticker,flow])=>{
+        window._techFlowStore[ticker]=window._techFlowStore[ticker]||{};
+        window._techFlowStore[ticker].flow=flow;
+    });
+    saveTechFlowStore();
     // 1. Persist onto stored card objects so ALL future rebuilds include the data
     Object.entries(window._cardData||{}).forEach(([cardId,data])=>{
         const ticker=(data.ticker||'').toUpperCase();
@@ -2456,7 +2481,10 @@ function buildCard(idea, existingCardId=null){
             return `<div class="card-news-cite"><div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--muted);margin-bottom:3px">📰 Live News Used</div>${rows}</div>`;
         })()}
         ${pcSection}
-        <div id="ctech-${cardId}">${buildTechPillsHTML(idea._techData,idea._flowData)}</div>
+        <div id="ctech-${cardId}">${buildTechPillsHTML(
+            idea._techData || (window._techFlowStore[(idea.ticker||'').toUpperCase()]||{}).tech,
+            idea._flowData || (window._techFlowStore[(idea.ticker||'').toUpperCase()]||{}).flow
+        )}</div>
         <div class="card-levels">
             <div class="level-row">
                 <div class="level-left"><div class="level-icon">📥</div><div><div class="level-lbl">Enter Between</div><div class="level-hint">Buy the option when stock enters this zone</div></div></div>
