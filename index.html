@@ -5379,6 +5379,7 @@ Compare: was the entry made when signals were favorable? Are they still favorabl
 4. If live option price is NOT available: estimate using entry price + stock move direction. If stock is moving AGAINST the trade (stock down for a CALL, stock up for a PUT), the option is likely losing value — flag as "low" and warn. Do NOT default to "hold" just because you lack option data.
 5. A green stock price does NOT automatically mean hold — the option could be losing value due to theta decay, IV crush, or moving against the strike. Always factor option P&L% when available.
 6. If the trade has no stop set, still assess proximity to loss of full premium and flag urgency accordingly.
+7. STOP LOSS IS ABSOLUTE: If a stop is set, your "hold" recommendation must explicitly state the option must remain ABOVE the stop to justify holding. This analysis tool should NEVER be the reason a trader ignores their own stop. If signals are mixed but the option is near the stop, err toward "adjust" or "exit" — not "hold". A predetermined stop loss takes priority over this tool's real-time read.
 
 Based on ALL the facts above, give your recommendation:
 - "exit" = stop hit, thesis clearly failed, or option has lost >50% of value
@@ -5771,7 +5772,13 @@ function buildPostClosePrompt(trade, techData, flowData, newsText){
             : (parseFloat(stockMoved)<0 ? `Stock is DOWN $${Math.abs(stockMoved)} from your entry — thesis was directionally correct` : `Stock is UP $${stockMoved} from your entry — stock moved against your thesis`))
         : '';
 
-    return `You are a trading coach reviewing a closed options trade. Be direct, specific, and accurate. Reference actual dollar amounts. Do not make up data.
+    // Check if trader's exit rationale mentions holding based on external/tool analysis
+    const exitRat = (trade.exit_rationale||'').toLowerCase();
+    const hubInfluenceNote = (exitRat.includes('hub') || exitRat.includes('hold') || exitRat.includes('analys') || exitRat.includes('tool') || exitRat.includes('recommend'))
+        ? `\nIMPORTANT CONTEXT: The trader's exit rationale indicates they may have held past their stop because of a "hold" recommendation from an analysis tool (possibly this very app). Acknowledge this explicitly — AI analysis tools can and do give wrong signals, and a trader's predetermined stop loss should ALWAYS override any tool's real-time recommendation. This is partly a systemic failure, not purely a behavioral mistake. Note this in market_context or root_cause.\n`
+        : '';
+
+    return `You are an elite trading coach doing a deep post-trade forensic review. Your job is NOT just to grade the trader's behavior — it is to EXPLAIN WHAT ACTUALLY HAPPENED in the market and give the trader real intelligence to avoid this situation next time. Be direct, specific, and technical. Reference actual dollar amounts. Do not make up data you don't have.
 
 TRADE DETAILS:
 - ${trade.ticker} ${trade.type||'CALL'} $${trade.strike||'?'} strike, expires ${trade.exp||'?'}
@@ -5793,30 +5800,38 @@ ${stockDirNote ? '- '+stockDirNote : ''}
 ${techBlock}${flowBlock}${newsBlock}
 
 ${stopNote}
-
-PATTERN FLAG RULES (apply these exactly — do not guess):
-- ignored_stop: exit price is BELOW the stop loss price (trader held past their own stop and sold worse)
+${hubInfluenceNote}
+PATTERN FLAG RULES (apply exactly):
+- ignored_stop: exit price is BELOW the stop loss price
 - held_too_long: no stop set, held to near-expiry and lost significant premium to time decay
-- exited_early: exit price is ABOVE stop but well below target, trade still had time/merit to run
+- exited_early: exit price is ABOVE stop but well below target, trade had more room to run
 - entered_early: stock entered BELOW the recommended zone (before the setup was ready)
-- entered_late: stock entered ABOVE the recommended zone (chased after the move started)
-- chased_entry: entered with no zone defined and paid peak premium
-- good_discipline: honored stop OR hit target OR had strong reasoning for exit
-- unclear: not enough data to determine
+- entered_late: stock entered ABOVE the recommended zone (chased the move)
+- chased_entry: entered with no zone defined at peak premium
+- good_discipline: honored stop OR hit target OR had clear reasoning for exit
+- unclear: not enough data
 
-Give SPECIFIC feedback. Reference exact dollar amounts. Be honest — this trader is learning.
+CRITICAL REQUIREMENTS — read carefully before writing:
+1. market_context MUST reconstruct what was happening in ${trade.ticker||'this stock'}'s market/sector at entry time using the thesis, news, and technicals provided. Not generic — specific to this stock and date.
+2. root_cause MUST explain the actual option MECHANICS — why did the contract lose/gain value? Was it theta decay, IV contraction, directional move, a news-driven gap? Quantify if possible (e.g. "at $X entry with Y DTE, theta was burning ~$Z/day from day one").
+3. warning_signs MUST describe market/Greek/technical signals visible at entry — NOT behavioral mistakes. What would an experienced trader have spotted before entering?
+4. what_went_wrong: the FIRST item MUST be a market/mechanical explanation. Do NOT start with "you ignored your stop" — explain WHY the trade moved against them first.
+5. next_time: MUST be specific and technical. Reference actual price levels or conditions for ${trade.ticker||'this ticker'}. BANNED phrases: "follow your stop loss", "set an alert", "honor your stop", "stick to your plan" — these are too generic to be useful. Instead say things like: "Before entering any ${trade.ticker||'energy'} call, check whether IV is above 65% — at that level theta burns faster than most stocks can move in a week" or "If ${trade.ticker||'this stock'} fails to hold above $X within 3 days of entry, the setup has stalled — close without waiting for the option to hit stop."
 
-Return ONLY this JSON (no markdown):
+Return ONLY this JSON (no markdown, no extra text):
 {
-  "headline": "1 sentence verdict — what actually happened and the single biggest lesson",
-  "what_went_right": ["1-3 specific things with dollar amounts where relevant — empty array if total loss with no positives"],
-  "what_went_wrong": ["1-3 specific mistakes with dollar amounts — empty array if clean win"],
-  "timing_grade": "A, B, C, or D — grade for ENTRY timing only (stock entry vs recommended zone)",
-  "timing_note": "1-2 sentences on entry timing specifically — was the stock in the zone? what did that mean?",
-  "exit_grade": "A, B, C, or D — grade for EXIT discipline (did they honor stop? exit at right time?)",
-  "exit_note": "1-2 sentences on exit — reference actual prices. If exit was below stop, say so explicitly.",
-  "next_time": ["2-3 concrete actions with specific prices or rules, e.g. 'Set a hard stop alert at $1.45 before entering — if you see $1.45 on the contract, close immediately, no waiting'"],
-  "pattern_flag": "apply the PATTERN FLAG RULES above — pick the most accurate one"
+  "headline": "1 sentence — what actually happened and the single most important takeaway",
+  "market_context": "2-3 sentences: what was the market/stock/sector actually doing at time of entry and during the trade? Use the thesis and news to reconstruct real conditions. Was the original setup sound? What changed or worked against it?",
+  "root_cause": "2-3 sentences: the MECHANICAL reason the option gained or lost value. Theta decay? IV contraction post-event? Stock reversal from a specific catalyst? Explain the option mechanics explicitly with approximate dollar impact if data allows.",
+  "warning_signs": ["2-3 signals that existed AT ENTRY — market, Greek, or technical — that an experienced options trader would have seen as elevated risk. Not behavioral mistakes — actual pre-entry market signals."],
+  "what_went_right": ["1-3 specific things with dollar amounts where relevant — empty array only if zero positives"],
+  "what_went_wrong": ["1-3 items — FIRST MUST be a market/mechanical reason the trade moved against them, not a behavioral critique"],
+  "timing_grade": "A/B/C/D — grade for ENTRY timing vs recommended zone",
+  "timing_note": "1-2 sentences on entry timing specifically — was the stock in the zone? What did that mean for the setup?",
+  "exit_grade": "A/B/C/D — grade for EXIT discipline",
+  "exit_note": "1-2 sentences on exit — reference actual prices. If exit was below stop, say so explicitly and explain what it cost.",
+  "next_time": ["2-3 specific, technical actions — must reference actual price levels, % thresholds, or market conditions for this ticker/setup. No generic stop loss advice."],
+  "pattern_flag": "apply PATTERN FLAG RULES above — pick the most accurate one"
 }`;
 }
 
@@ -5827,6 +5842,13 @@ function buildPostAnalysisHTML(pa, tradeId){
     const exitRationale = tradeObj?.exit_rationale;
     const traderNotes   = tradeObj?.trader_notes;
     const traderVoiceHtml = (exitRationale||traderNotes) ? `<div style="margin-bottom:10px;padding:8px 10px;background:rgba(139,92,246,.06);border-left:2px solid rgba(139,92,246,.3);border-radius:0 4px 4px 0;font-size:11px;color:var(--muted);line-height:1.5">${exitRationale?`<div><span style="font-weight:600;color:var(--text)">Why you exited:</span> ${exitRationale}</div>`:''}${traderNotes?`<div style="margin-top:${exitRationale?'5px':'0'}"><span style="font-weight:600;color:var(--text)">Your notes:</span> ${traderNotes}</div>`:''}</div>` : '';
+    // New deep-analysis fields
+    const marketCtxHtml = pa.market_context
+        ? `<div class="pca-section" style="border-left:2px solid rgba(99,179,237,.35);padding-left:10px"><div class="pca-section-title" style="color:#63b3ed">🌐 Market Context</div><p style="margin:4px 0 0;font-size:12px;line-height:1.6;color:var(--muted)">${pa.market_context}</p></div>` : '';
+    const rootCauseHtml = pa.root_cause
+        ? `<div class="pca-section" style="border-left:2px solid rgba(251,191,36,.35);padding-left:10px"><div class="pca-section-title" style="color:#fbbf24">⚙️ Why The Option Moved</div><p style="margin:4px 0 0;font-size:12px;line-height:1.6;color:var(--muted)">${pa.root_cause}</p></div>` : '';
+    const warningHtml = (pa.warning_signs||[]).length
+        ? `<div class="pca-section" style="border-left:2px solid rgba(251,113,60,.35);padding-left:10px"><div class="pca-section-title" style="color:#fb713c">⚠️ Warning Signs at Entry</div><ul class="pca-list">${(pa.warning_signs).map(x=>`<li>${x}</li>`).join('')}</ul></div>` : '';
     const rightHtml = (pa.what_went_right||[]).length
         ? `<div class="pca-section"><div class="pca-section-title">✅ What went right</div><ul class="pca-list">${(pa.what_went_right).map(x=>`<li>${x}</li>`).join('')}</ul></div>` : '';
     const wrongHtml = (pa.what_went_wrong||[]).length
@@ -5861,6 +5883,7 @@ function buildPostAnalysisHTML(pa, tradeId){
         <div class="pca-body open" id="pca-body-${tradeId}">
             ${traderVoiceHtml}
             <div class="pca-headline">${pa.headline||''}</div>
+            ${marketCtxHtml}${rootCauseHtml}${warningHtml}
             ${rightHtml}${wrongHtml}
             <div class="pca-section">
                 <div class="pca-section-title">⏱ Entry Timing <span class="pca-grade ${tg}">${tg}</span></div>
@@ -5898,7 +5921,7 @@ async function runPostCloseAnalysis(trade){
         ]);
         const newsText = newsResult?.text || '';
 
-        const raw = await callClaude(buildPostClosePrompt(trade, techData, flowData, newsText), 3000);
+        const raw = await callClaude(buildPostClosePrompt(trade, techData, flowData, newsText), 4500);
         const pa = JSON.parse(stripJSON(raw));
         const idx = trades.findIndex(t=>t.id===trade.id);
         if(idx>=0){
