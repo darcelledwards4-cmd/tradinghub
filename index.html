@@ -2298,14 +2298,14 @@ function stripJSON(raw){
 }
 
 // ── CLAUDE ────────────────────────────────────────────────────
-async function callClaude(prompt){
+async function callClaude(prompt, maxTokens=2500){
     let r;
     if(ON_VERCEL){
         // Use Vercel proxy — key is server-side
         r=await fetch('/api/claude',{
             method:'POST',
             headers:{'Content-Type':'application/json'},
-            body:JSON.stringify({model:'claude-haiku-4-5-20251001',max_tokens:2500,messages:[{role:'user',content:prompt}]})
+            body:JSON.stringify({model:'claude-haiku-4-5-20251001',max_tokens:maxTokens,messages:[{role:'user',content:prompt}]})
         });
     } else {
         // Local dev — use key from localStorage/config.js with browser direct access
@@ -2314,7 +2314,7 @@ async function callClaude(prompt){
         r=await fetch('https://api.anthropic.com/v1/messages',{
             method:'POST',
             headers:{'Content-Type':'application/json','x-api-key':key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
-            body:JSON.stringify({model:'claude-haiku-4-5-20251001',max_tokens:2500,messages:[{role:'user',content:prompt}]})
+            body:JSON.stringify({model:'claude-haiku-4-5-20251001',max_tokens:maxTokens,messages:[{role:'user',content:prompt}]})
         });
     }
     let d;
@@ -5604,7 +5604,13 @@ function renderJournal(){
         html+=closed.map(t=>{
             const p=t.manual_pnl!=null?t.manual_pnl:(t.exit!=null?(t.exit-t.entry)*t.qty*100:null);
             const ph=p!=null?`<span class="${p>=0?'pos':'neg'}">${p>=0?'+':'-'}$${Math.abs(p).toFixed(0)}</span>`:'—';
-            return`<tr><td style="color:var(--muted);white-space:nowrap">${fmt(t.date)}</td><td><strong>${t.ticker}</strong></td><td><span class="badge ${(t.type||'CALL')==='CALL'?'bc':'bp'}">${t.type||'CALL'}</span></td><td>$${t.strike||'?'}</td><td style="color:var(--muted)">${fmt(t.exp)}</td><td>${t.qty}</td><td>$${parseFloat(t.entry||0).toFixed(2)}</td><td>${t.exit!=null?'$'+t.exit.toFixed(2):'—'}</td><td>${ph}</td><td style="max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:11px">${t.thesis||'—'}</td><td style="white-space:nowrap"><button class="j-edit-btn" style="padding:3px 8px;margin-right:4px" onclick="openEditModal(${t.id})">✏️</button><button class="del" onclick="deleteTrade(${t.id})">×</button></td></tr>`;
+            const pa = t.post_analysis;
+            const flag = pa?.pattern_flag;
+            const flagLabels = {entered_early:'Entered Early',entered_late:'Entered Late',exited_early:'Exited Early',held_too_long:'Held Too Long',ignored_stop:'Ignored Stop',chased_entry:'Chased Entry',good_discipline:'Good Discipline',unclear:'Unclear'};
+            const flagColors = {entered_early:'#f59e0b',entered_late:'var(--red)',exited_early:'#f59e0b',held_too_long:'var(--red)',ignored_stop:'var(--red)',chased_entry:'var(--red)',good_discipline:'var(--green)',unclear:'var(--muted)'};
+            const flagBadge = flag ? `<span style="font-size:10px;font-weight:600;padding:1px 5px;border-radius:3px;color:${flagColors[flag]||'var(--muted)'};background:rgba(128,128,128,.1);margin-left:6px">${flagLabels[flag]||flag}</span>` : '';
+            const analysisRow = pa ? `<tr id="pca-row-${t.id}" style="display:none"><td colspan="11" style="padding:0 12px 12px;background:var(--bg2)"><div style="border-radius:6px;border:1px solid var(--border);overflow:hidden">${buildPostAnalysisHTML(pa,t.id)}</div></td></tr>` : '';
+            return`<tr style="cursor:pointer" onclick="toggleTablePCA(${t.id})"><td style="color:var(--muted);white-space:nowrap">${fmt(t.date)}</td><td><strong>${t.ticker}</strong>${flagBadge}</td><td><span class="badge ${(t.type||'CALL')==='CALL'?'bc':'bp'}">${t.type||'CALL'}</span></td><td>$${t.strike||'?'}</td><td style="color:var(--muted)">${fmt(t.exp)}</td><td>${t.qty}</td><td>$${parseFloat(t.entry||0).toFixed(2)}</td><td>${t.exit!=null?'$'+t.exit.toFixed(2):'—'}</td><td>${ph}</td><td style="max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:11px">${t.thesis||'—'}</td><td style="white-space:nowrap" onclick="event.stopPropagation()"><button class="j-edit-btn" style="padding:3px 8px;margin-right:4px" onclick="openEditModal(${t.id})">✏️</button><button class="j-edit-btn" style="padding:3px 8px;margin-right:4px;border-color:rgba(139,92,246,.4);color:#a78bfa" onclick="runPostCloseAnalysisFromTable(${t.id})" title="${pa?'Re-run analysis':'Run post-trade analysis'}">${pa?'🔍':'🔍 Analyze'}</button><button class="del" onclick="deleteTrade(${t.id})">×</button></td></tr>${analysisRow}`;
         }).join('');
         html+=`</tbody></table></div>`;
     }
@@ -5745,12 +5751,12 @@ function togglePCA(tradeId){
 }
 
 async function runPostCloseAnalysis(trade){
-    // Show "analyzing" state on the card immediately
+    // Show "analyzing" state on the card immediately (card view)
     const cardEl=document.getElementById('j-pca-'+trade.id);
     if(cardEl) cardEl.innerHTML=`<div class="pca-analyzing"><div class="spinner" style="width:11px;height:11px;border-width:2px"></div>Running post-trade analysis…</div>`;
 
     try{
-        const raw = await callClaude(buildPostClosePrompt(trade));
+        const raw = await callClaude(buildPostClosePrompt(trade), 3000);
         const pa = JSON.parse(stripJSON(raw));
         const idx = trades.findIndex(t=>t.id===trade.id);
         if(idx>=0){
@@ -5758,12 +5764,30 @@ async function runPostCloseAnalysis(trade){
             localStorage.setItem('darcell_v2_trades', JSON.stringify(trades));
             _sbUpsertTrade(trades[idx]);
         }
-        // Update the card in place without full re-render
+        // Update card in place if in card view; re-render table if in table view
         if(cardEl) cardEl.innerHTML = buildPostAnalysisHTML(pa, trade.id);
+        else renderJournal();
     }catch(e){
         console.warn('[post-close analysis] failed:', e.message);
         if(cardEl) cardEl.innerHTML='';
     }
+}
+
+function toggleTablePCA(tradeId){
+    const row=document.getElementById('pca-row-'+tradeId);
+    if(!row) return;
+    row.style.display=row.style.display==='none'?'':'none';
+}
+
+async function runPostCloseAnalysisFromTable(tradeId){
+    const trade = trades.find(t=>t.id===tradeId);
+    if(!trade) return;
+    // Find the button and show loading state
+    const btn = event?.target;
+    if(btn){ btn.disabled=true; btn.textContent='⏳'; }
+    await runPostCloseAnalysis(trade);
+    // renderJournal() inside runPostCloseAnalysis re-renders the table,
+    // which replaces the button — no need to reset it manually
 }
 
 function buildTrainingPrompt(closedTrades){
@@ -5820,7 +5844,7 @@ async function trainTradingModel(){
 
     try{
         const prompt = buildTrainingPrompt(closed);
-        const raw = await callClaude(prompt);
+        const raw = await callClaude(prompt, 5000);
         const result = JSON.parse(stripJSON(raw));
 
         const dna = {
