@@ -5648,48 +5648,103 @@ ${focusSectors?`📍 Sectors with proven edge: ${focusSectors}`:''}
 }
 
 // ── POST-CLOSE TRADE ANALYST ──────────────────────────────────
-function buildPostClosePrompt(trade){
+function buildPostClosePrompt(trade, techData, flowData, newsText){
     const pnl = trade.manual_pnl!=null ? trade.manual_pnl
               : (trade.exit!=null&&trade.entry!=null ? (trade.exit-trade.entry)*(trade.qty||1)*100 : null);
     const outcome = pnl!=null ? (pnl>=0 ? `WIN +$${pnl.toFixed(0)}` : `LOSS -$${Math.abs(pnl).toFixed(0)}`) : 'CLOSED';
     const stockEntry = trade.stock_price_at_entry;
+    const isCall = (trade.type||'CALL')==='CALL';
+
+    // Stock entry vs zone
     let zoneNote = '';
     if(stockEntry && trade.entry_low && trade.entry_high){
-        if(stockEntry < trade.entry_low) zoneNote = `entered EARLY at $${stockEntry} — zone was $${trade.entry_low}–$${trade.entry_high}`;
-        else if(stockEntry > trade.entry_high) zoneNote = `entered LATE at $${stockEntry} — zone was $${trade.entry_low}–$${trade.entry_high}`;
-        else zoneNote = `entered IN THE ZONE at $${stockEntry} (zone $${trade.entry_low}–$${trade.entry_high}) ✓`;
+        if(stockEntry < trade.entry_low) zoneNote = `Stock entered EARLY at $${stockEntry} — recommended zone was $${trade.entry_low}–$${trade.entry_high} (entered BELOW the zone, meaning the stock hadn't reached the intended level yet)`;
+        else if(stockEntry > trade.entry_high) zoneNote = `Stock entered LATE at $${stockEntry} — recommended zone was $${trade.entry_low}–$${trade.entry_high} (entered ABOVE the zone, meaning the stock had already moved past the ideal buy point)`;
+        else zoneNote = `Stock entered IN THE ZONE at $${stockEntry} (zone $${trade.entry_low}–$${trade.entry_high}) ✓ — textbook entry timing`;
     }
+
+    // CRITICAL: explicit stop/exit math — pre-computed so Claude cannot misread direction
+    let stopNote = '';
+    if(trade.exit!=null && trade.stop_loss!=null){
+        const exitV = parseFloat(trade.exit);
+        const stopV = parseFloat(trade.stop_loss);
+        if(exitV < stopV){
+            stopNote = `EXIT ANALYSIS (CRITICAL): The option was sold at $${exitV.toFixed(2)}, which is BELOW the stop loss of $${stopV.toFixed(2)}. This means the trader did NOT exit at the stop — they held PAST the stop loss level hoping for recovery, and eventually sold at a worse price ($${(stopV-exitV).toFixed(2)} below stop). This is an ignored_stop pattern.`;
+        } else if(exitV > stopV && trade.target && exitV < parseFloat(trade.target)){
+            stopNote = `EXIT ANALYSIS: The option was sold at $${exitV.toFixed(2)}, which is ABOVE the stop ($${stopV.toFixed(2)}) but BELOW the target ($${trade.target}). The stop was respected (exit was not below it), but the trader exited before reaching the target. This could be exited_early or good_discipline depending on context.`;
+        } else if(exitV <= stopV*1.05 && exitV >= stopV*0.95){
+            stopNote = `EXIT ANALYSIS: The option was sold at $${exitV.toFixed(2)}, very close to the stop loss of $${stopV.toFixed(2)}. The trader essentially honored the stop.`;
+        } else if(trade.target && exitV >= parseFloat(trade.target)*0.9){
+            stopNote = `EXIT ANALYSIS: The option was sold at $${exitV.toFixed(2)}, near or at the target of $${trade.target}. Strong exit discipline.`;
+        }
+    }
+
     const daysHeld = trade.date&&trade.exp
         ? Math.round((new Date(trade.exp)-new Date(trade.date))/86400000) : null;
 
-    return `You are a trading coach reviewing a closed options trade for a beginner.
+    // Market context at analysis time
+    let techBlock = '';
+    if(techData){
+        const rsi = techData.rsi!=null ? `RSI ${techData.rsi}` : '';
+        const ma = techData.currentClose&&techData.ma50 ? `Price $${techData.currentClose} vs MA50 $${techData.ma50} (${techData.currentClose>techData.ma50?'above':'below'} trend)` : '';
+        const hv = techData.hv30!=null ? `HV30 ${techData.hv30}%` : '';
+        const pattern = techData.candlePattern ? `Candle pattern: ${techData.candlePattern}` : '';
+        const parts = [rsi,ma,hv,pattern].filter(Boolean);
+        if(parts.length) techBlock = `\nCURRENT TECHNICALS (${trade.ticker}): ${parts.join(' | ')}`;
+    }
+    let flowBlock = '';
+    if(flowData){
+        const iv = flowData.atmIV!=null ? `ATM IV ${flowData.atmIV}%` : '';
+        const flow = flowData.callFlow!=null ? `Options flow: ${flowData.callFlow}% calls / ${flowData.putFlow}% puts` : '';
+        const unusual = flowData.unusual?.length ? `Unusual activity: ${flowData.unusual[0].type} $${flowData.unusual[0].strike} (${flowData.unusual[0].volume.toLocaleString()} contracts)` : '';
+        const parts = [iv,flow,unusual].filter(Boolean);
+        if(parts.length) flowBlock = `\nCURRENT OPTIONS FLOW: ${parts.join(' | ')}`;
+    }
+    let newsBlock = newsText ? `\nRECENT NEWS (${trade.ticker}): ${newsText.slice(0,400)}` : '';
 
-TRADE SUMMARY:
-- ${trade.ticker} ${trade.type||'CALL'} $${trade.strike||'?'} strike, exp ${trade.exp||'?'}
-- ${outcome}
-- Option paid: $${trade.entry||'?'}/contract × ${trade.qty||1} contracts
-- Option sold: ${trade.exit ? '$'+trade.exit+'/contract' : 'not recorded'}
-- Recommended entry zone: ${trade.entry_low&&trade.entry_high ? '$'+trade.entry_low+' – $'+trade.entry_high : 'not recorded'}
-- Stock price at entry: ${stockEntry ? '$'+stockEntry : 'not recorded'}${zoneNote ? ' ('+zoneNote+')' : ''}
-- Recommended stop: ${trade.stop_loss ? '$'+trade.stop_loss+' (option contract price)' : 'not set'}
-- Recommended target: ${trade.target ? '$'+trade.target+' (option contract price)' : 'not set'}
-- Days held: ${daysHeld!=null ? daysHeld+'d DTE' : 'unknown'}
+    return `You are a trading coach reviewing a closed options trade. Be direct, specific, and accurate. Reference actual dollar amounts. Do not make up data.
+
+TRADE DETAILS:
+- ${trade.ticker} ${trade.type||'CALL'} $${trade.strike||'?'} strike, expires ${trade.exp||'?'}
+- Direction: ${isCall ? 'CALL — profit if stock goes UP' : 'PUT — profit if stock goes DOWN'}
+- Outcome: ${outcome}
+- Option premium paid: $${trade.entry||'?'}/contract × ${trade.qty||1} contracts = $${((parseFloat(trade.entry||0))*(trade.qty||1)*100).toFixed(0)} total cost
+- Option sold at: ${trade.exit!=null ? '$'+parseFloat(trade.exit).toFixed(2)+'/contract' : 'not recorded'}
+- Stop loss (option contract price — trigger to exit): ${trade.stop_loss ? '$'+trade.stop_loss : 'not set'}
+- Profit target (option contract price): ${trade.target ? '$'+trade.target : 'not set'}
+- Days until expiry at entry: ${daysHeld!=null ? daysHeld+'d' : 'unknown'}
+- Stock price when entered: ${stockEntry ? '$'+stockEntry : 'not recorded'}
+- Recommended stock entry zone: ${trade.entry_low&&trade.entry_high ? '$'+trade.entry_low+' – $'+trade.entry_high : 'not recorded'}
+${zoneNote ? '- '+zoneNote : ''}
 - Original thesis: "${trade.thesis||'not recorded'}"
-- Trader's own notes on close: "${trade.trader_notes||'none'}"
+- Trader notes on close: "${trade.trader_notes||'none'}"
+${techBlock}${flowBlock}${newsBlock}
 
-Give SPECIFIC, honest feedback. Don't be vague. Reference actual dollar amounts from above.
+${stopNote}
+
+PATTERN FLAG RULES (apply these exactly — do not guess):
+- ignored_stop: exit price is BELOW the stop loss price (trader held past their own stop and sold worse)
+- held_too_long: no stop set, held to near-expiry and lost significant premium to time decay
+- exited_early: exit price is ABOVE stop but well below target, trade still had time/merit to run
+- entered_early: stock entered BELOW the recommended zone (before the setup was ready)
+- entered_late: stock entered ABOVE the recommended zone (chased after the move started)
+- chased_entry: entered with no zone defined and paid peak premium
+- good_discipline: honored stop OR hit target OR had strong reasoning for exit
+- unclear: not enough data to determine
+
+Give SPECIFIC feedback. Reference exact dollar amounts. Be honest — this trader is learning.
 
 Return ONLY this JSON (no markdown):
 {
-  "headline": "1 sentence verdict on this trade — what happened and why",
-  "what_went_right": ["1-3 specific things — empty array if pure loss"],
-  "what_went_wrong": ["1-3 specific things — empty array if clean win"],
-  "timing_grade": "A or B or C or D",
-  "timing_note": "1-2 sentences: did they enter in the recommended zone? too early? too late? what did that cost them?",
-  "exit_grade": "A or B or C or D",
-  "exit_note": "1-2 sentences: how did the exit compare to the stop/target plan? did they leave money on the table or protect well?",
-  "next_time": ["2-3 concrete, specific actions — not generic advice. e.g. 'Wait for stock to reach $29.50 before buying', 'Set a hard stop at 40% of premium paid and honor it'"],
-  "pattern_flag": "one of: entered_early | entered_late | exited_early | held_too_long | ignored_stop | chased_entry | good_discipline | unclear"
+  "headline": "1 sentence verdict — what actually happened and the single biggest lesson",
+  "what_went_right": ["1-3 specific things with dollar amounts where relevant — empty array if total loss with no positives"],
+  "what_went_wrong": ["1-3 specific mistakes with dollar amounts — empty array if clean win"],
+  "timing_grade": "A, B, C, or D — grade for ENTRY timing only (stock entry vs recommended zone)",
+  "timing_note": "1-2 sentences on entry timing specifically — was the stock in the zone? what did that mean?",
+  "exit_grade": "A, B, C, or D — grade for EXIT discipline (did they honor stop? exit at right time?)",
+  "exit_note": "1-2 sentences on exit — reference actual prices. If exit was below stop, say so explicitly.",
+  "next_time": ["2-3 concrete actions with specific prices or rules, e.g. 'Set a hard stop alert at $1.45 before entering — if you see $1.45 on the contract, close immediately, no waiting'"],
+  "pattern_flag": "apply the PATTERN FLAG RULES above — pick the most accurate one"
 }`;
 }
 
@@ -5751,12 +5806,21 @@ function togglePCA(tradeId){
 }
 
 async function runPostCloseAnalysis(trade){
-    // Show "analyzing" state on the card immediately (card view)
+    // Show "analyzing" state immediately
     const cardEl=document.getElementById('j-pca-'+trade.id);
-    if(cardEl) cardEl.innerHTML=`<div class="pca-analyzing"><div class="spinner" style="width:11px;height:11px;border-width:2px"></div>Running post-trade analysis…</div>`;
+    if(cardEl) cardEl.innerHTML=`<div class="pca-analyzing"><div class="spinner" style="width:11px;height:11px;border-width:2px"></div>Fetching market data & running analysis…</div>`;
 
     try{
-        const raw = await callClaude(buildPostClosePrompt(trade), 3000);
+        // Fetch current tech, flow, news in parallel to enrich the analysis
+        const ticker = (trade.ticker||'').toUpperCase();
+        const [techData, flowData, newsResult] = await Promise.all([
+            ticker ? fetchTechnicals(ticker).catch(()=>null) : null,
+            ticker ? fetchFlow(ticker).catch(()=>null)       : null,
+            ticker ? fetchNewsForPrompt(ticker, trade.type||'CALL', trade.strike, trade.exp).catch(()=>({text:'',items:[]})) : null,
+        ]);
+        const newsText = newsResult?.text || '';
+
+        const raw = await callClaude(buildPostClosePrompt(trade, techData, flowData, newsText), 3000);
         const pa = JSON.parse(stripJSON(raw));
         const idx = trades.findIndex(t=>t.id===trade.id);
         if(idx>=0){
@@ -5769,7 +5833,7 @@ async function runPostCloseAnalysis(trade){
         else renderJournal();
     }catch(e){
         console.warn('[post-close analysis] failed:', e.message);
-        if(cardEl) cardEl.innerHTML='';
+        if(cardEl) cardEl.innerHTML=`<div style="font-size:11px;color:var(--red);padding:8px">Analysis failed: ${e.message}</div>`;
     }
 }
 
