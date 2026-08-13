@@ -997,6 +997,10 @@
             <div class="fg"><label>Number of Contracts</label><input type="number" id="m-qty" value="1" min="1" /></div>
             <div class="fg"><label>Option Price I Paid (per contract, e.g. $2.50 = $250 total)</label><input type="number" id="m-entry" placeholder="2.50" step="0.01" /></div>
             <div class="fg"><label>Option Price I Sold At (leave blank if still open)</label><input type="number" id="m-exit" placeholder="—" step="0.01" /></div>
+            <div class="fg span2" id="m-live-price-row" style="display:none">
+                <label style="display:flex;align-items:center;gap:6px">Stock Price Right Now <span style="font-size:10px;color:var(--muted);font-weight:400">(auto-locked at log time)</span></label>
+                <div id="m-live-price" style="padding:8px 10px;background:var(--bg3);border-radius:6px;border:1px solid var(--border);font-size:13px;font-weight:600;color:var(--text);display:flex;align-items:center;gap:8px"><span class="spinner" style="width:10px;height:10px;border-width:2px"></span> Fetching live price…</div>
+            </div>
             <div class="fg span2"><label>Why I Took This Trade</label><textarea id="m-thesis" placeholder="e.g. NVDA bouncing off $120 support, big call flow, strong sector momentum..."></textarea></div>
         </div>
         <div class="mactions">
@@ -4970,8 +4974,8 @@ async function signOutSupabase(){
 
 // ── JOURNAL ───────────────────────────────────────────────────
 let trades=JSON.parse(localStorage.getItem('darcell_v2_trades')||'[]');
-function openModal(){document.getElementById('m-date').value=new Date().toISOString().split('T')[0];document.getElementById('modal').classList.add('open');}
-function closeModal(){document.getElementById('modal').classList.remove('open');window._pendingCardData=null;}
+function openModal(){document.getElementById('m-date').value=new Date().toISOString().split('T')[0];const pr=document.getElementById('m-live-price-row');if(pr)pr.style.display='none';document.getElementById('modal').classList.add('open');}
+function closeModal(){document.getElementById('modal').classList.remove('open');window._pendingCardData=null;const pr=document.getElementById('m-live-price-row');if(pr)pr.style.display='none';}
 function saveTrade(){
     const t={id:Date.now(),date:document.getElementById('m-date').value,ticker:document.getElementById('m-ticker').value.toUpperCase().trim(),type:document.getElementById('m-type').value,strike:document.getElementById('m-strike').value,exp:document.getElementById('m-exp').value,qty:parseInt(document.getElementById('m-qty').value)||1,entry:parseFloat(document.getElementById('m-entry').value)||0,exit:document.getElementById('m-exit').value?parseFloat(document.getElementById('m-exit').value):null,thesis:document.getElementById('m-thesis').value.trim()};
     t.status=t.exit!==null?'Closed':'Open';
@@ -5089,7 +5093,7 @@ function saveEditTrade(){
     closeEditModal();
 }
 
-function logTradeFromCard(cardId){
+async function logTradeFromCard(cardId){
     const cd=window._cardData[cardId];
     if(!cd)return;
     const dir=cd.activeDir||'call';
@@ -5113,9 +5117,11 @@ function logTradeFromCard(cardId){
     if(expMatch){try{const d=new Date(expMatch[0]);if(!isNaN(d.getTime()))expDate=d.toISOString().split('T')[0];}catch(e){}}
     // stop_loss/target from card are STOCK PRICE levels — don't carry them into journal
     // User will set their own option contract price stops via Edit modal
-    window._pendingCardData={entry_low:entryLow,entry_high:entryHigh,option_detail:optDetail,account_sizing:acctSizing,stock_price_at_entry:cd.current_price||idea.current_price||0,option_type:(idea.option_type||'CALL').toUpperCase()};
+    const ticker=(idea.ticker||'').toUpperCase();
+    const stalePriceAtEntry=cd.current_price||idea.current_price||0;
+    window._pendingCardData={entry_low:entryLow,entry_high:entryHigh,option_detail:optDetail,account_sizing:acctSizing,stock_price_at_entry:stalePriceAtEntry,option_type:(idea.option_type||'CALL').toUpperCase()};
     document.getElementById('m-date').value=new Date().toISOString().split('T')[0];
-    document.getElementById('m-ticker').value=idea.ticker||'';
+    document.getElementById('m-ticker').value=ticker||idea.ticker||'';
     document.getElementById('m-type').value=(idea.option_type||'CALL').toUpperCase();
     document.getElementById('m-strike').value=strike;
     if(expDate)document.getElementById('m-exp').value=expDate;
@@ -5126,7 +5132,33 @@ function logTradeFromCard(cardId){
     // Close search modal if open so the log modal isn't stacked behind it
     const srchModal=document.getElementById('srchModal');
     if(srchModal&&srchModal.style.display!=='none') srchModal.style.display='none';
+    // Show live price row in spinner/fetching state
+    const priceRow=document.getElementById('m-live-price-row');
+    const priceEl=document.getElementById('m-live-price');
+    if(priceRow) priceRow.style.display='';
+    if(priceEl) priceEl.innerHTML=`<span class="spinner" style="width:10px;height:10px;border-width:2px"></span> Fetching live price…`;
     document.getElementById('modal').classList.add('open');
+    // Fetch live price in background — modal is already open, no blocking
+    if(ticker){
+        try{
+            const q=await fetchQuote(ticker);
+            const livePrice=q?.price||stalePriceAtEntry;
+            if(window._pendingCardData) window._pendingCardData.stock_price_at_entry=livePrice;
+            const entryLowV=window._pendingCardData?.entry_low;
+            const entryHighV=window._pendingCardData?.entry_high;
+            let zoneTag='';
+            if(entryLowV&&entryHighV){
+                if(livePrice<entryLowV) zoneTag=` <span style="font-size:10px;font-weight:400;color:#f59e0b;background:rgba(245,158,11,.12);padding:2px 6px;border-radius:4px">⚠️ Below entry zone — entering early</span>`;
+                else if(livePrice>entryHighV) zoneTag=` <span style="font-size:10px;font-weight:400;color:var(--red);background:rgba(239,68,68,.12);padding:2px 6px;border-radius:4px">⚠️ Above entry zone — entering late</span>`;
+                else zoneTag=` <span style="font-size:10px;font-weight:400;color:var(--green);background:rgba(34,197,94,.12);padding:2px 6px;border-radius:4px">✓ In entry zone</span>`;
+            }
+            if(priceEl) priceEl.innerHTML=`<strong>$${livePrice.toFixed(2)}</strong>${zoneTag}`;
+        }catch(e){
+            if(priceEl) priceEl.innerHTML=`<span style="color:var(--muted);font-weight:400;font-size:12px">Price unavailable — check connection</span>`;
+        }
+    } else {
+        if(priceRow) priceRow.style.display='none';
+    }
 }
 function buildJournalCard(trade){
     const rec=trade.recommendation||'pending';
