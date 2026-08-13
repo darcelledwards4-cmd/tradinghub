@@ -5196,7 +5196,7 @@ function buildJournalCard(trade){
             ${trade.action?`<div class="j-action-box">💡 ${trade.action}</div>`:''}
             ${trade.news_summary?`<div class="j-news-line">📰 ${trade.news_summary.slice(0,140)}${trade.news_summary.length>140?'…':''}</div>`:''}
             ${trade.trader_notes?`<div class="j-action-box" style="border-left:2px solid rgba(139,92,246,.4);font-style:italic;color:var(--muted)">📝 Your notes: ${trade.trader_notes}</div>`:''}
-            <div id="j-pca-${trade.id}">${trade.status==='Closed'&&trade.post_analysis ? buildPostAnalysisHTML(trade.post_analysis, trade.id) : ''}</div>
+            <div id="j-pca-${trade.id}">${(trade.status==='Closed'||trade.exit!=null)&&trade.post_analysis ? buildPostAnalysisHTML(trade.post_analysis, trade.id) : ''}</div>
             <div class="j-card-ftr">
                 <div class="j-ftr-meta">
                     <div>Logged ${fmt(trade.date)} · ${trade.qty} contract${trade.qty!==1?'s':''} @ $${parseFloat(trade.entry||0).toFixed(2)}</div>
@@ -5204,7 +5204,7 @@ function buildJournalCard(trade){
                 </div>
                 <div>
                     <button class="j-edit-btn" onclick="openEditModal(${trade.id})">✏️ Edit</button>
-                    ${trade.status!=='Closed'?`<button class="j-close-trade-btn" onclick="openCloseModal(${trade.id})">🏁 Close Trade</button>`:`<button class="j-close-trade-btn" onclick="runPostCloseAnalysis(trades.find(t=>t.id===${trade.id}))" style="border-color:rgba(139,92,246,.3);color:#a78bfa">🔍 Re-analyze</button>`}
+                    ${(trade.status==='Closed'||trade.exit!=null)?`<button class="j-close-trade-btn" onclick="runPostCloseAnalysis(trades.find(t=>t.id===${trade.id}))" style="border-color:rgba(139,92,246,.3);color:#a78bfa">🔍 Re-analyze</button>`:`<button class="j-close-trade-btn" onclick="openCloseModal(${trade.id})">🏁 Close Trade</button>`}
                     <button class="j-del-btn" onclick="deleteTrade(${trade.id})">×</button>
                 </div>
             </div>
