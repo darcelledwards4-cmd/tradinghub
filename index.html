@@ -5204,7 +5204,7 @@ function buildJournalCard(trade){
                 </div>
                 <div>
                     <button class="j-edit-btn" onclick="openEditModal(${trade.id})">✏️ Edit</button>
-                    ${(trade.status==='Closed'||trade.exit!=null)?`<button class="j-close-trade-btn" onclick="runPostCloseAnalysis(trades.find(t=>t.id===${trade.id}))" style="border-color:rgba(139,92,246,.3);color:#a78bfa">🔍 Re-analyze</button>`:`<button class="j-close-trade-btn" onclick="openCloseModal(${trade.id})">🏁 Close Trade</button>`}
+                    ${(trade.status!=='Open'||trade.exit!=null)?`<button class="j-close-trade-btn" onclick="runPostCloseAnalysis(trades.find(t=>t.id===${trade.id}))" style="border-color:rgba(139,92,246,.3);color:#a78bfa">🔍 Re-analyze</button>`:`<button class="j-close-trade-btn" onclick="openCloseModal(${trade.id})">🏁 Close Trade</button>`}
                     <button class="j-del-btn" onclick="deleteTrade(${trade.id})">×</button>
                 </div>
             </div>
@@ -5781,7 +5781,7 @@ function buildTrainingPrompt(closedTrades){
         const patternFlag = pa?.pattern_flag ? `pattern:${pa.pattern_flag}` : '';
         const notes = t.trader_notes ? `\n  Trader notes: "${t.trader_notes.slice(0,100)}"` : '';
         const analysis = pa ? `\n  Coach analysis: "${pa.headline||''}" Entry:${pa.timing_grade||'?'} Exit:${pa.exit_grade||'?'}` : '';
-        return `• ${outcome} — ${t.ticker} ${t.type||'CALL'} $${t.strike||'?'} exp ${fmt(t.exp)||'?'}${daysHeld?` (~${daysHeld}d DTE)`:''}${entry?', '+entry:''}${exit?', '+exit:''}${stop?', '+stop:''}${tgt?', '+tgt:''}${zoneNote?' ['+zoneNote+']':''}${patternFlag?' ['+patternFlag+']':''}${t.thesis?`\n  Thesis: "${t.thesis.slice(0,100)}"`:''}}${notes}${analysis}`
+        return `• ${outcome} — ${t.ticker} ${t.type||'CALL'} $${t.strike||'?'} exp ${fmt(t.exp)||'?'}${daysHeld?` (~${daysHeld}d DTE)`:''}${entry?', '+entry:''}${exit?', '+exit:''}${stop?', '+stop:''}${tgt?', '+tgt:''}${zoneNote?' ['+zoneNote+']':''}${patternFlag?' ['+patternFlag+']':''}${t.thesis?`\n  Thesis: "${t.thesis.slice(0,100)}"`:''}`+notes+analysis
     }).join('\n');
 
     return `You are analyzing a beginner options trader's closed trade history to build their personalized Trading DNA.
@@ -5816,8 +5816,7 @@ async function trainTradingModel(){
         return;
     }
     const btn = document.getElementById('trainBtn');
-    btn.disabled = true;
-    btn.textContent = '⏳ Training...';
+    if(btn){ btn.disabled = true; btn.textContent = '⏳ Training...'; }
 
     try{
         const prompt = buildTrainingPrompt(closed);
@@ -5846,8 +5845,7 @@ async function trainTradingModel(){
     }catch(e){
         alert('Training failed: ' + e.message);
     }
-    btn.disabled = false;
-    btn.textContent = '🧠 Train My Model';
+    if(btn){ btn.disabled = false; btn.textContent = '🧠 Train My Model'; }
 }
 
 function renderDNACard(){
