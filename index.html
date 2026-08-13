@@ -3895,9 +3895,9 @@ Return ONLY a raw JSON array of exactly 3 objects. No markdown, no code fences, 
 Each object must have:
 ticker, company, current_price (number), price_change (number), direction ("bullish"), summary (1 sentence why this is a gem), pros (array of 2 short strings), cons (array of 1 short string), potential ("high"|"moderate"|"avoid"), entry_low (number), entry_high (number), stop_loss (number), target (number), option_type ("CALL"), option_detail (same as expiry_options[0].option_detail), account_sizing (same as expiry_options[0].account_sizing), confidence ("high"|"medium"|"low"), risk_reward (string e.g. "1:2.5"),
 expiry_options (array of EXACTLY 3 objects):
-  [0] {"label":"1 Mo · Aggressive",   "entry_low":number,"entry_high":number,"stop_loss":number,"target":number,"option_detail":"$X Call · Expires [options Friday around ${exp.aggressive}] · Est. $X.XX/contract (under $3)","account_sizing":"1-sentence rationale","potential":"high"|"moderate"|"avoid"}
-  [1] {"label":"3 Mo · Moderate",     "entry_low":number,"entry_high":number,"stop_loss":number,"target":number,"option_detail":"$X Call · Expires [options Friday around ${exp.moderate}] · Est. $X.XX/contract (under $3)","account_sizing":"1-sentence rationale","potential":"high"|"moderate"|"avoid"}
-  [2] {"label":"6 Mo · Conservative", "entry_low":number,"entry_high":number,"stop_loss":number,"target":number,"option_detail":"$X Call · Expires [options Friday around ${exp.sixMonth}] · Est. $X.XX/contract (under $3)","account_sizing":"1-sentence rationale","potential":"high"|"moderate"|"avoid"}
+  [0] {"label":"1 Mo · Aggressive",   "entry_low":number,"entry_high":number,"stop_loss":number,"target":number,"option_detail":"$X Call · Expires [options Friday around ${exp.aggressive}] · Est. $X.XX/contract (under $3)","account_sizing":"2 sentences: (1) entry timing — reference RSI and whether stock is in the entry zone NOW or needs to pull back; (2) if DNA block is present, reference the trader's specific timing/stop tendency with a concrete instruction like 'You tend to [pattern] — [specific action]'","potential":"high"|"moderate"|"avoid"}
+  [1] {"label":"3 Mo · Moderate",     "entry_low":number,"entry_high":number,"stop_loss":number,"target":number,"option_detail":"$X Call · Expires [options Friday around ${exp.moderate}] · Est. $X.XX/contract (under $3)","account_sizing":"2 sentences same format as above","potential":"high"|"moderate"|"avoid"}
+  [2] {"label":"6 Mo · Conservative", "entry_low":number,"entry_high":number,"stop_loss":number,"target":number,"option_detail":"$X Call · Expires [options Friday around ${exp.sixMonth}] · Est. $X.XX/contract (under $3)","account_sizing":"2 sentences same format as above","potential":"high"|"moderate"|"avoid"}
 Use DIFFERENT strikes and levels per timeframe. Your ENTIRE response must be a single JSON array starting with [ and ending with ].`;
 }
 
@@ -5631,27 +5631,61 @@ function saveDNA(dna){ localStorage.setItem(DNA_KEY, JSON.stringify(dna)); }
 function clearDNA(){ localStorage.removeItem(DNA_KEY); renderDNACard(); }
 
 // Returns a concise prompt block to inject into Claude scan prompts
-// Called from discoverPrompt() and watchlistScanPrompt() — if no DNA exists, returns ''
+// Called from discoverPrompt(), watchlistScanPrompt(), gemsPrompt() — returns '' if no DNA
 function getDNAPromptBlock(){
     const dna = getDNA();
-    if(!dna || !dna.winning_patterns?.length) return '';
-    const wins  = dna.winning_patterns.slice(0, 3).join(' · ');
+
+    // Even without trained DNA, inject raw trade pattern data if available
+    const closed = (typeof trades !== 'undefined') ? trades.filter(t => t.status !== 'Open') : [];
+    const patternCounts = {};
+    closed.forEach(t => {
+        const f = t.post_analysis?.pattern_flag;
+        if(f) patternCounts[f] = (patternCounts[f]||0) + 1;
+    });
+    const topPattern = Object.entries(patternCounts).sort((a,b)=>b[1]-a[1])[0];
+    const rawPatternNote = topPattern && topPattern[1] >= 2
+        ? `⚠️ RECURRING PATTERN: This trader has shown "${topPattern[0].replace(/_/g,' ')}" on ${topPattern[1]} of their last ${closed.length} closed trades.` : '';
+
+    if(!dna || !dna.winning_patterns?.length){
+        // No trained DNA yet — inject raw pattern warning if we have one
+        return rawPatternNote ? `\n🧠 TRADER PATTERN DATA (from ${closed.length} closed trades):\n${rawPatternNote}\n→ Keep this recurring pattern in mind when sizing entry zones, stops, and account_sizing guidance.\n` : '';
+    }
+
+    const wins   = dna.winning_patterns.slice(0, 3).join(' · ');
     const losses = dna.losing_patterns?.slice(0, 2).join(' · ') || '';
-    const timingNote = dna.timing_tendency==='enters_early' ? 'This trader tends to enter BEFORE the zone — prefer setups where the entry zone is clearly defined and note if the stock is already at or near it.'
-        : dna.timing_tendency==='enters_late' ? 'This trader tends to enter AFTER the zone — set tight, specific entry zones and note if the stock has already moved past optimal entry.'
+    const avoid  = dna.avoid_setup || '';
+    const topLessons = (dna.lessons||[]).slice(0, 2).join(' | ');
+
+    const timingNote = dna.timing_tendency==='enters_early'
+        ? 'Enters BEFORE zone — set tight entry_low/entry_high so the zone is narrow and clear. In account_sizing, explicitly warn if the stock has not yet reached the entry zone.'
+        : dna.timing_tendency==='enters_late'
+        ? 'Enters AFTER zone (chases) — in account_sizing, flag if the stock has already moved past the ideal entry. Emphasize waiting for a pullback.'
         : '';
-    const exitNote = dna.exit_tendency==='exits_early' ? 'This trader exits too early — recommend holding to at least 50% of the target.'
-        : dna.exit_tendency==='holds_too_long' ? 'This trader holds too long — emphasize stop discipline and partial exits.'
+
+    const exitNote = dna.exit_tendency==='exits_early'
+        ? 'Exits too early — in account_sizing, recommend NOT exiting until option reaches at least 60-70% of target. Emphasize patience.'
+        : dna.exit_tendency==='holds_too_long'
+        ? 'Holds past stop — in account_sizing, give a SPECIFIC stop price and say "honor this stop, do not hold below it." Reference this trader\'s history of ignoring stops.'
         : '';
+
     const focusSectors = (dna.market_focus||[]).slice(0,3).join(', ');
-    return `\n🧠 THIS TRADER'S REAL EDGE (learned from ${dna.trades_analyzed} actual wins & losses):
-✅ What works for them: ${wins}
-${losses?`❌ What leads to losses: ${losses}`:''}
-Preferred setup: ${dna.setup_preference||''}
-${timingNote?`⏱ Entry timing pattern: ${timingNote}`:''}
-${exitNote?`🚪 Exit pattern: ${exitNote}`:''}
-${focusSectors?`📍 Sectors with proven edge: ${focusSectors}`:''}
-→ APPLY THIS: Match winning patterns first. Also scan the BEST AVAILABLE market opportunities right now — do not limit to sectors they've traded before. If a strong setup exists outside their usual sectors, recommend it and note why it fits their style. Flag in account_sizing if entry timing is critical for this trader.\n`;
+
+    return `\n🧠 TRADER DNA — ${dna.trades_analyzed} real closed trades analyzed. USE THIS TO PERSONALIZE EVERY SUGGESTION:
+✅ Winning patterns: ${wins}
+❌ Losing patterns: ${losses}
+✅ Best setup for them: ${dna.setup_preference||''}
+🚫 What to avoid: ${avoid}
+📚 Key lessons from their trades: ${topLessons}
+${timingNote ? '⏱ '+timingNote : ''}
+${exitNote ? '🚪 '+exitNote : ''}
+${rawPatternNote ? rawPatternNote : ''}
+${focusSectors ? `📍 Sectors with proven edge: ${focusSectors}` : ''}
+
+→ HOW TO APPLY THIS IN YOUR RESPONSE:
+1. In account_sizing: reference this trader's specific tendencies (timing, stop discipline). Use their actual pattern (e.g. "You tend to enter early — wait for stock to reach $X before buying").
+2. In stop_loss: if this trader ignores stops, set the stop wider but make it explicit in account_sizing.
+3. In summary: if this trade matches their winning pattern, say so. If it conflicts with their losses pattern, flag it.
+4. Scan the best opportunities available — do not limit to their usual sectors, but note when a pick fits or breaks their historical pattern.\n`;
 }
 
 // ── POST-CLOSE TRADE ANALYST ──────────────────────────────────
