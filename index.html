@@ -5702,20 +5702,42 @@ function buildPostClosePrompt(trade, techData, flowData, newsText){
     }
     let newsBlock = newsText ? `\nRECENT NEWS (${trade.ticker}): ${newsText.slice(0,400)}` : '';
 
+    // Pre-compute key metrics
+    const entryV = parseFloat(trade.entry||0);
+    const exitV  = trade.exit!=null ? parseFloat(trade.exit) : null;
+    const stopV  = trade.stop_loss!=null ? parseFloat(trade.stop_loss) : null;
+    const tgtV   = trade.target!=null ? parseFloat(trade.target) : null;
+    const pctChange = exitV!=null && entryV>0 ? ((exitV-entryV)/entryV*100).toFixed(1) : null;
+    const totalCost = (entryV*(trade.qty||1)*100).toFixed(0);
+    const totalPL = pnl!=null ? (pnl>=0?'+$':'-$')+Math.abs(pnl).toFixed(0) : null;
+    const rrRatio = entryV>0 && stopV!=null && tgtV!=null && entryV>stopV
+        ? ((tgtV-entryV)/(entryV-stopV)).toFixed(2) : null;
+    // Stock direction context from current price
+    const currentStockPrice = techData?.currentClose||null;
+    const stockMoved = currentStockPrice&&stockEntry
+        ? (currentStockPrice-parseFloat(stockEntry)).toFixed(2) : null;
+    const stockDirNote = stockMoved!=null
+        ? (isCall
+            ? (parseFloat(stockMoved)>0 ? `Stock is UP $${stockMoved} from your entry — thesis was directionally correct` : `Stock is DOWN $${Math.abs(stockMoved)} from your entry — stock moved against your thesis`)
+            : (parseFloat(stockMoved)<0 ? `Stock is DOWN $${Math.abs(stockMoved)} from your entry — thesis was directionally correct` : `Stock is UP $${stockMoved} from your entry — stock moved against your thesis`))
+        : '';
+
     return `You are a trading coach reviewing a closed options trade. Be direct, specific, and accurate. Reference actual dollar amounts. Do not make up data.
 
 TRADE DETAILS:
 - ${trade.ticker} ${trade.type||'CALL'} $${trade.strike||'?'} strike, expires ${trade.exp||'?'}
 - Direction: ${isCall ? 'CALL — profit if stock goes UP' : 'PUT — profit if stock goes DOWN'}
-- Outcome: ${outcome}
-- Option premium paid: $${trade.entry||'?'}/contract × ${trade.qty||1} contracts = $${((parseFloat(trade.entry||0))*(trade.qty||1)*100).toFixed(0)} total cost
-- Option sold at: ${trade.exit!=null ? '$'+parseFloat(trade.exit).toFixed(2)+'/contract' : 'not recorded'}
-- Stop loss (option contract price — trigger to exit): ${trade.stop_loss ? '$'+trade.stop_loss : 'not set'}
-- Profit target (option contract price): ${trade.target ? '$'+trade.target : 'not set'}
+- Outcome: ${outcome}${pctChange!=null?` (${pctChange}% of premium ${parseFloat(pctChange)>=0?'gained':'lost'})`:''}
+- Option premium paid: $${entryV.toFixed(2)}/contract × ${trade.qty||1} contracts = $${totalCost} total risk
+- Option sold at: ${exitV!=null ? '$'+exitV.toFixed(2)+'/contract' : 'not recorded'}${totalPL?' = '+totalPL+' total':''}
+- Stop loss (option contract price — exit if contract drops TO this): ${stopV!=null ? '$'+stopV : 'not set — no defined exit plan'}
+- Profit target (option contract price): ${tgtV!=null ? '$'+tgtV : 'not set — no defined win condition'}
+- Risk/reward ratio: ${rrRatio ? rrRatio+':1 (risking $'+(entryV-stopV).toFixed(2)+' to make $'+(tgtV-entryV).toFixed(2)+')' : 'undefined (missing stop or target)'}
 - Days until expiry at entry: ${daysHeld!=null ? daysHeld+'d' : 'unknown'}
 - Stock price when entered: ${stockEntry ? '$'+stockEntry : 'not recorded'}
 - Recommended stock entry zone: ${trade.entry_low&&trade.entry_high ? '$'+trade.entry_low+' – $'+trade.entry_high : 'not recorded'}
 ${zoneNote ? '- '+zoneNote : ''}
+${stockDirNote ? '- '+stockDirNote : ''}
 - Original thesis: "${trade.thesis||'not recorded'}"
 - Trader notes on close: "${trade.trader_notes||'none'}"
 ${techBlock}${flowBlock}${newsBlock}
@@ -5866,10 +5888,16 @@ function buildTrainingPrompt(closedTrades){
         const zoneNote = t.stock_price_at_entry&&t.entry_low&&t.entry_high
             ? (t.stock_price_at_entry<t.entry_low?'entered EARLY':t.stock_price_at_entry>t.entry_high?'entered LATE':'IN ZONE') : '';
         const pa = t.post_analysis;
-        const patternFlag = pa?.pattern_flag ? `pattern:${pa.pattern_flag}` : '';
-        const notes = t.trader_notes ? `\n  Trader notes: "${t.trader_notes.slice(0,100)}"` : '';
-        const analysis = pa ? `\n  Coach analysis: "${pa.headline||''}" Entry:${pa.timing_grade||'?'} Exit:${pa.exit_grade||'?'}` : '';
-        return `• ${outcome} — ${t.ticker} ${t.type||'CALL'} $${t.strike||'?'} exp ${fmt(t.exp)||'?'}${daysHeld?` (~${daysHeld}d DTE)`:''}${entry?', '+entry:''}${exit?', '+exit:''}${stop?', '+stop:''}${tgt?', '+tgt:''}${zoneNote?' ['+zoneNote+']':''}${patternFlag?' ['+patternFlag+']':''}${t.thesis?`\n  Thesis: "${t.thesis.slice(0,100)}"`:''}`+notes+analysis
+        const patternFlag = pa?.pattern_flag ? `[pattern:${pa.pattern_flag}]` : '';
+        const pctLost = t.entry&&t.exit ? ` (${Math.round(Math.abs(t.exit-t.entry)/t.entry*100)}% premium ${t.exit>=t.entry?'gained':'lost'})` : '';
+        const rrRatio = t.entry&&t.stop_loss&&t.target
+            ? ` [R:R ${((parseFloat(t.target)-parseFloat(t.entry))/(parseFloat(t.entry)-parseFloat(t.stop_loss))).toFixed(1)}:1]` : '';
+        const notes = t.trader_notes ? `\n  Trader notes: "${t.trader_notes.slice(0,120)}"` : '';
+        const wrongItems = pa?.what_went_wrong?.length ? `\n  What went wrong: ${pa.what_went_wrong.map(x=>x.slice(0,80)).join(' | ')}` : '';
+        const rightItems = pa?.what_went_right?.length ? `\n  What went right: ${pa.what_went_right.map(x=>x.slice(0,80)).join(' | ')}` : '';
+        const nextItems  = pa?.next_time?.length ? `\n  Next time: ${pa.next_time[0].slice(0,100)}` : '';
+        const analysis = pa ? `\n  Coach verdict: "${pa.headline||''}" Entry:${pa.timing_grade||'?'} Exit:${pa.exit_grade||'?'} ${patternFlag}` : '';
+        return `• ${outcome}${pctLost} — ${t.ticker} ${t.type||'CALL'} $${t.strike||'?'} exp ${fmt(t.exp)||'?'}${daysHeld?` (~${daysHeld}d DTE)`:''}${entry?', '+entry:''}${exit?', '+exit:''}${stop?', '+stop:''}${tgt?', '+tgt:''}${rrRatio}${zoneNote?' [stock:'+zoneNote+']':''}${t.thesis?`\n  Thesis: "${t.thesis.slice(0,100)}"`:''}`+notes+analysis+wrongItems+rightItems+nextItems
     }).join('\n');
 
     return `You are analyzing a beginner options trader's closed trade history to build their personalized Trading DNA.
@@ -5878,9 +5906,12 @@ Their closed trades (with coach analysis and their own notes where available):
 ${tradeLines}
 
 IMPORTANT ANALYSIS FOCUS:
-- Entry timing: Do they consistently enter early/late vs the recommended zone? This is a key pattern.
-- Exit discipline: Do they hold too long, exit too early, ignore stops?
-- Sector fit: What sectors/setups actually work for them vs what they keep losing on?
+- Entry timing: What does the [stock:entered EARLY/LATE/IN ZONE] data show across trades? Is there a consistent pattern?
+- Exit discipline: Look at the pattern flags — ignored_stop, exited_early, held_too_long are recurring mistakes to flag
+- Risk/reward: Does this trader set targets? Trades without targets have no win condition defined
+- Premium %: What % of premium do they typically lose on losers vs gain on winners? This reveals discipline
+- What went wrong: Synthesize the "What went wrong" items across multiple trades to find the single biggest recurring mistake
+- Sector fit: What sectors/setups produce wins vs consistent losses?
 - DTE preference: Shorter or longer DTEs performed better?
 
 Return ONLY this JSON (no markdown):
