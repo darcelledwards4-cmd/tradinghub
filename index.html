@@ -4835,6 +4835,10 @@ function _tradeToRow(t){
         account_sizing: t.account_sizing||null,
         stock_price_at_entry: t.stock_price_at_entry||null,
         option_type: t.option_type||null,
+        trader_notes: t.trader_notes||null,
+        exit_rationale: t.exit_rationale||null,
+        post_analysis: t.post_analysis ? JSON.stringify(t.post_analysis) : null,
+        manual_pnl: t.manual_pnl!=null ? t.manual_pnl : null,
     };
 }
 function _rowToTrade(row){
@@ -4842,10 +4846,14 @@ function _rowToTrade(row){
     const t = {...row};
     // Ensure numeric fields are numbers (not strings)
     ['entry','exit','qty','strike','current_price','price_change',
-     'entry_low','entry_high','stop_loss','target','stock_price_at_entry'].forEach(k=>{
+     'entry_low','entry_high','stop_loss','target','stock_price_at_entry','manual_pnl'].forEach(k=>{
         if(t[k]!=null) t[k]=parseFloat(t[k]);
     });
     t.qty = parseInt(t.qty)||1;
+    // Parse post_analysis back from JSON string if stored as text
+    if(t.post_analysis && typeof t.post_analysis === 'string'){
+        try{ t.post_analysis = JSON.parse(t.post_analysis); }catch(e){ t.post_analysis = null; }
+    }
     return t;
 }
 
