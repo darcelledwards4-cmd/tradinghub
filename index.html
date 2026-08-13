@@ -1083,6 +1083,7 @@
             <div class="fg"><label>Manual P&amp;L Override ($) — leave blank to auto-calculate from entry/exit</label><input type="number" id="e-manual-pnl" placeholder="e.g. 320 or -150" step="1" /><span style="font-size:10px;color:var(--muted);margin-top:3px">Enter the exact dollar amount if you want to override the calculated P&amp;L.</span></div>
             <div class="fg"><label>Status</label><select id="e-status"><option value="Open">Open</option><option value="Closed">Closed</option></select></div>
             <div class="fg span2"><label>Why I Took This Trade</label><textarea id="e-thesis" placeholder="e.g. bouncing off support, strong momentum..."></textarea></div>
+            <div class="fg span2" id="e-exit-rationale-wrap" style="display:none"><label>Why I Exited <span style="font-weight:400;color:var(--muted);font-size:10px">— what made you close? helps the post-trade analysis</span></label><textarea id="e-exit-rationale" placeholder="e.g. stock started breaking down, panicked after a red day, hit my mental stop, news changed..." style="min-height:60px"></textarea></div>
         </div>
         <div class="mactions">
             <button class="btn-cancel" onclick="closeEditModal()">Cancel</button>
@@ -5058,6 +5059,9 @@ function openEditModal(id){
     document.getElementById('e-manual-pnl').value=trade.manual_pnl!=null?trade.manual_pnl:'';
     document.getElementById('e-status').value=trade.status||'Open';
     document.getElementById('e-thesis').value=trade.thesis||'';
+    document.getElementById('e-exit-rationale').value=trade.exit_rationale||'';
+    const isClosed=(trade.status!=='Open'||trade.exit!=null);
+    document.getElementById('e-exit-rationale-wrap').style.display=isClosed?'':'none';
     document.getElementById('editModal').classList.add('open');
 }
 function closeEditModal(){ document.getElementById('editModal').classList.remove('open'); }
@@ -5086,6 +5090,7 @@ function saveEditTrade(){
         manual_pnl: manualPnlVal!=='' ? parseFloat(manualPnlVal) : null,
         status:   document.getElementById('e-status').value,
         thesis:   document.getElementById('e-thesis').value.trim(),
+        exit_rationale: document.getElementById('e-exit-rationale').value.trim()||trades[idx].exit_rationale||'',
     };
     localStorage.setItem('darcell_v2_trades',JSON.stringify(trades));
     _sbUpsertTrade(trades[idx]);
@@ -5740,6 +5745,7 @@ ${zoneNote ? '- '+zoneNote : ''}
 ${stockDirNote ? '- '+stockDirNote : ''}
 - Original thesis: "${trade.thesis||'not recorded'}"
 - Trader notes on close: "${trade.trader_notes||'none'}"
+- Why they exited (their own words): "${trade.exit_rationale||'not recorded'}"
 ${techBlock}${flowBlock}${newsBlock}
 
 ${stopNote}
@@ -5892,7 +5898,7 @@ function buildTrainingPrompt(closedTrades){
         const pctLost = t.entry&&t.exit ? ` (${Math.round(Math.abs(t.exit-t.entry)/t.entry*100)}% premium ${t.exit>=t.entry?'gained':'lost'})` : '';
         const rrRatio = t.entry&&t.stop_loss&&t.target
             ? ` [R:R ${((parseFloat(t.target)-parseFloat(t.entry))/(parseFloat(t.entry)-parseFloat(t.stop_loss))).toFixed(1)}:1]` : '';
-        const notes = t.trader_notes ? `\n  Trader notes: "${t.trader_notes.slice(0,120)}"` : '';
+        const notes = t.trader_notes||t.exit_rationale ? `\n  Trader notes: "${(t.trader_notes||'').slice(0,100)}"${t.exit_rationale?' | Exit reason: "'+t.exit_rationale.slice(0,100)+'"':''}` : '';
         const wrongItems = pa?.what_went_wrong?.length ? `\n  What went wrong: ${pa.what_went_wrong.map(x=>x.slice(0,80)).join(' | ')}` : '';
         const rightItems = pa?.what_went_right?.length ? `\n  What went right: ${pa.what_went_right.map(x=>x.slice(0,80)).join(' | ')}` : '';
         const nextItems  = pa?.next_time?.length ? `\n  Next time: ${pa.next_time[0].slice(0,100)}` : '';
