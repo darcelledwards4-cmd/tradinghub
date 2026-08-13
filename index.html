@@ -92,6 +92,26 @@
         .mi-info-panel p { margin:0 0 4px;color:var(--text);opacity:.85; }
         .mi-info-panel .mi-note { margin-top:8px;padding-top:8px;border-top:1px solid var(--border);font-size:10px;opacity:.6; }
         .mi-guide { font-size:10px;color:var(--muted);margin:3px 0 10px;padding:6px 8px;background:var(--bg3);border-radius:4px;border-left:2px solid var(--border);line-height:1.5; }
+        /* ── Post-Close Analysis ─────────────────────────────────── */
+        .pca-wrap { margin-top:10px;border-radius:8px;overflow:hidden;border:1px solid var(--border); }
+        .pca-header { display:flex;justify-content:space-between;align-items:center;padding:9px 12px;background:var(--bg3);cursor:pointer;user-select:none; }
+        .pca-header-left { display:flex;align-items:center;gap:7px;font-size:11px;font-weight:700;color:var(--text); }
+        .pca-chevron { font-size:10px;color:var(--muted);transition:transform .2s; }
+        .pca-body { display:none;padding:12px;background:var(--bg2);font-size:12px;line-height:1.6; }
+        .pca-body.open { display:block; }
+        .pca-headline { font-size:13px;font-weight:700;margin-bottom:10px;color:var(--text); }
+        .pca-section { margin-bottom:10px; }
+        .pca-section-title { font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);margin-bottom:4px; }
+        .pca-grade { display:inline-block;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:800;margin-left:6px; }
+        .pca-grade.A { background:rgba(34,197,94,.15);color:var(--green); }
+        .pca-grade.B { background:rgba(59,130,246,.15);color:var(--blue); }
+        .pca-grade.C { background:rgba(245,158,11,.15);color:#f59e0b; }
+        .pca-grade.D { background:rgba(239,68,68,.15);color:var(--red); }
+        .pca-list { list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:3px; }
+        .pca-list li::before { content:'→ ';color:var(--muted); }
+        .pca-next-time { background:rgba(139,92,246,.08);border:1px solid rgba(139,92,246,.2);border-radius:6px;padding:8px 10px;margin-top:8px; }
+        .pca-next-time-title { font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#a78bfa;margin-bottom:5px; }
+        .pca-analyzing { padding:10px 12px;font-size:11px;color:var(--muted);display:flex;align-items:center;gap:8px;background:var(--bg2); }
         .mi-row { display:grid;grid-template-columns:18px 58px 1fr;align-items:baseline;gap:4px;font-size:12px;line-height:1.4; }
         .mi-icon { font-size:11px; }
         .mi-lbl { font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--muted);padding-top:1px; }
@@ -1027,6 +1047,11 @@
                 <span style="font-size:10px;color:var(--muted);margin-top:3px">Use a negative number for a loss. This overrides the calculated P&amp;L.</span>
             </div>
             <div id="ct-preview" style="display:none;text-align:center;font-size:20px;font-weight:800;padding:12px;border-radius:8px;background:var(--bg3)"></div>
+            <div class="fg">
+                <label>Your Notes — what happened? what would you do differently?</label>
+                <textarea id="ct-notes" placeholder="e.g. I got in too early before it hit the entry zone. Should have waited for confirmation around $29.50. Will be more patient next time." style="min-height:72px"></textarea>
+                <span style="font-size:10px;color:var(--muted);margin-top:3px">Optional — Claude uses this to give you more personalised feedback and to improve your Trading DNA.</span>
+            </div>
         </div>
         <div class="mactions">
             <button class="btn-cancel" onclick="closeCloseModal()">Cancel</button>
@@ -4965,6 +4990,7 @@ function openCloseModal(id){
     document.getElementById('ct-summary').innerHTML=`<strong>${trade.ticker}</strong> ${trade.type||'CALL'} · $${trade.strike||'?'} strike · ${trade.qty||1} contract${(trade.qty||1)!==1?'s':''}<br>You paid <strong>$${parseFloat(trade.entry||0).toFixed(2)}/contract</strong> ($${totalCost} total cost)`;
     document.getElementById('ct-exit').value='';
     document.getElementById('ct-manual-pnl').value='';
+    document.getElementById('ct-notes').value='';
     document.getElementById('ct-preview').style.display='none';
     const m=document.getElementById('closeTradeModal');
     m.dataset.entry=trade.entry||0;
@@ -4997,13 +5023,18 @@ function saveCloseModal(){
     if(idx<0)return;
     const exitVal=document.getElementById('ct-exit').value;
     const manualVal=document.getElementById('ct-manual-pnl').value;
+    const notesVal=(document.getElementById('ct-notes').value||'').trim();
     trades[idx].status='Closed';
     if(exitVal)trades[idx].exit=parseFloat(exitVal);
     if(manualVal!=='')trades[idx].manual_pnl=parseFloat(manualVal);
+    if(notesVal) trades[idx].trader_notes=notesVal;
+    trades[idx].post_analysis=null; // clear any old analysis
     localStorage.setItem('darcell_v2_trades',JSON.stringify(trades));
     renderJournal();
     _sbUpsertTrade(trades[idx]);
     closeCloseModal();
+    // Run post-close analyst asynchronously — updates the card when done
+    runPostCloseAnalysis(trades[idx]);
 }
 function openEditModal(id){
     const trade=trades.find(t=>t.id===id);
@@ -5132,6 +5163,8 @@ function buildJournalCard(trade){
             ${trade.option_summary?`<div class="j-action-box" style="border-left-color:var(--blue)">📊 ${trade.option_summary}</div>`:''}
             ${trade.action?`<div class="j-action-box">💡 ${trade.action}</div>`:''}
             ${trade.news_summary?`<div class="j-news-line">📰 ${trade.news_summary.slice(0,140)}${trade.news_summary.length>140?'…':''}</div>`:''}
+            ${trade.trader_notes?`<div class="j-action-box" style="border-left:2px solid rgba(139,92,246,.4);font-style:italic;color:var(--muted)">📝 Your notes: ${trade.trader_notes}</div>`:''}
+            <div id="j-pca-${trade.id}">${trade.status==='Closed'&&trade.post_analysis ? buildPostAnalysisHTML(trade.post_analysis, trade.id) : ''}</div>
             <div class="j-card-ftr">
                 <div class="j-ftr-meta">
                     <div>Logged ${fmt(trade.date)} · ${trade.qty} contract${trade.qty!==1?'s':''} @ $${parseFloat(trade.entry||0).toFixed(2)}</div>
@@ -5139,7 +5172,7 @@ function buildJournalCard(trade){
                 </div>
                 <div>
                     <button class="j-edit-btn" onclick="openEditModal(${trade.id})">✏️ Edit</button>
-                    <button class="j-close-trade-btn" onclick="openCloseModal(${trade.id})">🏁 Close Trade</button>
+                    ${trade.status!=='Closed'?`<button class="j-close-trade-btn" onclick="openCloseModal(${trade.id})">🏁 Close Trade</button>`:`<button class="j-close-trade-btn" onclick="runPostCloseAnalysis(trades.find(t=>t.id===${trade.id}))" style="border-color:rgba(139,92,246,.3);color:#a78bfa">🔍 Re-analyze</button>`}
                     <button class="j-del-btn" onclick="deleteTrade(${trade.id})">×</button>
                 </div>
             </div>
@@ -5559,45 +5592,169 @@ function getDNAPromptBlock(){
     if(!dna || !dna.winning_patterns?.length) return '';
     const wins  = dna.winning_patterns.slice(0, 3).join(' · ');
     const losses = dna.losing_patterns?.slice(0, 2).join(' · ') || '';
+    const timingNote = dna.timing_tendency==='enters_early' ? 'This trader tends to enter BEFORE the zone — prefer setups where the entry zone is clearly defined and note if the stock is already at or near it.'
+        : dna.timing_tendency==='enters_late' ? 'This trader tends to enter AFTER the zone — set tight, specific entry zones and note if the stock has already moved past optimal entry.'
+        : '';
+    const exitNote = dna.exit_tendency==='exits_early' ? 'This trader exits too early — recommend holding to at least 50% of the target.'
+        : dna.exit_tendency==='holds_too_long' ? 'This trader holds too long — emphasize stop discipline and partial exits.'
+        : '';
+    const focusSectors = (dna.market_focus||[]).slice(0,3).join(', ');
     return `\n🧠 THIS TRADER'S REAL EDGE (learned from ${dna.trades_analyzed} actual wins & losses):
 ✅ What works for them: ${wins}
 ${losses?`❌ What leads to losses: ${losses}`:''}
 Preferred setup: ${dna.setup_preference||''}
-→ APPLY THIS: Strongly prefer setups matching the winning patterns. When selecting stocks, this trader's history should directly influence which setups you prioritize. Briefly note in account_sizing why the trade fits (or warn if it goes against) their proven edge.\n`;
+${timingNote?`⏱ Entry timing pattern: ${timingNote}`:''}
+${exitNote?`🚪 Exit pattern: ${exitNote}`:''}
+${focusSectors?`📍 Sectors with proven edge: ${focusSectors}`:''}
+→ APPLY THIS: Match winning patterns first. Also scan the BEST AVAILABLE market opportunities right now — do not limit to sectors they've traded before. If a strong setup exists outside their usual sectors, recommend it and note why it fits their style. Flag in account_sizing if entry timing is critical for this trader.\n`;
+}
+
+// ── POST-CLOSE TRADE ANALYST ──────────────────────────────────
+function buildPostClosePrompt(trade){
+    const pnl = trade.manual_pnl!=null ? trade.manual_pnl
+              : (trade.exit!=null&&trade.entry!=null ? (trade.exit-trade.entry)*(trade.qty||1)*100 : null);
+    const outcome = pnl!=null ? (pnl>=0 ? `WIN +$${pnl.toFixed(0)}` : `LOSS -$${Math.abs(pnl).toFixed(0)}`) : 'CLOSED';
+    const stockEntry = trade.stock_price_at_entry;
+    let zoneNote = '';
+    if(stockEntry && trade.entry_low && trade.entry_high){
+        if(stockEntry < trade.entry_low) zoneNote = `entered EARLY at $${stockEntry} — zone was $${trade.entry_low}–$${trade.entry_high}`;
+        else if(stockEntry > trade.entry_high) zoneNote = `entered LATE at $${stockEntry} — zone was $${trade.entry_low}–$${trade.entry_high}`;
+        else zoneNote = `entered IN THE ZONE at $${stockEntry} (zone $${trade.entry_low}–$${trade.entry_high}) ✓`;
+    }
+    const daysHeld = trade.date&&trade.exp
+        ? Math.round((new Date(trade.exp)-new Date(trade.date))/86400000) : null;
+
+    return `You are a trading coach reviewing a closed options trade for a beginner.
+
+TRADE SUMMARY:
+- ${trade.ticker} ${trade.type||'CALL'} $${trade.strike||'?'} strike, exp ${trade.exp||'?'}
+- ${outcome}
+- Option paid: $${trade.entry||'?'}/contract × ${trade.qty||1} contracts
+- Option sold: ${trade.exit ? '$'+trade.exit+'/contract' : 'not recorded'}
+- Recommended entry zone: ${trade.entry_low&&trade.entry_high ? '$'+trade.entry_low+' – $'+trade.entry_high : 'not recorded'}
+- Stock price at entry: ${stockEntry ? '$'+stockEntry : 'not recorded'}${zoneNote ? ' ('+zoneNote+')' : ''}
+- Recommended stop: ${trade.stop_loss ? '$'+trade.stop_loss+' (option contract price)' : 'not set'}
+- Recommended target: ${trade.target ? '$'+trade.target+' (option contract price)' : 'not set'}
+- Days held: ${daysHeld!=null ? daysHeld+'d DTE' : 'unknown'}
+- Original thesis: "${trade.thesis||'not recorded'}"
+- Trader's own notes on close: "${trade.trader_notes||'none'}"
+
+Give SPECIFIC, honest feedback. Don't be vague. Reference actual dollar amounts from above.
+
+Return ONLY this JSON (no markdown):
+{
+  "headline": "1 sentence verdict on this trade — what happened and why",
+  "what_went_right": ["1-3 specific things — empty array if pure loss"],
+  "what_went_wrong": ["1-3 specific things — empty array if clean win"],
+  "timing_grade": "A or B or C or D",
+  "timing_note": "1-2 sentences: did they enter in the recommended zone? too early? too late? what did that cost them?",
+  "exit_grade": "A or B or C or D",
+  "exit_note": "1-2 sentences: how did the exit compare to the stop/target plan? did they leave money on the table or protect well?",
+  "next_time": ["2-3 concrete, specific actions — not generic advice. e.g. 'Wait for stock to reach $29.50 before buying', 'Set a hard stop at 40% of premium paid and honor it'"],
+  "pattern_flag": "one of: entered_early | entered_late | exited_early | held_too_long | ignored_stop | chased_entry | good_discipline | unclear"
+}`;
+}
+
+function buildPostAnalysisHTML(pa, tradeId){
+    if(!pa) return '';
+    const gradeColor = g => g==='A'?'green':g==='B'?'blue':g==='C'?'warn':'red';
+    const rightHtml = (pa.what_went_right||[]).length
+        ? `<div class="pca-section"><div class="pca-section-title">✅ What went right</div><ul class="pca-list">${(pa.what_went_right).map(x=>`<li>${x}</li>`).join('')}</ul></div>` : '';
+    const wrongHtml = (pa.what_went_wrong||[]).length
+        ? `<div class="pca-section"><div class="pca-section-title">❌ What went wrong</div><ul class="pca-list">${(pa.what_went_wrong).map(x=>`<li>${x}</li>`).join('')}</ul></div>` : '';
+    const nextHtml = (pa.next_time||[]).length
+        ? `<div class="pca-next-time"><div class="pca-next-time-title">🎯 Next time — do this differently</div><ul class="pca-list">${(pa.next_time).map(x=>`<li>${x}</li>`).join('')}</ul></div>` : '';
+    return `<div class="pca-wrap">
+        <div class="pca-header" onclick="togglePCA(${tradeId})">
+            <div class="pca-header-left">🔍 Post-Trade Analysis <span style="font-weight:400;color:var(--muted);font-size:10px">· tap to expand</span></div>
+            <span class="pca-chevron" id="pca-chev-${tradeId}">▼</span>
+        </div>
+        <div class="pca-body" id="pca-body-${tradeId}">
+            <div class="pca-headline">${pa.headline||''}</div>
+            ${rightHtml}${wrongHtml}
+            <div class="pca-section">
+                <div class="pca-section-title">⏱ Entry Timing <span class="pca-grade ${pa.timing_grade||'C'}">${pa.timing_grade||'?'}</span></div>
+                <div style="color:var(--text);opacity:.85">${pa.timing_note||''}</div>
+            </div>
+            <div class="pca-section">
+                <div class="pca-section-title">🚪 Exit Discipline <span class="pca-grade ${pa.exit_grade||'C'}">${pa.exit_grade||'?'}</span></div>
+                <div style="color:var(--text);opacity:.85">${pa.exit_note||''}</div>
+            </div>
+            ${nextHtml}
+        </div>
+    </div>`;
+}
+
+function togglePCA(tradeId){
+    const body=document.getElementById('pca-body-'+tradeId);
+    const chev=document.getElementById('pca-chev-'+tradeId);
+    if(!body)return;
+    const open=body.classList.toggle('open');
+    if(chev) chev.style.transform=open?'rotate(180deg)':'';
+}
+
+async function runPostCloseAnalysis(trade){
+    // Show "analyzing" state on the card immediately
+    const cardEl=document.getElementById('j-pca-'+trade.id);
+    if(cardEl) cardEl.innerHTML=`<div class="pca-analyzing"><div class="spinner" style="width:11px;height:11px;border-width:2px"></div>Running post-trade analysis…</div>`;
+
+    try{
+        const raw = await callClaude(buildPostClosePrompt(trade));
+        const pa = JSON.parse(stripJSON(raw));
+        const idx = trades.findIndex(t=>t.id===trade.id);
+        if(idx>=0){
+            trades[idx].post_analysis = pa;
+            localStorage.setItem('darcell_v2_trades', JSON.stringify(trades));
+            _sbUpsertTrade(trades[idx]);
+        }
+        // Update the card in place without full re-render
+        if(cardEl) cardEl.innerHTML = buildPostAnalysisHTML(pa, trade.id);
+    }catch(e){
+        console.warn('[post-close analysis] failed:', e.message);
+        if(cardEl) cardEl.innerHTML='';
+    }
 }
 
 function buildTrainingPrompt(closedTrades){
     const tradeLines = closedTrades.map(t=>{
-        const pnl = t.manual_pnl!=null ? t.manual_pnl : (t.exit!=null?(t.exit-t.entry)*t.qty*100:null);
+        const pnl = t.manual_pnl!=null ? t.manual_pnl : (t.exit!=null?(t.exit-t.entry)*(t.qty||1)*100:null);
         const outcome = pnl!=null ? (pnl>=0?`WIN +$${pnl.toFixed(0)}`:`LOSS -$${Math.abs(pnl).toFixed(0)}`) : 'CLOSED (P&L unknown)';
         const entry = t.entry ? `option entry $${parseFloat(t.entry).toFixed(2)}/contract` : '';
         const exit  = t.exit  ? `exit $${parseFloat(t.exit).toFixed(2)}/contract`  : '';
         const stop  = t.stop_loss ? `stop $${t.stop_loss}` : '';
         const tgt   = t.target    ? `target $${t.target}`  : '';
         const daysHeld = t.date&&t.exp ? Math.round((new Date(t.exp)-new Date(t.date))/(86400000)) : null;
-        return `• ${outcome} — ${t.ticker} ${t.type||'CALL'} $${t.strike||'?'} strike exp ${fmt(t.exp)||'?'}${daysHeld?` (~${daysHeld}d DTE)`:''}${entry?', '+entry:''}${exit?', '+exit:''}${stop?', '+stop:''}${tgt?', '+tgt:''}${t.thesis?`\n  Thesis: "${t.thesis.slice(0,120)}"`:''}`
+        const zoneNote = t.stock_price_at_entry&&t.entry_low&&t.entry_high
+            ? (t.stock_price_at_entry<t.entry_low?'entered EARLY':t.stock_price_at_entry>t.entry_high?'entered LATE':'IN ZONE') : '';
+        const pa = t.post_analysis;
+        const patternFlag = pa?.pattern_flag ? `pattern:${pa.pattern_flag}` : '';
+        const notes = t.trader_notes ? `\n  Trader notes: "${t.trader_notes.slice(0,100)}"` : '';
+        const analysis = pa ? `\n  Coach analysis: "${pa.headline||''}" Entry:${pa.timing_grade||'?'} Exit:${pa.exit_grade||'?'}` : '';
+        return `• ${outcome} — ${t.ticker} ${t.type||'CALL'} $${t.strike||'?'} exp ${fmt(t.exp)||'?'}${daysHeld?` (~${daysHeld}d DTE)`:''}${entry?', '+entry:''}${exit?', '+exit:''}${stop?', '+stop:''}${tgt?', '+tgt:''}${zoneNote?' ['+zoneNote+']':''}${patternFlag?' ['+patternFlag+']':''}${t.thesis?`\n  Thesis: "${t.thesis.slice(0,100)}"`:''}}${notes}${analysis}`
     }).join('\n');
 
-    return `You are analyzing a beginner options trader's closed trade history to extract personalized patterns.
+    return `You are analyzing a beginner options trader's closed trade history to build their personalized Trading DNA.
 
-Their closed trades (outcomes, entries, theses):
+Their closed trades (with coach analysis and their own notes where available):
 ${tradeLines}
 
-Find SPECIFIC patterns in what led to wins vs losses. Look at:
-- Sector / company type (tech, energy, meme, blue-chip, small-cap, etc.)
-- Option direction and type (calls on momentum, puts on weakness, etc.)
-- Entry timing signals (pullback to support, earnings play, news catalyst, breakout, etc.)
-- DTE (days to expiry) preference — did shorter or longer DTEs work better?
-- What thesis types actually played out vs failed
+IMPORTANT ANALYSIS FOCUS:
+- Entry timing: Do they consistently enter early/late vs the recommended zone? This is a key pattern.
+- Exit discipline: Do they hold too long, exit too early, ignore stops?
+- Sector fit: What sectors/setups actually work for them vs what they keep losing on?
+- DTE preference: Shorter or longer DTEs performed better?
 
 Return ONLY this JSON (no markdown):
 {
-  "summary": "2-3 sentences describing this trader's style, what they win on, and where they consistently lose",
-  "winning_patterns": ["3-5 specific patterns from winning trades — sector, setup type, timing"],
-  "losing_patterns": ["2-4 patterns that appear in losing trades"],
-  "setup_preference": "One sentence: the ideal setup type for this trader based on their wins",
-  "avoid_setup": "One sentence: what setup type to avoid based on their losses",
-  "lessons": ["3-5 specific actionable lessons — reference the ticker if helpful, e.g. 'AMD calls worked because of earnings beat — look for upcoming catalysts'"]
+  "summary": "2-3 sentences: this trader's style, what they win on, and their single biggest recurring mistake",
+  "winning_patterns": ["3-5 specific patterns from winning trades — sector, setup type, timing signal"],
+  "losing_patterns": ["2-4 patterns that appear in losing trades — be specific about the mistake"],
+  "setup_preference": "One sentence: the ideal setup for this trader based on their actual wins",
+  "avoid_setup": "One sentence: what to avoid based on their losses",
+  "timing_tendency": "One of: enters_early | enters_late | on_target | inconsistent — based on the entry zone data",
+  "exit_tendency": "One of: exits_early | holds_too_long | good_discipline | inconsistent",
+  "lessons": ["3-5 actionable lessons — reference tickers where helpful, e.g. 'AMD worked on earnings catalyst — prioritize earnings plays'"],
+  "market_focus": ["2-3 sectors or themes this trader has edge in based on wins — include at least 1 broader market opportunity beyond their usual sectors"]
 }`;
 }
 
@@ -5625,6 +5782,9 @@ async function trainTradingModel(){
             setup_preference: result.setup_preference || '',
             avoid_setup:      result.avoid_setup      || '',
             lessons:          result.lessons          || [],
+            timing_tendency:  result.timing_tendency  || 'inconsistent',
+            exit_tendency:    result.exit_tendency    || 'inconsistent',
+            market_focus:     result.market_focus     || [],
         };
         saveDNA(dna);
         renderDNACard();
@@ -5686,6 +5846,18 @@ function renderDNACard(){
         ${winsHtml?`<div class="dna-section"><div class="dna-section-lbl" style="color:var(--green)">What works for you</div>${winsHtml}</div>`:''}
         ${lossHtml?`<div class="dna-section"><div class="dna-section-lbl" style="color:var(--red)">What to avoid</div>${lossHtml}</div>`:''}
         ${dna.setup_preference?`<div class="dna-section"><div class="dna-section-lbl" style="color:#a855f7">Your ideal setup</div><div style="font-size:12px;color:var(--text);line-height:1.5">${dna.setup_preference}</div></div>`:''}
+        ${(()=>{
+            const tLabel = dna.timing_tendency==='enters_early'?'⚠️ You tend to enter BEFORE the zone — wait for price to reach the level'
+                : dna.timing_tendency==='enters_late'?'⚠️ You tend to enter AFTER the zone — price moved past optimal entry'
+                : dna.timing_tendency==='on_target'?'✅ Your entry timing is solid — you enter near the recommended zone'
+                : null;
+            const eLabel = dna.exit_tendency==='exits_early'?'⚠️ You tend to exit too early — leaving gains on the table'
+                : dna.exit_tendency==='holds_too_long'?'⚠️ You tend to hold too long — honor your stop levels'
+                : dna.exit_tendency==='good_discipline'?'✅ Your exit discipline is solid'
+                : null;
+            return (tLabel||eLabel) ? `<div class="dna-section"><div class="dna-section-lbl">Your habits</div>${tLabel?`<div style="font-size:11px;margin-bottom:4px;color:var(--text)">${tLabel}</div>`:''}${eLabel?`<div style="font-size:11px;color:var(--text)">${eLabel}</div>`:''}</div>` : '';
+        })()}
+        ${(dna.market_focus||[]).length?`<div class="dna-section"><div class="dna-section-lbl">Sectors with your edge</div><div style="font-size:12px;color:var(--text);line-height:1.6">${dna.market_focus.join(' · ')}</div></div>`:''}
         ${lessonsHtml?`<div class="dna-section" style="margin-top:10px"><div class="dna-section-lbl">Key lessons from your trades</div>${lessonsHtml}</div>`:''}
         <div class="dna-actions">
             <button class="dna-train-btn" onclick="trainTradingModel()">↺ Retrain</button>
