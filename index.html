@@ -5364,22 +5364,24 @@ SIGNAL ALIGNMENT CHECK — does this still support the original ${isCall?'CALL (
 Compare: was the entry made when signals were favorable? Are they still favorable now? If signals have reversed (e.g., was bullish flow, now bearish; was below MA50, now above for a PUT), flag this as thesis degradation.`;
 })()}
 
-IMPORTANT — stop/target are OPTION CONTRACT PRICES:
-The stop ($${stopLoss||'not set'}) and target ($${target||'not set'}) are the option contract prices the trader chose as exit levels. If the live option price hits or drops below stop → exit. If it reaches target → take profit.
-Use stock price and Greeks to explain WHY the option is moving, but the primary exit signals are the option price vs these levels.
+⚠️ CRITICAL RULES — APPLY THESE BEFORE ANYTHING ELSE:
+1. Stop and target are OPTION CONTRACT PRICES (not stock prices). The trader paid $${optEntryPrice.toFixed(2)}/contract. Stop is $${stopLoss||'not set'}. Target is $${target||'not set'}.
+2. If live option price IS available and it is AT or BELOW stop → recommendation MUST be "exit", rating MUST be "exit".
+3. If live option price is within 15% of the stop (e.g. stop=$1.45, option=$1.55) → recommendation "adjust", rating "low" — warn the trader they are close to their stop.
+4. If live option price is NOT available: estimate using entry price + stock move direction. If stock is moving AGAINST the trade (stock down for a CALL, stock up for a PUT), the option is likely losing value — flag as "low" and warn. Do NOT default to "hold" just because you lack option data.
+5. A green stock price does NOT automatically mean hold — the option could be losing value due to theta decay, IV crush, or moving against the strike. Always factor option P&L% when available.
+6. If the trade has no stop set, still assess proximity to loss of full premium and flag urgency accordingly.
 
-Based on ALL the facts above, assess whether to hold, adjust, or exit.
-- If option price ≤ stop: exit signal triggered
-- If option price ≥ target: take profit signal
-- Also assess Greeks: theta decay, delta (how sensitive to stock move), vega (IV impact)
-- If technicals/flow data is present: factor RSI, MA trend, IVR (cheap/expensive options), and unusual flow into your confidence level
-- If stop/target not set, give a recommendation based on P&L%, Greeks, and technicals
+Based on ALL the facts above, give your recommendation:
+- "exit" = stop hit, thesis clearly failed, or option has lost >50% of value
+- "adjust" = option near stop, mixed signals, consider tightening or partial exit
+- "hold" = option well above stop, thesis intact, signals confirming
 
 Return ONLY this JSON (no markdown):
-{"recommendation":"hold","reason":"2-3 sentences — reference option price vs stop/target, P&L%, a Greek, and 1 technical or flow signal if available","rating":"moderate","action":"1 specific actionable sentence with the option price level to act on","option_summary":"1 plain-English sentence covering option price vs stop/target, P&L%, and one key signal (Greek, RSI, IVR, or flow)"}
+{"recommendation":"hold","reason":"2-3 sentences — reference option price vs stop/target explicitly, P&L%, and what the technicals/Greeks say about thesis health","rating":"moderate","action":"1 specific actionable sentence — give the exact option price level to watch","option_summary":"1 plain-English sentence covering where the option stands vs stop/target and what to do"}
 
 recommendation: "hold", "adjust", or "exit" only
-rating: "high" (option above stop, moving toward target, technicals confirm), "moderate" (mixed signals), "low" (option near stop or bleeding from theta), or "exit" (stop hit or thesis failed)`;
+rating: "high" (well above stop, thesis confirming), "moderate" (above stop but mixed signals), "low" (near stop or bleeding), or "exit" (stop hit)`;
 }
 // Fetch live option price + Greeks for a specific logged trade
 async function fetchLiveOptionData(trade){
@@ -5778,6 +5780,11 @@ Return ONLY this JSON (no markdown):
 
 function buildPostAnalysisHTML(pa, tradeId){
     if(!pa) return '';
+    // Look up trader's own words to display alongside the analysis
+    const tradeObj = (typeof trades!=='undefined') ? trades.find(t=>t.id===tradeId) : null;
+    const exitRationale = tradeObj?.exit_rationale;
+    const traderNotes   = tradeObj?.trader_notes;
+    const traderVoiceHtml = (exitRationale||traderNotes) ? `<div style="margin-bottom:10px;padding:8px 10px;background:rgba(139,92,246,.06);border-left:2px solid rgba(139,92,246,.3);border-radius:0 4px 4px 0;font-size:11px;color:var(--muted);line-height:1.5">${exitRationale?`<div><span style="font-weight:600;color:var(--text)">Why you exited:</span> ${exitRationale}</div>`:''}${traderNotes?`<div style="margin-top:${exitRationale?'5px':'0'}"><span style="font-weight:600;color:var(--text)">Your notes:</span> ${traderNotes}</div>`:''}</div>` : '';
     const rightHtml = (pa.what_went_right||[]).length
         ? `<div class="pca-section"><div class="pca-section-title">✅ What went right</div><ul class="pca-list">${(pa.what_went_right).map(x=>`<li>${x}</li>`).join('')}</ul></div>` : '';
     const wrongHtml = (pa.what_went_wrong||[]).length
@@ -5810,6 +5817,7 @@ function buildPostAnalysisHTML(pa, tradeId){
             <span class="pca-chevron" id="pca-chev-${tradeId}" style="transform:rotate(180deg)">▼</span>
         </div>
         <div class="pca-body open" id="pca-body-${tradeId}">
+            ${traderVoiceHtml}
             <div class="pca-headline">${pa.headline||''}</div>
             ${rightHtml}${wrongHtml}
             <div class="pca-section">
