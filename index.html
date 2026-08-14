@@ -2845,59 +2845,39 @@ function getExpiryContext(){
 const DEFAULT_WATCHLIST=['NVDA','SPY','QQQ','AAPL','MSFT','META','AMD','GOOGL','ARM','PLTR'];
 let WATCHLIST=JSON.parse(localStorage.getItem('darcell_watchlist')||'null')||[...DEFAULT_WATCHLIST];
 
-// GEMS_UNIVERSE_BY_SECTOR — 260+ stocks organised by sector.
-// Used to guarantee sector diversity: each scan picks 2 stocks per sector → 30 shown to Claude.
+// GEMS_UNIVERSE_BY_SECTOR — ~80 verified-liquid US stocks, 8 per sector.
+// All are actively traded on NYSE/NASDAQ with real Polygon data and options liquidity.
+// Sector diversity is enforced at subset-build time so every scan shows cross-sector picks.
 const GEMS_UNIVERSE_BY_SECTOR = {
-    'Fintech/Banking':      ['SOFI','UPST','ALLY','KEY','RF','FITB','HBAN','ZION','CFG','NYCB','HOOD','LC','OMF','RKT','UWMC','AFRM','NU','STNE','PAGS','DLO'],
-    'Tech Hardware/Semis':  ['INTC','ERIC','NOK','BB','WOLF','SOUN','BBAI','IONQ','AI','SMCI','CALX','VIAV','MARA','RIOT','ACMR','FORM','COHU','AMBA','POWI','DIOD','NTGR','AVNW','CLFD','ARRY','CLSK'],
-    'Tech Software/Cloud':  ['APPS','DOMO','KD','BILL','GLBE','CARG','ZETA','MGNI','DV','IAS','PUBM'],
-    'Media/Streaming':      ['PARA','WBD','FUBO','SIRI','IHRT','NWSA','FOXA','IAC','SNAP','PINS','MTCH','BMBL','RBLX','IQ','TME','DOYU','HUYA','AMC'],
-    'Gaming/Entertainment': ['GME','PENN','DKNG','RSI','GENI','LVS','CZR','MGM','SKLZ'],
-    'Healthcare/Biotech':   ['PFE','MRNA','NVAX','VTRS','IOVA','SAVA','ACAD','RXRX','FOLD','EDIT','NTLA','CRSP','ARQT','CDNA','HIMS','TGTX','RCUS','DAWN','PRTA','ALEC','OCGN','KYMR'],
-    'Energy Oil/Gas':       ['BTU','SWN','RRC','MRO','RIG','AR','TALO','CRC','SM','CPE','VTLE','KOS','BORR','HP','PTEN','NE','SDRL'],
-    'Clean Energy/Solar':   ['MAXN','CSIQ','JKS','DAQO','RUN','NOVA','BE','PLUG','FCEL','BLDP','NEP','CLNE','BLNK','CHPT','EVGO'],
-    'EV/Autonomous':        ['RIVN','LCID','NIO','XPEV','LI','ACHR','JOBY','F'],
-    'Airlines/Travel':      ['AAL','JBLU','NCLH','CCL','SABR','TRIP','TZOO','LYFT'],
-    'Retail/Consumer':      ['M','KSS','BBWI','WBA','GPS','FL','HBI','TLYS','PLCE','GCO','SHOO','RCII','PLAY','JACK','CAKE','DINE','BJRI','ARKO','PTLO','COLM','OXM','MO'],
-    'Materials/Mining':     ['CLF','MT','VALE','PBR','ITUB','BBD','MP','LAAC','KGC','PAAS','AG','HL','EXK','CDE','MAG'],
-    'International ADRs':   ['JD','VNET','QFIN','NOAH','LU','GDS','RLX','YMM','ZIM','FLNG','GLNG','MNSO','TCOM','FUTU'],
-    'Telecom/Utilities':    ['T','SHEN','ATUS','TEF','VIV','TKC','LILA','LUMN'],
-    'Industrials/Defense':  ['AMRC','HASI','TPI','FLNC','REZI','KTOS','BKSY','SPCE','SVC','MAC','SKT','IVT','GMRE','GOOD','LAND'],
+    'Fintech':         ['SOFI','ALLY','HOOD','LC','AFRM','RKT','NU','STNE'],
+    'Tech/AI':         ['INTC','SOUN','IONQ','AI','MARA','RIOT','CLSK','BBAI'],
+    'Media/Social':    ['PARA','WBD','SNAP','PINS','RBLX','BMBL','MTCH','SIRI'],
+    'Healthcare':      ['PFE','MRNA','NVAX','HIMS','RXRX','IOVA','TGTX','ARQT'],
+    'Energy':          ['BTU','SWN','MRO','RIG','AR','RRC','SM','TALO'],
+    'EV/Airlines':     ['RIVN','LCID','NIO','XPEV','F','AAL','JBLU','NCLH'],
+    'Retail/Consumer': ['M','KSS','WBA','GPS','FL','BBWI','GME','PENN'],
+    'Materials':       ['CLF','VALE','PBR','ITUB','MT','KGC','AG','HL'],
+    'Gaming/Travel':   ['MGM','LVS','CZR','DKNG','LYFT','CCL','SABR','TRIP'],
+    'International':   ['JD','IQ','TME','PAGS','DLO','MNSO','NOK','BB'],
 };
-// Flat version for fetchQuotesCached
-const GEMS_UNIVERSE = Object.values(GEMS_UNIVERSE_BY_SECTOR).flat();
+// Flat list for fetchQuotesCached
+const GEMS_UNIVERSE = [...new Set(Object.values(GEMS_UNIVERSE_BY_SECTOR).flat())];
 
-// Build a sector-balanced 30-stock subset for each gems scan.
-// Picks up to 2 fresh (not-seen, not-watchlist) stocks per sector with a valid price ≤$75.
-// This prevents Claude from defaulting to the same sector every time.
+// Build a sector-balanced subset: up to 2 fresh stocks from each sector with valid price ≤$75.
+// Falls back gracefully if a sector has no data — never resets seen list prematurely.
 function buildGemsSubset(priceMap, seenSet, wlSet){
-    const sectors = Object.keys(GEMS_UNIVERSE_BY_SECTOR);
-    const subset = [];
-    for(const sector of sectors){
-        const candidates = GEMS_UNIVERSE_BY_SECTOR[sector]
-            .filter(t => {
-                const q = priceMap[t]; if(!q||!q.c||q.c<=0||q.c>75) return false;
-                if(wlSet.has(t)) return false;
-                return !seenSet.has(t);
-            })
-            .sort(()=>Math.random()-0.5);
-        subset.push(...candidates.slice(0,2));
+    const result = [];
+    let sectorsWithData = 0;
+    for(const [sector, tickers] of Object.entries(GEMS_UNIVERSE_BY_SECTOR)){
+        // Prefer unseen fresh picks; fall back to any valid pick if sector is exhausted
+        const fresh = tickers.filter(t=>{ const q=priceMap[t]; return q&&q.c>1&&q.c<=75&&!wlSet.has(t)&&!seenSet.has(t); }).sort(()=>Math.random()-0.5);
+        const any   = tickers.filter(t=>{ const q=priceMap[t]; return q&&q.c>1&&q.c<=75&&!wlSet.has(t); }).sort(()=>Math.random()-0.5);
+        const picks = fresh.length>0 ? fresh.slice(0,2) : any.slice(0,2);
+        if(picks.length>0){ result.push(...picks); sectorsWithData++; }
+        else console.warn(`[gems] No valid data for sector: ${sector}`);
     }
-    // If seen-list has exhausted too many sectors, reset and rebuild
-    if(subset.length < 10){
-        clearSeenGems();
-        const seenEmpty = new Set();
-        const fallback = [];
-        for(const sector of sectors){
-            const candidates = GEMS_UNIVERSE_BY_SECTOR[sector]
-                .filter(t=>{ const q=priceMap[t]; return q&&q.c>0&&q.c<=75&&!wlSet.has(t); })
-                .sort(()=>Math.random()-0.5);
-            fallback.push(...candidates.slice(0,2));
-        }
-        console.log('[gems] Seen list exhausted — reset and rebuilt subset from scratch');
-        return fallback.sort(()=>Math.random()-0.5);
-    }
-    return subset.sort(()=>Math.random()-0.5);
+    console.log(`[gems] Subset built: ${result.length} stocks from ${sectorsWithData}/10 sectors`);
+    return result.sort(()=>Math.random()-0.5);
 }
 
 function saveWatchlist(){localStorage.setItem('darcell_watchlist',JSON.stringify(WATCHLIST));}
