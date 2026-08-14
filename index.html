@@ -2845,73 +2845,60 @@ function getExpiryContext(){
 const DEFAULT_WATCHLIST=['NVDA','SPY','QQQ','AAPL','MSFT','META','AMD','GOOGL','ARM','PLTR'];
 let WATCHLIST=JSON.parse(localStorage.getItem('darcell_watchlist')||'null')||[...DEFAULT_WATCHLIST];
 
-// GEMS_UNIVERSE — 260+ stocks across 15 sectors, all typically under $75/share.
-// Lower stock price = affordable options. Claude picks the 3 with BEST setups + cheapest contracts.
-// Random 25-stock subset each scan ensures variety. Seen-ticker tracking adds further rotation.
-const GEMS_UNIVERSE=[
-    // ── Fintech / Banking ────────────────────────────────────
-    'SOFI','UPST','ALLY','KEY','RF','FITB','HBAN','ZION','CFG','NYCB',
-    'HOOD','LC','OMF','RKT','UWMC','AFRM','OPEN','RDFN','EXPI','NU',
-    'STNE','PAGS','DLO','DESP',
+// GEMS_UNIVERSE_BY_SECTOR — 260+ stocks organised by sector.
+// Used to guarantee sector diversity: each scan picks 2 stocks per sector → 30 shown to Claude.
+const GEMS_UNIVERSE_BY_SECTOR = {
+    'Fintech/Banking':      ['SOFI','UPST','ALLY','KEY','RF','FITB','HBAN','ZION','CFG','NYCB','HOOD','LC','OMF','RKT','UWMC','AFRM','NU','STNE','PAGS','DLO'],
+    'Tech Hardware/Semis':  ['INTC','ERIC','NOK','BB','WOLF','SOUN','BBAI','IONQ','AI','SMCI','CALX','VIAV','MARA','RIOT','ACMR','FORM','COHU','AMBA','POWI','DIOD','NTGR','AVNW','CLFD','ARRY','CLSK'],
+    'Tech Software/Cloud':  ['APPS','DOMO','KD','BILL','GLBE','CARG','ZETA','MGNI','DV','IAS','PUBM'],
+    'Media/Streaming':      ['PARA','WBD','FUBO','SIRI','IHRT','NWSA','FOXA','IAC','SNAP','PINS','MTCH','BMBL','RBLX','IQ','TME','DOYU','HUYA','AMC'],
+    'Gaming/Entertainment': ['GME','PENN','DKNG','RSI','GENI','LVS','CZR','MGM','SKLZ'],
+    'Healthcare/Biotech':   ['PFE','MRNA','NVAX','VTRS','IOVA','SAVA','ACAD','RXRX','FOLD','EDIT','NTLA','CRSP','ARQT','CDNA','HIMS','TGTX','RCUS','DAWN','PRTA','ALEC','OCGN','KYMR'],
+    'Energy Oil/Gas':       ['BTU','SWN','RRC','MRO','RIG','AR','TALO','CRC','SM','CPE','VTLE','KOS','BORR','HP','PTEN','NE','SDRL'],
+    'Clean Energy/Solar':   ['MAXN','CSIQ','JKS','DAQO','RUN','NOVA','BE','PLUG','FCEL','BLDP','NEP','CLNE','BLNK','CHPT','EVGO'],
+    'EV/Autonomous':        ['RIVN','LCID','NIO','XPEV','LI','ACHR','JOBY','F'],
+    'Airlines/Travel':      ['AAL','JBLU','NCLH','CCL','SABR','TRIP','TZOO','LYFT'],
+    'Retail/Consumer':      ['M','KSS','BBWI','WBA','GPS','FL','HBI','TLYS','PLCE','GCO','SHOO','RCII','PLAY','JACK','CAKE','DINE','BJRI','ARKO','PTLO','COLM','OXM','MO'],
+    'Materials/Mining':     ['CLF','MT','VALE','PBR','ITUB','BBD','MP','LAAC','KGC','PAAS','AG','HL','EXK','CDE','MAG'],
+    'International ADRs':   ['JD','VNET','QFIN','NOAH','LU','GDS','RLX','YMM','ZIM','FLNG','GLNG','MNSO','TCOM','FUTU'],
+    'Telecom/Utilities':    ['T','SHEN','ATUS','TEF','VIV','TKC','LILA','LUMN'],
+    'Industrials/Defense':  ['AMRC','HASI','TPI','FLNC','REZI','KTOS','BKSY','SPCE','SVC','MAC','SKT','IVT','GMRE','GOOD','LAND'],
+};
+// Flat version for fetchQuotesCached
+const GEMS_UNIVERSE = Object.values(GEMS_UNIVERSE_BY_SECTOR).flat();
 
-    // ── Tech — Hardware / Semis / AI ─────────────────────────
-    'INTC','ERIC','NOK','BB','WOLF','SOUN','BBAI','IONQ','AI','SMCI',
-    'CALX','VIAV','MARA','RIOT','MGNI','DV','IAS','PUBM','ACMR',
-    'FORM','COHU','AMBA','POWI','DIOD','NTGR','AVNW','CLFD','LUMN',
-    'INFN','CLSK','CIFR','ARRY',
-
-    // ── Tech — Software / Cloud / Internet ───────────────────
-    'APPS','DOMO','KD','BILL','GLBE','CARG','GSAT','ZETA','MGNI',
-
-    // ── Media / Streaming / Social ────────────────────────────
-    'PARA','WBD','FUBO','SIRI','IHRT','NWSA','FOXA','IAC',
-    'SNAP','PINS','MTCH','BMBL','RBLX','IQ','TME','DOYU','HUYA',
-    'LYFT','OPEN','AMC',
-
-    // ── Gaming / Entertainment ────────────────────────────────
-    'GME','PENN','DKNG','RSI','GENI','SKLZ','GDEV','LVS','CZR','MGM',
-
-    // ── Healthcare / Biotech / Pharma ─────────────────────────
-    'PFE','MRNA','NVAX','VTRS','IOVA','SAVA','ACAD','RXRX','FOLD',
-    'EDIT','NTLA','CRSP','ARQT','CDNA','HIMS','TGTX','RCUS',
-    'DAWN','PRTA','ALEC','OCGN','ACRS','ETNB','KYMR',
-
-    // ── Energy — Oil / Gas / Drilling ────────────────────────
-    'BTU','SWN','RRC','MRO','RIG','AR','TALO','CRC','SM',
-    'CPE','VTLE','KOS','BORR','HP','PTEN','NE','SDRL',
-
-    // ── Clean Energy / Solar / Renewables ────────────────────
-    'MAXN','CSIQ','JKS','DAQO','RUN','NOVA','BE','PLUG',
-    'FCEL','BLDP','NEP','CLNE','BLNK','CHPT','EVGO',
-
-    // ── EV / Autonomous ──────────────────────────────────────
-    'RIVN','LCID','NIO','XPEV','LI','ACHR','JOBY','F',
-
-    // ── Airlines / Travel / Cruise ────────────────────────────
-    'AAL','JBLU','NCLH','CCL','SABR','TRIP','TZOO',
-
-    // ── Retail / Consumer ─────────────────────────────────────
-    'M','KSS','BBWI','WBA','GPS','FL','HBI','TLYS','PLCE','GCO',
-    'SHOO','RCII','PLAY','JACK','CAKE','DINE','BJRI','ARKO','PTLO',
-    'COLM','OXM','MO','HPQ',
-
-    // ── Materials / Mining / Metals ───────────────────────────
-    'CLF','MT','VALE','PBR','ITUB','BBD','MP','LAAC',
-    'KGC','PAAS','AG','HL','EXK','CDE','MAG',
-
-    // ── International ADRs ────────────────────────────────────
-    'JD','VNET','QFIN','NOAH','LU','GDS','RLX','YMM','ZIM',
-    'FLNG','GLNG','MNSO','TCOM','FUTU',
-
-    // ── Telecom ───────────────────────────────────────────────
-    'T','SHEN','ATUS','TEF','VIV','TKC','LILA',
-
-    // ── REITs / Real Estate ───────────────────────────────────
-    'SVC','MAC','SKT','IVT','GMRE','GOOD','LAND','CBL',
-
-    // ── Industrials / Defense / Aerospace ────────────────────
-    'AMRC','HASI','TPI','FLNC','REZI','KTOS','BKSY','SPCE','MNTS',
-];
+// Build a sector-balanced 30-stock subset for each gems scan.
+// Picks up to 2 fresh (not-seen, not-watchlist) stocks per sector with a valid price ≤$75.
+// This prevents Claude from defaulting to the same sector every time.
+function buildGemsSubset(priceMap, seenSet, wlSet){
+    const sectors = Object.keys(GEMS_UNIVERSE_BY_SECTOR);
+    const subset = [];
+    for(const sector of sectors){
+        const candidates = GEMS_UNIVERSE_BY_SECTOR[sector]
+            .filter(t => {
+                const q = priceMap[t]; if(!q||!q.c||q.c<=0||q.c>75) return false;
+                if(wlSet.has(t)) return false;
+                return !seenSet.has(t);
+            })
+            .sort(()=>Math.random()-0.5);
+        subset.push(...candidates.slice(0,2));
+    }
+    // If seen-list has exhausted too many sectors, reset and rebuild
+    if(subset.length < 10){
+        clearSeenGems();
+        const seenEmpty = new Set();
+        const fallback = [];
+        for(const sector of sectors){
+            const candidates = GEMS_UNIVERSE_BY_SECTOR[sector]
+                .filter(t=>{ const q=priceMap[t]; return q&&q.c>0&&q.c<=75&&!wlSet.has(t); })
+                .sort(()=>Math.random()-0.5);
+            fallback.push(...candidates.slice(0,2));
+        }
+        console.log('[gems] Seen list exhausted — reset and rebuilt subset from scratch');
+        return fallback.sort(()=>Math.random()-0.5);
+    }
+    return subset.sort(()=>Math.random()-0.5);
+}
 
 function saveWatchlist(){localStorage.setItem('darcell_watchlist',JSON.stringify(WATCHLIST));}
 
@@ -3493,23 +3480,19 @@ async function loadMoreFilter(){
                 return s;
             });
         } else if(meta.type==='gems'){
-            // Cheap Gems load-more: same universe-based approach as initial scan
+            // Cheap Gems load-more: same sector-balanced approach as initial scan
             const lmGemQMap = await fetchQuotesCached(GEMS_UNIVERSE);
             const lmWlSet = new Set(WATCHLIST.map(t=>t.toUpperCase()));
-            let lmGemQuotes = Object.entries(lmGemQMap)
-                .map(([ticker,q])=>({ticker,price:q.c,chg:q.dp||0}))
-                .filter(q=>q.price>0&&q.price<=75&&!lmWlSet.has(q.ticker.toUpperCase()));
-            if(lmGemQuotes.length===0){ if(btn) btn.innerHTML='<span>⚠️</span><span style="margin-left:8px">No cheap stocks found</span>'; return; }
-            const lmGemAllowed = new Set(lmGemQuotes.map(q=>q.ticker.toUpperCase()));
+            const lmGemAllQuotes = Object.entries(lmGemQMap).reduce((a,[k,v])=>{a[k.toUpperCase()]=v;return a;},{});
+            if(Object.keys(lmGemAllQuotes).length===0){ if(btn) btn.innerHTML='<span>⚠️</span><span style="margin-left:8px">No cheap stocks found</span>'; return; }
             const lmSeenGemSet = new Set(getSeenGemTickers());
-            let lmFreshPool = lmGemQuotes.filter(q=>!lmSeenGemSet.has(q.ticker.toUpperCase()));
-            if(lmFreshPool.length<8){ clearSeenGems(); lmFreshPool=[...lmGemQuotes]; }
-            lmFreshPool.sort(()=>Math.random()-0.5);
-            const lmGemSubset = lmFreshPool.slice(0,25);
-            const lmGemPriceData = lmGemSubset.map(q=>`${q.ticker}: $${q.price.toFixed(2)} (${q.chg>=0?'+':''}${q.chg.toFixed(2)}% today)`).join('\n');
+            const lmGemSubset = buildGemsSubset(lmGemAllQuotes, lmSeenGemSet, lmWlSet);
+            const lmGemAllowed = new Set(lmGemSubset.map(t=>t.toUpperCase()));
+            const lmGemPriceData = lmGemSubset.map(t=>{ const q=lmGemAllQuotes[t]; return `${t}: $${q.c.toFixed(2)} (${(q.dp||0)>=0?'+':''}${(q.dp||0).toFixed(2)}% today)`; }).join('\n');
+            const lmGemQuotesArr = lmGemSubset.map(t=>({ticker:t,price:lmGemAllQuotes[t].c,chg:lmGemAllQuotes[t].dp||0}));
             newCards = JSON.parse(stripJSON(await callClaude(gemsPrompt(lmGemPriceData, getDNAPromptBlock()), 4500)));
             newCards = newCards.filter(c=>{ const t=(c.ticker||'').toUpperCase(); if(!lmGemAllowed.has(t)){console.warn(`[gems] LoadMore dropped ${t}`);return false;} return true; });
-            newCards = injectLivePrices(newCards, lmGemQuotes);
+            newCards = injectLivePrices(newCards, lmGemQuotesArr);
             const lmGemTickers=[...new Set(newCards.map(s=>(s.ticker||'').toUpperCase()).filter(Boolean))];
             if(lmGemTickers.length) addSeenGemTickers(lmGemTickers);
             const [lmGemNews,lmTechMap,lmFlowMap] = await Promise.all([
@@ -3696,29 +3679,24 @@ async function runActiveFilter(){
                 return s;
             });
         } else if(meta.type==='gems'){
-            // ── CHEAP GEMS: 260-stock diverse universe → random 25 subset → Claude picks 3 ──
-            // Universe guarantees stock price range that produces affordable options.
-            // Seen-ticker rotation ensures variety across scans.
+            // ── CHEAP GEMS: sector-balanced subset → Claude picks 3 ──
+            // buildGemsSubset picks 2 stocks from each of 15 sectors → 30 shown to Claude.
+            // This guarantees Claude always sees tech, media, healthcare, energy etc — not just banking.
             const gemQMap = await fetchQuotesCached(GEMS_UNIVERSE);
             const gemWlSet = new Set(WATCHLIST.map(t=>t.toUpperCase()));
-            let gemQuotes = Object.entries(gemQMap)
-                .map(([ticker,q])=>({ticker, price:q.c, chg:q.dp||0}))
-                .filter(q=>q.price>0 && q.price<=75 && !gemWlSet.has(q.ticker.toUpperCase()));
-            if(gemQuotes.length===0){
+            const gemAllQuotes = Object.entries(gemQMap).reduce((a,[k,v])=>{a[k.toUpperCase()]=v;return a;},{});
+            if(Object.keys(gemAllQuotes).length===0){
                 document.getElementById('ideasOutput').innerHTML=`<div class="empty-state"><div class="empty-icon">💎</div><div class="empty-title">No cheap stocks available</div><div class="empty-sub">Try again in a moment.</div></div>`;
                 return;
             }
-            const gemAllowed = new Set(gemQuotes.map(q=>q.ticker.toUpperCase()));
-            // Seen-ticker rotation: remove recently-shown stocks so Claude sees fresh names
             const seenGemSet = new Set(getSeenGemTickers());
-            let freshPool = gemQuotes.filter(q=>!seenGemSet.has(q.ticker.toUpperCase()));
-            if(freshPool.length < 8){ clearSeenGems(); freshPool=[...gemQuotes]; console.log('[gems] Seen list exhausted — resetting'); }
-            freshPool.sort(()=>Math.random()-0.5);
-            const gemSubset = freshPool.slice(0,25);
-            const gemPriceData = gemSubset.map(q=>`${q.ticker}: $${q.price.toFixed(2)} (${q.chg>=0?'+':''}${q.chg.toFixed(2)}% today)`).join('\n');
+            const gemSubset = buildGemsSubset(gemAllQuotes, seenGemSet, gemWlSet);
+            const gemAllowed = new Set(gemSubset.map(t=>t.toUpperCase()));
+            const gemPriceData = gemSubset.map(t=>{ const q=gemAllQuotes[t]; return `${t}: $${q.c.toFixed(2)} (${(q.dp||0)>=0?'+':('')}${(q.dp||0).toFixed(2)}% today)`; }).join('\n');
+            const gemQuotesArr = gemSubset.map(t=>({ ticker:t, price:gemAllQuotes[t].c, chg:gemAllQuotes[t].dp||0 }));
             cards = JSON.parse(stripJSON(await callClaude(gemsPrompt(gemPriceData, getDNAPromptBlock()), 4500)));
             cards = cards.filter(c=>{ const t=(c.ticker||'').toUpperCase(); if(!gemAllowed.has(t)){console.warn(`[gems] Dropped ${t} — not in live universe`);return false;} return true; });
-            cards = injectLivePrices(cards, gemQuotes);
+            cards = injectLivePrices(cards, gemQuotesArr);
             const gemCardTickers=[...new Set(cards.map(s=>(s.ticker||'').toUpperCase()).filter(Boolean))];
             if(gemCardTickers.length) addSeenGemTickers(gemCardTickers);
             const [gemNewsMap, gemTechMap, gemFlowMap] = await Promise.all([
@@ -4100,10 +4078,7 @@ async function scanDiscover(){
     // Pre-fetch GEMS_UNIVERSE prices for Discover gems category
     const dgQMap = await fetchQuotesCached(GEMS_UNIVERSE).catch(()=>({}));
     const dgWlSet = new Set(WATCHLIST.map(t=>t.toUpperCase()));
-    let dgGemQuotes = Object.entries(dgQMap)
-        .map(([ticker,q])=>({ticker,price:q.c,chg:q.dp||0}))
-        .filter(q=>q.price>0&&q.price<=75&&!dgWlSet.has(q.ticker.toUpperCase()));
-    const dgGemAllowed = new Set(dgGemQuotes.map(q=>q.ticker.toUpperCase()));
+    const dgAllQuotes = Object.entries(dgQMap).reduce((a,[k,v])=>{a[k.toUpperCase()]=v;return a;},{});
 
     // Step 1: fire Claude calls sequentially so each category excludes tickers from previous ones
     // This prevents the same stock appearing in multiple sections in one scan
@@ -4113,15 +4088,14 @@ async function scanDiscover(){
         try{
             let raw, stocks;
             if(cat.type==='gems'){
-                // Gems: universe-based — guarantees affordable options via live price filter
-                const dgSeenSet = new Set(getSeenGemTickers());
-                let dgFresh = dgGemQuotes.filter(q=>!dgSeenSet.has(q.ticker.toUpperCase()) && !alreadyPickedThisScan.includes(q.ticker.toUpperCase()));
-                if(dgFresh.length<8) dgFresh=[...dgGemQuotes].filter(q=>!alreadyPickedThisScan.includes(q.ticker.toUpperCase()));
-                dgFresh.sort(()=>Math.random()-0.5);
-                const dgPriceData = dgFresh.slice(0,25).map(q=>`${q.ticker}: $${q.price.toFixed(2)} (${q.chg>=0?'+':''}${q.chg.toFixed(2)}% today)`).join('\n');
+                // Gems: sector-balanced subset — 2 per sector, excludes already-picked this scan
+                const dgSeenSet = new Set([...getSeenGemTickers(), ...alreadyPickedThisScan]);
+                const dgSubset = buildGemsSubset(dgAllQuotes, dgSeenSet, dgWlSet);
+                const dgAllowed = new Set(dgSubset.map(t=>t.toUpperCase()));
+                const dgPriceData = dgSubset.map(t=>{ const q=dgAllQuotes[t]; return `${t}: $${q.c.toFixed(2)} (${(q.dp||0)>=0?'+':''}${(q.dp||0).toFixed(2)}% today)`; }).join('\n');
                 raw = await callClaude(gemsPrompt(dgPriceData, getDNAPromptBlock()), 4500);
                 stocks = JSON.parse(stripJSON(raw));
-                stocks = stocks.filter(s=>dgGemAllowed.has((s.ticker||'').toUpperCase()));
+                stocks = stocks.filter(s=>dgAllowed.has((s.ticker||'').toUpperCase()));
             } else {
                 raw = await callClaude(discoverPrompt(cat.desc, alreadyPickedThisScan, {}, marketCandidates));
                 stocks = JSON.parse(stripJSON(raw));
