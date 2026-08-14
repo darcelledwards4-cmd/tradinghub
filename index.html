@@ -5840,12 +5840,16 @@ CRITICAL REQUIREMENTS — read carefully before writing:
 3. warning_signs MUST describe market/Greek/technical signals visible at entry — NOT behavioral mistakes. What would an experienced trader have spotted before entering?
 4. what_went_wrong: the FIRST item MUST be a market/mechanical explanation. Do NOT start with "you ignored your stop" — explain WHY the trade moved against them first.
 5. next_time: MUST be specific and technical. Reference actual price levels or conditions for ${trade.ticker||'this ticker'}. BANNED phrases: "follow your stop loss", "set an alert", "honor your stop", "stick to your plan" — these are too generic to be useful. Instead say things like: "Before entering any ${trade.ticker||'energy'} call, check whether IV is above 65% — at that level theta burns faster than most stocks can move in a week" or "If ${trade.ticker||'this stock'} fails to hold above $X within 3 days of entry, the setup has stalled — close without waiting for the option to hit stop."
+6. setup_viability MUST answer two hard questions every experienced trader asks before entering:
+   a) TARGET MATH: What % move from entry to target was required? Given the DTE and the stock's typical weekly range (estimate from technicals if needed), was this realistically achievable before expiry? A 12% move in 30 DTE on a stock that moves 1-2%/week is a red flag — say so explicitly with the math.
+   b) CATALYST FRESHNESS: Were the news/events cited in the thesis actually new and not-yet-priced-in at entry? If the thesis cited earnings 79 days out, a partnership announcement, or analyst upgrades — were these recent (within 1-2 weeks of entry) or was the market likely already aware? News that was known before entry is often already reflected in the stock price. Call this out if the thesis relied on stale catalysts.
 
 Return ONLY this JSON (no markdown, no extra text):
 {
   "headline": "1 sentence — what actually happened and the single most important takeaway",
   "market_context": "2-3 sentences: what was the market/stock/sector actually doing at time of entry and during the trade? Use the thesis and news to reconstruct real conditions. Was the original setup sound? What changed or worked against it?",
   "root_cause": "2-3 sentences: the MECHANICAL reason the option gained or lost value. Theta decay? IV contraction post-event? Stock reversal from a specific catalyst? Explain the option mechanics explicitly with approximate dollar impact if data allows.",
+  "setup_viability": "2-3 sentences answering BOTH: (a) Was the target % move achievable given DTE and typical stock range — show the math explicitly (e.g. 'Entry $X, target $Y = Z% move needed. With ~N DTE and typical weekly range of ~W%, this required the stock to move W×4 in the remaining time'). (b) Were the catalysts in the thesis fresh/unpriced at entry, or was the market likely already aware of them? If catalysts were known for weeks before entry, say the upside may have already been priced in.",
   "warning_signs": ["2-3 signals that existed AT ENTRY — market, Greek, or technical — that an experienced options trader would have seen as elevated risk. Not behavioral mistakes — actual pre-entry market signals."],
   "what_went_right": ["1-3 specific things with dollar amounts where relevant — empty array only if zero positives"],
   "what_went_wrong": ["1-3 items — FIRST MUST be a market/mechanical reason the trade moved against them, not a behavioral critique"],
@@ -5868,6 +5872,8 @@ function buildPostAnalysisHTML(pa, tradeId){
     // New deep-analysis fields
     const marketCtxHtml = pa.market_context
         ? `<div class="pca-section" style="border-left:2px solid rgba(99,179,237,.35);padding-left:10px"><div class="pca-section-title" style="color:#63b3ed">🌐 Market Context</div><p style="margin:4px 0 0;font-size:12px;line-height:1.6;color:var(--muted)">${pa.market_context}</p></div>` : '';
+    const setupViabilityHtml = pa.setup_viability
+        ? `<div class="pca-section" style="border-left:2px solid rgba(52,211,153,.35);padding-left:10px"><div class="pca-section-title" style="color:#34d399">📐 Setup Viability — Target Math & Catalyst Check</div><p style="margin:4px 0 0;font-size:12px;line-height:1.6;color:var(--muted)">${pa.setup_viability}</p></div>` : '';
     const rootCauseHtml = pa.root_cause
         ? `<div class="pca-section" style="border-left:2px solid rgba(251,191,36,.35);padding-left:10px"><div class="pca-section-title" style="color:#fbbf24">⚙️ Why The Option Moved</div><p style="margin:4px 0 0;font-size:12px;line-height:1.6;color:var(--muted)">${pa.root_cause}</p></div>` : '';
     const warningHtml = (pa.warning_signs||[]).length
@@ -5906,7 +5912,7 @@ function buildPostAnalysisHTML(pa, tradeId){
         <div class="pca-body open" id="pca-body-${tradeId}">
             ${traderVoiceHtml}
             <div class="pca-headline">${pa.headline||''}</div>
-            ${marketCtxHtml}${rootCauseHtml}${warningHtml}
+            ${marketCtxHtml}${setupViabilityHtml}${rootCauseHtml}${warningHtml}
             ${rightHtml}${wrongHtml}
             <div class="pca-section">
                 <div class="pca-section-title">⏱ Entry Timing <span class="pca-grade ${tg}">${tg}</span></div>
