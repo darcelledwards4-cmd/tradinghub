@@ -3476,7 +3476,13 @@ async function loadMoreFilter(){
                 const te=lmTechMap[k]; if(te) s._techData=te;
                 const fl=lmFlowMap[k]; if(fl) s._flowData=fl;
                 return s;
-            }).filter(c=>{ if(lmWlSet.has((c.ticker||'').toUpperCase())){console.warn(`[gems] LoadMore dropped ${c.ticker} — watchlist`);return false;} return true; });
+            }).filter(c=>{
+                if(lmWlSet.has((c.ticker||'').toUpperCase())){console.warn(`[gems] LoadMore dropped ${c.ticker} — watchlist`);return false;}
+                const detail=(c.expiry_options?.[0]?.option_detail||c.option_detail||'');
+                const m=detail.match(/Est\.?\s*\$?([\d.]+)\s*\/contract/i);
+                if(m){ const est=parseFloat(m[1]); if(est>5){console.warn(`[gems] LoadMore dropped ${c.ticker} — est $${est}/contract over limit`);return false;} }
+                return true;
+            });
             const finalLmTickers=[...new Set(newCards.map(s=>(s.ticker||'').toUpperCase()).filter(Boolean))];
             if(finalLmTickers.length) addSeenGemTickers(finalLmTickers);
         } else {
@@ -3682,10 +3688,14 @@ async function runActiveFilter(){
                 const fl=gemFlowMap[k];  if(fl){ s._flowData=fl; }
                 return s;
             });
-            // Exclude watchlist tickers — Gems should show fresh ideas, not stocks already tracked
+            // Exclude watchlist tickers + filter cards where Claude's own estimate is way over $3
             const wlSet=new Set(WATCHLIST.map(t=>t.toUpperCase()));
             cards = cards.filter(c=>{
                 if(wlSet.has((c.ticker||'').toUpperCase())){ console.warn(`[gems] Dropped ${c.ticker} — in watchlist`); return false; }
+                // Parse Claude's estimated contract price from option_detail ("Est. $X.XX/contract")
+                const detail=(c.expiry_options?.[0]?.option_detail||c.option_detail||'');
+                const m=detail.match(/Est\.?\s*\$?([\d.]+)\s*\/contract/i);
+                if(m){ const est=parseFloat(m[1]); if(est>5){ console.warn(`[gems] Dropped ${c.ticker} — Claude est $${est}/contract, over limit`); return false; } }
                 return true;
             });
             // Track seen tickers so next scan picks different stocks
@@ -3960,20 +3970,22 @@ function gemsPrompt(marketCandidates=[], dnaBlock='', seenTickers=[]){
         : '';
     return `You are an options trading analyst scanning the ENTIRE US stock market for cheap CALL option setups. Today: ${exp.today}.
 
-MISSION: Find the 3 best CALL option opportunities from ANY publicly traded US stock. You have complete freedom — no restricted list, no stock price limit.
+MISSION: Find the 3 best CALL option opportunities with affordable contracts. You have full freedom to pick any stock in the market — no restricted list, no DNA filter, explore fresh names the trader hasn't seen.
 
-💰 THE ONLY REQUIREMENT: The estimated ATM or slightly OTM CALL contract must cost $3.00/share or LESS ($300/contract max). This is what makes a stock a "Cheap Gem" — affordable options for a small account, regardless of the stock's own share price. A $200 stock with $1.50 options qualifies. A $10 stock with $4.00 options does not.
+💰 CHEAP GEMS RULE — The ATM or slightly OTM CALL contract must cost $3.00/share or LESS ($300/contract max):
+- PRACTICAL GUIDE: Stock price is the #1 driver of option cost. A $400 stock call costs ~$15-30+. A $50 stock call costs ~$1-3. A $15 stock call costs ~$0.50-1.50.
+- TARGET RANGE: Focus on stocks priced roughly $5–$100/share. At these prices, ATM calls typically fall under $3 with normal IV (20-40%).
+- DO NOT pick stocks above $150/share — their options will almost never qualify, even far OTM.
+- Low IV amplifies this: a $80 stock with 20% IV has ~$1.80 1-month calls. A $80 stock with 60% IV has ~$5.50. Avoid high-IV names.
+- If you can't find a qualifying option under $3 on a stock, pick a different stock. Never force it.
 
 THEME FOR THIS SCAN: ${varietySeed}
 ${moversBlock}${exclusionBlock}${dnaBlock}
-WHAT TO LOOK FOR — strongest bullish setups with affordable options:
-- Strong intraday momentum + relative strength
-- Technical breakout above resistance or key moving average
-- Volume spike or unusual options flow
-- Positive catalyst: earnings beat, upgrade, FDA approval, deal announcement
-- Stocks where options are cheap relative to their move potential (low IV, steady chart)
-
-CRITICAL: You are picking from the WHOLE MARKET. Every scan should surface fresh, different names the trader may never have considered — any sector, any price range, as long as the option contract is under $3.00.
+WHAT TO LOOK FOR — best setups with cheap contracts:
+- Strong momentum, technical breakout, or positive catalyst
+- Stock price roughly $5–$100 range with normal/low IV
+- Options liquid enough to trade (avoid illiquid microcaps)
+- Fresh names — actively explore sectors and tickers outside the trader's usual watchlist
 
 Set current_price to the ACTUAL stock price as of today (${exp.today}). All price levels must be anchored to real prices.
 
@@ -4080,7 +4092,13 @@ async function scanDiscover(){
                 const dgTickers = [...new Set(stocks.map(s=>(s.ticker||'').toUpperCase()).filter(Boolean))];
                 const dgPriceMap = dgTickers.length ? await fetchQuotesCached(dgTickers) : {};
                 stocks = stocks.map(s=>{ const k=(s.ticker||'').toUpperCase(); const q=dgPriceMap[k]; if(q&&q.c){s=sanitizePriceLevels(s,q.c);s.current_price=q.c;s.price_change=q.dp||0;} return s; })
-                    .filter(s=>{ if(dgWlSet.has((s.ticker||'').toUpperCase()))return false; return true; });
+                    .filter(s=>{
+                        if(dgWlSet.has((s.ticker||'').toUpperCase()))return false;
+                        const detail=(s.expiry_options?.[0]?.option_detail||s.option_detail||'');
+                        const m=detail.match(/Est\.?\s*\$?([\d.]+)\s*\/contract/i);
+                        if(m){ const est=parseFloat(m[1]); if(est>5){console.warn(`[Discover gems] Dropped ${s.ticker} — est $${est}/contract`);return false;} }
+                        return true;
+                    });
             } else {
                 raw = await callClaude(discoverPrompt(cat.desc, alreadyPickedThisScan, {}, marketCandidates));
                 stocks = JSON.parse(stripJSON(raw));
