@@ -3435,13 +3435,20 @@ async function loadMoreFilter(){
             if(lmGemQuotes.length===0){ if(btn) btn.innerHTML='<span>⚠️</span><span style="margin-left:8px">No cheap stocks found</span>'; return; }
             const lmGemAllowed = new Set(lmGemQuotes.map(q=>q.ticker.toUpperCase()));
             const lmGemPriceData = lmGemQuotes.map(q=>`${q.ticker}: $${q.price.toFixed(2)} (${q.chg>=0?'+':''}${q.chg.toFixed(2)}% today)`).join('\n');
-            const lmGemRaw = await callClaude(gemsPrompt(lmGemPriceData, getDNAPromptBlock(), shownTickers));
+            const lmGemRaw = await callClaude(gemsPrompt(lmGemPriceData, getDNAPromptBlock(), shownTickers), 4500);
             newCards = JSON.parse(stripJSON(lmGemRaw));
             newCards = newCards.filter(c=>{ const t=(c.ticker||'').toUpperCase(); if(!lmGemAllowed.has(t)){ console.warn(`[gems] Dropped ${t}`); return false; } return true; });
             newCards = injectLivePrices(newCards, lmGemQuotes);
             const lmGemTickers=[...new Set(newCards.map(s=>(s.ticker||'').toUpperCase()).filter(Boolean))];
             const lmGemNews = lmGemTickers.length ? await fetchNewsForPromptBatch(lmGemTickers) : {};
             newCards = newCards.map(s=>{ const n=lmGemNews[(s.ticker||'').toUpperCase()]; if(n&&n.items&&n.items.length) s._newsItems=n.items.slice(0,2); return s; });
+            // Kick off MI (technicals + flow) for Load More gems — fire-and-forget so render isn't blocked
+            if(lmGemTickers.length){
+                Promise.all([
+                    fetchTechnicalsBatch(lmGemTickers).catch(()=>({})),
+                    fetchFlowBatch(lmGemTickers).catch(()=>({}))
+                ]).then(([tMap,fMap])=>injectTechPillsIntoCards(tMap||{},fMap||{})).catch(()=>{});
+            }
         } else {
             const cat=DISCOVER_CATS.find(c=>c.key===key);
             let lmMarketCandidates = [];
@@ -3628,7 +3635,7 @@ async function runActiveFilter(){
             }
             const gemAllowed = new Set(gemQuotes.map(q=>q.ticker.toUpperCase()));
             const gemPriceData = gemQuotes.map(q=>`${q.ticker}: $${q.price.toFixed(2)} (${q.chg>=0?'+':''}${q.chg.toFixed(2)}% today)`).join('\n');
-            const gemRaw = await callClaude(gemsPrompt(gemPriceData, getDNAPromptBlock()));
+            const gemRaw = await callClaude(gemsPrompt(gemPriceData, getDNAPromptBlock()), 4500);
             cards = JSON.parse(stripJSON(gemRaw));
             // Hard JS post-filter — reject any ticker not in the live-verified cheap pool
             cards = cards.filter(c=>{
@@ -4012,7 +4019,7 @@ async function scanDiscover(){
                 // Gems: constrained to live-verified cheap universe — no hallucination possible
                 if(discGemQuotes.length===0){ catStocks.push([]); continue; }
                 const dgPriceData = discGemQuotes.map(q=>`${q.ticker}: $${q.price.toFixed(2)} (${q.chg>=0?'+':''}${q.chg.toFixed(2)}% today)`).join('\n');
-                raw = await callClaude(gemsPrompt(dgPriceData, getDNAPromptBlock(), alreadyPickedThisScan));
+                raw = await callClaude(gemsPrompt(dgPriceData, getDNAPromptBlock(), alreadyPickedThisScan), 4500);
                 stocks = JSON.parse(stripJSON(raw));
                 // Hard post-filter: only keep tickers that were in the live-priced cheap list
                 stocks = stocks.filter(s=>discGemAllowed.has((s.ticker||'').toUpperCase()));
