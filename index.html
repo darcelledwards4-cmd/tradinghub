@@ -2833,16 +2833,30 @@ let WATCHLIST=JSON.parse(localStorage.getItem('darcell_watchlist')||'null')||[..
 
 // Curated universe of solid companies typically priced under $45/share.
 // Live price filter at ≤$45 screens any that have moved up — Claude only sees cheap ones.
+// Large pool (~80) so we can rotate a 30-ticker random subset each scan for variety.
 const GEMS_UNIVERSE=[
-    'SOFI','UPST','PLTR','F','RIVN','LCID','AAL','JBLU','NCLH','CCL',
-    'KEY','RF','FITB','HBAN','ZION','CFG','ALLY',
-    'PFE','MRNA','NVAX','VTRS',
-    'M','KSS','BBWI','WBA',
-    'AI','SOUN','BBAI','IONQ','ARRY',
-    'BTU','SWN','RRC','MRO',
+    // Fintech / Regional banks
+    'SOFI','UPST','ALLY','KEY','RF','FITB','HBAN','ZION','CFG','NYCB','HOOD','LC','OMF',
+    // Airlines / Cruise / Travel
+    'AAL','JBLU','NCLH','CCL','SAVE',
+    // EV / Automotive
+    'F','RIVN','LCID','NIO','XPEV','LI','ACHR','JOBY',
+    // Tech / AI / Semis
+    'PLTR','SOUN','BBAI','IONQ','ARRY','AI','INTC','ERIC','NOK','BB','WOLF',
+    // Energy (smaller names)
+    'BTU','SWN','RRC','MRO','RIG','AR','TALO',
+    // Healthcare / Pharma
+    'PFE','MRNA','NVAX','VTRS','BHVN','IOVA',
+    // Retail / Consumer
+    'M','KSS','BBWI','WBA','GPS','FL','HBI','PENN',
+    // Media / Social / Entertainment
+    'PARA','WBD','SNAP','PINS','LYFT','OPEN','AMC','GME',
+    // Mining / Materials / International
+    'CLF','X','MT','VALE','PBR','ITUB','BBD','MP',
+    // Telecom
     'T','LUMN',
-    'VALE','PBR','ITUB','BBD',
-    'MO','SNAP','PINS','LYFT','OPEN',
+    // Other
+    'MO','MGM','LVS','CZR','HPQ','BLNK',
 ];
 
 function saveWatchlist(){localStorage.setItem('darcell_watchlist',JSON.stringify(WATCHLIST));}
@@ -3431,15 +3445,22 @@ async function loadMoreFilter(){
             let lmGemQuotes = Object.entries(lmGemQMap)
                 .map(([ticker,q])=>({ticker, price:q.c, chg:q.dp||0}))
                 .filter(q=>q.price>0 && q.price<=45 && !lmWlSet.has(q.ticker.toUpperCase()));
-            lmGemQuotes.sort((a,b)=>Math.abs(b.chg)-Math.abs(a.chg));
             if(lmGemQuotes.length===0){ if(btn) btn.innerHTML='<span>⚠️</span><span style="margin-left:8px">No cheap stocks found</span>'; return; }
             const lmGemAllowed = new Set(lmGemQuotes.map(q=>q.ticker.toUpperCase()));
-            const lmGemPriceData = lmGemQuotes.map(q=>`${q.ticker}: $${q.price.toFixed(2)} (${q.chg>=0?'+':''}${q.chg.toFixed(2)}% today)`).join('\n');
+            // Same shuffle+subset logic as initial scan — prioritize unseen, cap at 30
+            const lmSeenSet = new Set((shownTickers||[]).map(t=>t.toUpperCase()));
+            const lmUnseen = lmGemQuotes.filter(q=>!lmSeenSet.has(q.ticker.toUpperCase()));
+            const lmSeen   = lmGemQuotes.filter(q=> lmSeenSet.has(q.ticker.toUpperCase()));
+            lmUnseen.sort((a,b)=>Math.abs(b.chg)-Math.abs(a.chg));
+            lmSeen.sort((a,b)=>Math.abs(b.chg)-Math.abs(a.chg));
+            const lmSubset = [...lmUnseen, ...lmSeen].slice(0, 30);
+            const lmGemPriceData = lmSubset.map(q=>`${q.ticker}: $${q.price.toFixed(2)} (${q.chg>=0?'+':''}${q.chg.toFixed(2)}% today)`).join('\n');
             const lmGemRaw = await callClaude(gemsPrompt(lmGemPriceData, getDNAPromptBlock(), shownTickers), 4500);
             newCards = JSON.parse(stripJSON(lmGemRaw));
             newCards = newCards.filter(c=>{ const t=(c.ticker||'').toUpperCase(); if(!lmGemAllowed.has(t)){ console.warn(`[gems] Dropped ${t}`); return false; } return true; });
             newCards = injectLivePrices(newCards, lmGemQuotes);
             const lmGemTickers=[...new Set(newCards.map(s=>(s.ticker||'').toUpperCase()).filter(Boolean))];
+            if(lmGemTickers.length) addSeenDiscoverTickers(lmGemTickers);
             const lmGemNews = lmGemTickers.length ? await fetchNewsForPromptBatch(lmGemTickers) : {};
             newCards = newCards.map(s=>{ const n=lmGemNews[(s.ticker||'').toUpperCase()]; if(n&&n.items&&n.items.length) s._newsItems=n.items.slice(0,2); return s; });
             // Kick off MI (technicals + flow) for Load More gems — fire-and-forget so render isn't blocked
@@ -3628,14 +3649,27 @@ async function runActiveFilter(){
             let gemQuotes = Object.entries(gemQMap)
                 .map(([ticker,q])=>({ticker, price:q.c, chg:q.dp||0}))
                 .filter(q=>q.price>0 && q.price<=45 && !wlSet.has(q.ticker.toUpperCase()));
-            gemQuotes.sort((a,b)=>Math.abs(b.chg)-Math.abs(a.chg));
             if(gemQuotes.length===0){
                 document.getElementById('ideasOutput').innerHTML=`<div class="empty-state"><div class="empty-icon">💎</div><div class="empty-title">No cheap stocks found</div><div class="empty-sub">All stocks in the gems universe are currently above $45. Try again later.</div></div>`;
                 return;
             }
             const gemAllowed = new Set(gemQuotes.map(q=>q.ticker.toUpperCase()));
-            const gemPriceData = gemQuotes.map(q=>`${q.ticker}: $${q.price.toFixed(2)} (${q.chg>=0?'+':''}${q.chg.toFixed(2)}% today)`).join('\n');
-            const gemRaw = await callClaude(gemsPrompt(gemPriceData, getDNAPromptBlock()), 4500);
+
+            // Seen-ticker tracking — same system as freeform/discover
+            const seenGemTickers = getSeenDiscoverTickers().slice(0, 25);
+            const seenSet = new Set(seenGemTickers.map(t=>t.toUpperCase()));
+
+            // Shuffle and prioritize unseen tickers so Claude sees fresh variety each scan.
+            // Show only 30 stocks to Claude (vs the full ~80) — forces different picks each run.
+            const unseenGems = gemQuotes.filter(q=>!seenSet.has(q.ticker.toUpperCase()));
+            const seenGems   = gemQuotes.filter(q=> seenSet.has(q.ticker.toUpperCase()));
+            // Sort each group by movement so the best movers surface, then combine
+            unseenGems.sort((a,b)=>Math.abs(b.chg)-Math.abs(a.chg));
+            seenGems.sort((a,b)=>Math.abs(b.chg)-Math.abs(a.chg));
+            const subsetQuotes = [...unseenGems, ...seenGems].slice(0, 30);
+
+            const gemPriceData = subsetQuotes.map(q=>`${q.ticker}: $${q.price.toFixed(2)} (${q.chg>=0?'+':''}${q.chg.toFixed(2)}% today)`).join('\n');
+            const gemRaw = await callClaude(gemsPrompt(gemPriceData, getDNAPromptBlock(), seenGemTickers), 4500);
             cards = JSON.parse(stripJSON(gemRaw));
             // Hard JS post-filter — reject any ticker not in the live-verified cheap pool
             cards = cards.filter(c=>{
@@ -3645,6 +3679,8 @@ async function runActiveFilter(){
             });
             cards = injectLivePrices(cards, gemQuotes);
             const gemCardTickers=[...new Set(cards.map(s=>(s.ticker||'').toUpperCase()).filter(Boolean))];
+            // Track these tickers as seen so future scans pick fresh stocks
+            if(gemCardTickers.length) addSeenDiscoverTickers(gemCardTickers);
             const gemNewsMap = gemCardTickers.length ? await fetchNewsForPromptBatch(gemCardTickers) : {};
             cards = cards.map(s=>{ const n=gemNewsMap[(s.ticker||'').toUpperCase()]; if(n&&n.items&&n.items.length) s._newsItems=n.items.slice(0,2); return s; });
         } else {
@@ -3896,8 +3932,9 @@ Use DIFFERENT strikes and levels per timeframe. ENTIRE response must be a single
 // ── CHEAP GEMS PROMPT — constrained to GEMS_UNIVERSE, live-price-filtered ──
 function gemsPrompt(priceData, dnaBlock='', shownTickers=[]){
     const exclusionBlock = shownTickers.length>0
-        ? `\n⚠️ Do NOT return any of these already-shown tickers: ${shownTickers.join(', ')}\n` : '';
+        ? `\n⛔ Do NOT return any of these already-shown tickers: ${shownTickers.join(', ')} — pick entirely different stocks.\n` : '';
     const exp = getExpiryContext();
+    const varietySeed = getVarietySeed();
     return `You are an options trading analyst. Find the best 3 CALL option setups from the stocks listed below. All are verified under $45/share right now — cheap enough to produce affordable contracts.
 
 LIVE STOCK PRICES — pick ONLY from this list:
@@ -3907,7 +3944,9 @@ ${priceData}
 ${exclusionBlock}${dnaBlock}
 CONTRACT PRICE REQUIREMENT: The estimated ATM or slightly OTM CALL premium must be $3.00 per share or LESS ($300/contract max). These are "Cheap Gems" — affordable for small accounts.
 
-Pick the 3 stocks with the strongest bullish setup today. Favor: momentum, technical breakouts, positive news catalysts, volume spikes.
+THEME FOR THIS SCAN: ${varietySeed}
+
+Pick the 3 stocks with the strongest bullish setup today. Favor: momentum, technical breakouts, positive news catalysts, volume spikes. ACTIVELY VARY your picks — do not default to the same tickers repeatedly.
 
 Return ONLY a raw JSON array of exactly 3 objects. No markdown, no code fences, no explanation before or after.
 
