@@ -5723,25 +5723,28 @@ function getDNAPromptBlock(){
     const ivNote        = dna.iv_discipline       ? `📊 IV discipline: ${dna.iv_discipline}` : '';
     const catalystNote  = dna.catalyst_awareness  ? `📰 Catalyst awareness: ${dna.catalyst_awareness}` : '';
 
-    return `\n🧠 TRADER DNA — ${dna.trades_analyzed} real closed trades analyzed. USE THIS TO PERSONALIZE EVERY SUGGESTION:
-✅ Winning patterns: ${wins}
-❌ Losing patterns: ${losses}
-✅ Best setup for them: ${dna.setup_preference||''}
-🚫 What to avoid: ${avoid}
-📚 Key lessons from their trades: ${topLessons}
-${ivNote}
-${catalystNote}
-${timingNote ? '⏱ '+timingNote : ''}
-${exitNote ? '🚪 '+exitNote : ''}
-${rawPatternNote ? rawPatternNote : ''}
-${focusSectors ? `📍 Sectors with proven edge: ${focusSectors}` : ''}
+    return `\n🧠 TRADER DNA — ${dna.trades_analyzed} closed trades analyzed. USE FOR PERSONALIZED WARNINGS ONLY — not to restrict which trades you pick.
 
-→ HOW TO APPLY THIS IN YOUR RESPONSE:
-1. In account_sizing: reference this trader's specific tendencies (timing, stop discipline, IV awareness). Use their actual pattern.
-2. In stop_loss: if this trader ignores stops, set the stop wider but make it explicit in account_sizing.
-3. In summary: if this trade matches their winning pattern, say so. If it conflicts with their losses pattern, flag it.
-4. If suggesting a trade where IV is elevated (>1.5× typical range), warn this trader explicitly — their DNA shows this is a recurring loss pattern.
-5. Scan the best opportunities available — do not limit to their usual sectors, but note when a pick fits or breaks their historical pattern.\n`;
+⚠️ KNOWN RISK PATTERNS (flag these in cons/account_sizing if present in the trade):
+${losses ? `- Losing patterns: ${losses}` : ''}
+${avoid ? `- Historically avoided: ${avoid}` : ''}
+${ivNote ? `- ${ivNote}` : ''}
+${catalystNote ? `- ${catalystNote}` : ''}
+${timingNote ? `- ⏱ ${timingNote}` : ''}
+${exitNote ? `- 🚪 ${exitNote}` : ''}
+${rawPatternNote ? `- ${rawPatternNote}` : ''}
+
+📚 Coaching context for account_sizing: ${topLessons}
+
+→ HOW TO APPLY THIS:
+**Step 1 — Pick objectively.** Find the 3 best trades available in the market TODAY based on momentum, technicals, flow, news catalyst, and setup quality. Do NOT restrict picks to sectors or patterns from this trader's history. Do NOT skip a strong setup because it doesn't match past wins. The trader is still learning — their DNA should evolve, not limit them.
+
+**Step 2 — Annotate with DNA.** After picking the best trades, personalize each card:
+- In account_sizing: add ONE specific coaching note using their DNA (e.g. "You tend to ${dna.exit_tendency==='holds_too_long'?'hold past your stop — honor the $X stop, no exceptions':'exit before target — hold until at least 60% of target is hit'}")
+- In cons: add a DNA-relevant warning IF this specific trade has a known risk from their history (e.g. elevated IV, no clear target level, sector they've struggled with)
+- In summary: one sentence max mentioning DNA only if highly relevant — otherwise describe the trade on its own merits
+
+**Step 3 — Variety.** Actively avoid suggesting the same tickers repeatedly. Prioritize the strongest setup regardless of sector.\n`;
 }
 
 // ── POST-CLOSE TRADE ANALYST ──────────────────────────────────
