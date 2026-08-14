@@ -19,7 +19,9 @@ export default async function handler(req, res) {
         return res.status(500).json({ error: 'CLAUDE_API_KEY not set in Vercel environment variables' });
 
     try {
-        const body = req.body; // Vercel auto-parses JSON bodies in Node.js functions
+        // Vercel auto-parses JSON bodies in Node.js functions, but guard against raw string/Buffer
+        let body = req.body;
+        if (typeof body === 'string') { try { body = JSON.parse(body); } catch(e){} }
         const upstream = await fetch('https://api.anthropic.com/v1/messages', {
             method: 'POST',
             headers: {

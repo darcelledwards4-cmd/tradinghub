@@ -6076,11 +6076,11 @@ function buildTrainingPrompt(closedTrades){
         const rightItems = pa?.what_went_right?.length ? `\n  What went right: ${pa.what_went_right.map(x=>x.slice(0,80)).join(' | ')}` : '';
         const nextItems  = pa?.next_time?.length ? `\n  Next time: ${pa.next_time[0].slice(0,100)}` : '';
         const analysis   = pa ? `\n  Coach verdict: "${pa.headline||''}" Entry:${pa.timing_grade||'?'} Exit:${pa.exit_grade||'?'} ${patternFlag}` : '';
-        // Deep analysis fields — mechanical root causes, IV/catalyst context, setup viability
-        const rootCause  = pa?.root_cause      ? `\n  Root cause: "${pa.root_cause.slice(0,110)}"` : '';
-        const mktCtx     = pa?.market_context  ? `\n  Market context: "${pa.market_context.slice(0,110)}"` : '';
-        const setupVia   = pa?.setup_viability ? `\n  Setup viability: "${pa.setup_viability.slice(0,110)}"` : '';
-        const warnSign   = pa?.warning_signs?.length ? `\n  Key warning sign: "${pa.warning_signs[0].slice(0,90)}"` : '';
+        // Deep analysis fields — trimmed to keep total prompt manageable
+        const rootCause  = pa?.root_cause      ? `\n  Root cause: "${pa.root_cause.slice(0,70)}"` : '';
+        const mktCtx     = pa?.market_context  ? `\n  Market context: "${pa.market_context.slice(0,70)}"` : '';
+        const setupVia   = pa?.setup_viability ? `\n  Setup viability: "${pa.setup_viability.slice(0,70)}"` : '';
+        const warnSign   = pa?.warning_signs?.length ? `\n  Key warning: "${pa.warning_signs[0].slice(0,60)}"` : '';
         return `• ${outcome}${pctLost} — ${t.ticker} ${t.type||'CALL'} $${t.strike||'?'} exp ${fmt(t.exp)||'?'}${daysHeld?` (~${daysHeld}d DTE)`:''}${entry?', '+entry:''}${exit?', '+exit:''}${stop?', '+stop:''}${tgt?', '+tgt:''}${rrRatio}${zoneNote?' [stock:'+zoneNote+']':''}${t.thesis?`\n  Thesis: "${t.thesis.slice(0,100)}"`:''}`+notes+analysis+wrongItems+rightItems+nextItems+rootCause+mktCtx+setupVia+warnSign
     }).join('\n');
 
@@ -6132,17 +6132,19 @@ async function trainTradingModel(){
         const result = JSON.parse(stripJSON(raw));
 
         const dna = {
-            trained_at:       new Date().toISOString(),
-            trades_analyzed:  closed.length,
-            summary:          result.summary          || '',
-            winning_patterns: result.winning_patterns || [],
-            losing_patterns:  result.losing_patterns  || [],
-            setup_preference: result.setup_preference || '',
-            avoid_setup:      result.avoid_setup      || '',
-            lessons:          result.lessons          || [],
-            timing_tendency:  result.timing_tendency  || 'inconsistent',
-            exit_tendency:    result.exit_tendency    || 'inconsistent',
-            market_focus:     result.market_focus     || [],
+            trained_at:          new Date().toISOString(),
+            trades_analyzed:     closed.length,
+            summary:             result.summary             || '',
+            winning_patterns:    result.winning_patterns    || [],
+            losing_patterns:     result.losing_patterns     || [],
+            setup_preference:    result.setup_preference    || '',
+            avoid_setup:         result.avoid_setup         || '',
+            lessons:             result.lessons             || [],
+            timing_tendency:     result.timing_tendency     || 'inconsistent',
+            exit_tendency:       result.exit_tendency       || 'inconsistent',
+            market_focus:        result.market_focus        || [],
+            iv_discipline:       result.iv_discipline       || '',
+            catalyst_awareness:  result.catalyst_awareness  || '',
         };
         saveDNA(dna);
         renderDNACard();
