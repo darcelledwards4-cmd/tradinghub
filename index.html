@@ -6000,7 +6000,7 @@ async function runPostCloseAnalysis(trade){
 
         setProgress(42, 1, 'Sending to Claude for deep analysis…');
 
-        const raw = await callClaude(buildPostClosePrompt(trade, techData, flowData, newsText), 4500);
+        const raw = await callClaude(buildPostClosePrompt(trade, techData, flowData, newsText), 3000);
 
         setProgress(88, 2, 'Saving results…');
 

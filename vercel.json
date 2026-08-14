@@ -6,7 +6,7 @@
     "api/options.js":        { "maxDuration": 45 },
     "api/technicals.js":     { "maxDuration": 30 },
     "api/flow.js":           { "maxDuration": 30 },
-    "api/claude.js":         { "maxDuration": 30 },
+    "api/claude.js":         { "maxDuration": 60 },
     "api/finnhub.js":        { "maxDuration": 15 },
     "api/news.js":           { "maxDuration": 20 },
     "api/quotes.js":         { "maxDuration": 15 },
