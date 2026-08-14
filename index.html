@@ -1144,6 +1144,20 @@ function addSeenDiscoverTickers(tickers){
     const updated = [...new Set([...tickers.map(t=>t.toUpperCase()), ...seen])].slice(0, 80);
     localStorage.setItem(LS_SEEN_DISCOVER, JSON.stringify(updated));
 }
+
+// ── GEMS-SPECIFIC seen-ticker tracking (separate from freeform/discover) ──
+// Freeform scans pollute th_seen_discover with AAPL/NVDA/etc. that aren't in
+// the gems universe — so gems needs its own independent exclusion list.
+const LS_SEEN_GEMS = 'th_seen_gems';
+function getSeenGemTickers(){
+    try{ return JSON.parse(localStorage.getItem(LS_SEEN_GEMS)||'[]'); }catch(e){ return []; }
+}
+function addSeenGemTickers(tickers){
+    const seen = getSeenGemTickers();
+    const updated = [...new Set([...tickers.map(t=>t.toUpperCase()), ...seen])].slice(0, 60);
+    localStorage.setItem(LS_SEEN_GEMS, JSON.stringify(updated));
+}
+function clearSeenGems(){ localStorage.removeItem(LS_SEEN_GEMS); }
 // Sector rotation seed — cycles through market themes by week so prompts feel fresh
 function getVarietySeed(){
     const themes = [
@@ -3447,20 +3461,19 @@ async function loadMoreFilter(){
                 .filter(q=>q.price>0 && q.price<=45 && !lmWlSet.has(q.ticker.toUpperCase()));
             if(lmGemQuotes.length===0){ if(btn) btn.innerHTML='<span>⚠️</span><span style="margin-left:8px">No cheap stocks found</span>'; return; }
             const lmGemAllowed = new Set(lmGemQuotes.map(q=>q.ticker.toUpperCase()));
-            // Same shuffle+subset logic as initial scan — prioritize unseen, cap at 30
-            const lmSeenSet = new Set((shownTickers||[]).map(t=>t.toUpperCase()));
-            const lmUnseen = lmGemQuotes.filter(q=>!lmSeenSet.has(q.ticker.toUpperCase()));
-            const lmSeen   = lmGemQuotes.filter(q=> lmSeenSet.has(q.ticker.toUpperCase()));
-            lmUnseen.sort((a,b)=>Math.abs(b.chg)-Math.abs(a.chg));
-            lmSeen.sort((a,b)=>Math.abs(b.chg)-Math.abs(a.chg));
-            const lmSubset = [...lmUnseen, ...lmSeen].slice(0, 30);
+            // Remove ALL seen gems from what Claude sees — same logic as initial scan
+            const lmSeenGemSet = new Set(getSeenGemTickers());
+            let lmFreshPool = lmGemQuotes.filter(q=>!lmSeenGemSet.has(q.ticker.toUpperCase()));
+            if(lmFreshPool.length < 6){ clearSeenGems(); lmFreshPool=[...lmGemQuotes]; }
+            lmFreshPool.sort(()=>Math.random()-0.5);
+            const lmSubset = lmFreshPool.slice(0, 20);
             const lmGemPriceData = lmSubset.map(q=>`${q.ticker}: $${q.price.toFixed(2)} (${q.chg>=0?'+':''}${q.chg.toFixed(2)}% today)`).join('\n');
-            const lmGemRaw = await callClaude(gemsPrompt(lmGemPriceData, getDNAPromptBlock(), shownTickers), 4500);
+            const lmGemRaw = await callClaude(gemsPrompt(lmGemPriceData, getDNAPromptBlock()), 4500);
             newCards = JSON.parse(stripJSON(lmGemRaw));
             newCards = newCards.filter(c=>{ const t=(c.ticker||'').toUpperCase(); if(!lmGemAllowed.has(t)){ console.warn(`[gems] Dropped ${t}`); return false; } return true; });
             newCards = injectLivePrices(newCards, lmGemQuotes);
             const lmGemTickers=[...new Set(newCards.map(s=>(s.ticker||'').toUpperCase()).filter(Boolean))];
-            if(lmGemTickers.length) addSeenDiscoverTickers(lmGemTickers);
+            if(lmGemTickers.length) addSeenGemTickers(lmGemTickers);
             const lmGemNews = lmGemTickers.length ? await fetchNewsForPromptBatch(lmGemTickers) : {};
             newCards = newCards.map(s=>{ const n=lmGemNews[(s.ticker||'').toUpperCase()]; if(n&&n.items&&n.items.length) s._newsItems=n.items.slice(0,2); return s; });
             // Kick off MI (technicals + flow) for Load More gems — fire-and-forget so render isn't blocked
@@ -3655,21 +3668,25 @@ async function runActiveFilter(){
             }
             const gemAllowed = new Set(gemQuotes.map(q=>q.ticker.toUpperCase()));
 
-            // Seen-ticker tracking — same system as freeform/discover
-            const seenGemTickers = getSeenDiscoverTickers().slice(0, 25);
-            const seenSet = new Set(seenGemTickers.map(t=>t.toUpperCase()));
-
-            // Shuffle and prioritize unseen tickers so Claude sees fresh variety each scan.
-            // Show only 30 stocks to Claude (vs the full ~80) — forces different picks each run.
-            const unseenGems = gemQuotes.filter(q=>!seenSet.has(q.ticker.toUpperCase()));
-            const seenGems   = gemQuotes.filter(q=> seenSet.has(q.ticker.toUpperCase()));
-            // Sort each group by movement so the best movers surface, then combine
-            unseenGems.sort((a,b)=>Math.abs(b.chg)-Math.abs(a.chg));
-            seenGems.sort((a,b)=>Math.abs(b.chg)-Math.abs(a.chg));
-            const subsetQuotes = [...unseenGems, ...seenGems].slice(0, 30);
+            // ── Gems variety system ───────────────────────────────────────────────────
+            // Use gems-only seen list (not shared with Calls/Puts which fills it with AAPL/NVDA etc.)
+            const seenGemSet = new Set(getSeenGemTickers());
+            // Remove seen tickers ENTIRELY from what Claude sees — exclusion block alone isn't reliable
+            let freshPool = gemQuotes.filter(q=>!seenGemSet.has(q.ticker.toUpperCase()));
+            // If we've shown everything, reset the seen list and start over
+            if(freshPool.length < 6){
+                clearSeenGems();
+                freshPool = [...gemQuotes];
+                console.log('[gems] Seen list exhausted — resetting for fresh variety');
+            }
+            // True random shuffle — no sorting by movement (same movers always float to top)
+            freshPool.sort(()=>Math.random()-0.5);
+            // Show only 20 to Claude — small enough to force variety, large enough for choice
+            const subsetQuotes = freshPool.slice(0, 20);
+            // ─────────────────────────────────────────────────────────────────────────
 
             const gemPriceData = subsetQuotes.map(q=>`${q.ticker}: $${q.price.toFixed(2)} (${q.chg>=0?'+':''}${q.chg.toFixed(2)}% today)`).join('\n');
-            const gemRaw = await callClaude(gemsPrompt(gemPriceData, getDNAPromptBlock(), seenGemTickers), 4500);
+            const gemRaw = await callClaude(gemsPrompt(gemPriceData, getDNAPromptBlock()), 4500);
             cards = JSON.parse(stripJSON(gemRaw));
             // Hard JS post-filter — reject any ticker not in the live-verified cheap pool
             cards = cards.filter(c=>{
@@ -3679,8 +3696,8 @@ async function runActiveFilter(){
             });
             cards = injectLivePrices(cards, gemQuotes);
             const gemCardTickers=[...new Set(cards.map(s=>(s.ticker||'').toUpperCase()).filter(Boolean))];
-            // Track these tickers as seen so future scans pick fresh stocks
-            if(gemCardTickers.length) addSeenDiscoverTickers(gemCardTickers);
+            // Track in gems-only seen list so future scans pick fresh stocks
+            if(gemCardTickers.length) addSeenGemTickers(gemCardTickers);
             const gemNewsMap = gemCardTickers.length ? await fetchNewsForPromptBatch(gemCardTickers) : {};
             cards = cards.map(s=>{ const n=gemNewsMap[(s.ticker||'').toUpperCase()]; if(n&&n.items&&n.items.length) s._newsItems=n.items.slice(0,2); return s; });
         } else {
@@ -3934,7 +3951,20 @@ function gemsPrompt(priceData, dnaBlock='', shownTickers=[]){
     const exclusionBlock = shownTickers.length>0
         ? `\n⛔ Do NOT return any of these already-shown tickers: ${shownTickers.join(', ')} — pick entirely different stocks.\n` : '';
     const exp = getExpiryContext();
-    const varietySeed = getVarietySeed();
+    // Random per-scan seed — day-based rotation repeats within the same session
+    const gemThemes = [
+        'Focus on EV, clean energy, or battery supply chain names.',
+        'Focus on small regional banks, fintech, or consumer lending names.',
+        'Focus on beaten-down retail, media, or consumer discretionary names.',
+        'Focus on energy (oil, gas, coal) or materials names showing momentum.',
+        'Focus on healthcare, pharma, or biotech names near a catalyst.',
+        'Focus on tech hardware, semiconductors, or telecom names.',
+        'Focus on airline, cruise, or travel recovery names.',
+        'Focus on mining, metals, or international commodity names.',
+        'Focus on gaming, entertainment, or social media names.',
+        'Focus on any sector — purely pick the 3 strongest technical setups regardless of industry.',
+    ];
+    const varietySeed = gemThemes[Math.floor(Math.random() * gemThemes.length)];
     return `You are an options trading analyst. Find the best 3 CALL option setups from the stocks listed below. All are verified under $45/share right now — cheap enough to produce affordable contracts.
 
 LIVE STOCK PRICES — pick ONLY from this list:
