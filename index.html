@@ -112,6 +112,18 @@
         .pca-next-time { background:rgba(139,92,246,.08);border:1px solid rgba(139,92,246,.2);border-radius:6px;padding:8px 10px;margin-top:8px; }
         .pca-next-time-title { font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#a78bfa;margin-bottom:5px; }
         .pca-analyzing { padding:10px 12px;font-size:11px;color:var(--muted);display:flex;align-items:center;gap:8px;background:var(--bg2); }
+        /* ── Post-close loading state ───────────────────────────── */
+        .pca-loading { padding:16px;background:var(--bg2);border-radius:0 0 8px 8px; }
+        .pca-lsteps { display:flex;align-items:center;gap:5px;margin-bottom:10px;justify-content:center; }
+        .pca-ls { font-size:10px;font-weight:600;letter-spacing:.3px;color:var(--muted);opacity:.35;transition:opacity .3s,color .3s; }
+        .pca-ls.active { color:var(--accent);opacity:1; }
+        .pca-ls.done { color:var(--green);opacity:.85; }
+        .pca-lsep { font-size:9px;color:var(--muted);opacity:.25;margin:0 1px; }
+        .pca-lbar { height:3px;background:var(--bg3);border-radius:2px;overflow:hidden;margin-bottom:8px; }
+        .pca-lfill { height:100%;border-radius:2px;background:linear-gradient(90deg,var(--accent),#a78bfa);transition:width .7s cubic-bezier(.4,0,.2,1);position:relative;overflow:hidden; }
+        .pca-lfill::after { content:'';position:absolute;inset:0;background:linear-gradient(90deg,transparent 0%,rgba(255,255,255,.25) 50%,transparent 100%);animation:pca-shim 1.4s infinite; }
+        @keyframes pca-shim { from{transform:translateX(-100%)} to{transform:translateX(300%)} }
+        .pca-llabel { font-size:10px;color:var(--muted);text-align:center;opacity:.7; }
         .mi-row { display:grid;grid-template-columns:18px 58px 1fr;align-items:baseline;gap:4px;font-size:12px;line-height:1.4; }
         .mi-icon { font-size:11px; }
         .mi-lbl { font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--muted);padding-top:1px; }
@@ -5939,12 +5951,45 @@ function togglePCA(tradeId){
 }
 
 async function runPostCloseAnalysis(trade){
-    // Show "analyzing" state immediately
-    const cardEl=document.getElementById('j-pca-'+trade.id);
-    if(cardEl) cardEl.innerHTML=`<div class="pca-analyzing"><div class="spinner" style="width:11px;height:11px;border-width:2px"></div>Fetching market data & running analysis…</div>`;
+    const cardEl   = document.getElementById('j-pca-'+trade.id);
+    const tableRow = document.getElementById('pca-row-'+trade.id);
+
+    // Build the 3-step progress UI
+    function mkLoading(pct, step, label){
+        const steps = [{icon:'📡',text:'Market data'},{icon:'🤖',text:'AI analysis'},{icon:'💾',text:'Saving'}];
+        const stHtml = steps.map((s,i)=>{
+            const cls = i<step ? 'done' : i===step ? 'active' : '';
+            return `<span class="pca-ls ${cls}">${i<step?'✓':s.icon} ${s.text}</span>${i<2?'<span class="pca-lsep">›</span>':''}`;
+        }).join('');
+        return `<div class="pca-loading">
+            <div class="pca-lsteps">${stHtml}</div>
+            <div class="pca-lbar"><div class="pca-lfill" id="pca-lfill-${trade.id}" style="width:${pct}%"></div></div>
+            <div class="pca-llabel" id="pca-llbl-${trade.id}">${label}</div>
+        </div>`;
+    }
+    function setProgress(pct, step, label){
+        // Try fast in-place update first; fall back to full re-render of loading block
+        const fill = document.getElementById('pca-lfill-'+trade.id);
+        const lbl  = document.getElementById('pca-llbl-'+trade.id);
+        if(fill){ fill.style.width=pct+'%'; if(lbl) lbl.textContent=label; }
+        else {
+            const tgt = cardEl || tableRow?.querySelector('td > div');
+            if(tgt) tgt.innerHTML = mkLoading(pct, step, label);
+        }
+    }
+
+    // Show initial loading state
+    if(cardEl){
+        cardEl.innerHTML = mkLoading(8, 0, 'Fetching technicals, options flow & news…');
+    } else if(tableRow){
+        // Re-analysis — show existing row with loading state
+        tableRow.style.display = '';
+        const inner = tableRow.querySelector('td > div');
+        if(inner) inner.innerHTML = mkLoading(8, 0, 'Fetching technicals, options flow & news…');
+    }
+    // First-time table analysis: button shows ⏳, no pca-row yet — loading shows after renderJournal
 
     try{
-        // Fetch current tech, flow, news in parallel to enrich the analysis
         const ticker = (trade.ticker||'').toUpperCase();
         const [techData, flowData, newsResult] = await Promise.all([
             ticker ? fetchTechnicals(ticker).catch(()=>null) : null,
@@ -5953,7 +5998,12 @@ async function runPostCloseAnalysis(trade){
         ]);
         const newsText = newsResult?.text || '';
 
+        setProgress(42, 1, 'Sending to Claude for deep analysis…');
+
         const raw = await callClaude(buildPostClosePrompt(trade, techData, flowData, newsText), 4500);
+
+        setProgress(88, 2, 'Saving results…');
+
         const pa = JSON.parse(stripJSON(raw));
         const idx = trades.findIndex(t=>t.id===trade.id);
         if(idx>=0){
@@ -5961,12 +6011,25 @@ async function runPostCloseAnalysis(trade){
             localStorage.setItem('darcell_v2_trades', JSON.stringify(trades));
             _sbUpsertTrade(trades[idx]);
         }
-        // Update card in place if in card view; re-render table if in table view
-        if(cardEl) cardEl.innerHTML = buildPostAnalysisHTML(pa, trade.id);
-        else renderJournal();
+
+        if(cardEl){
+            cardEl.innerHTML = buildPostAnalysisHTML(pa, trade.id);
+        } else {
+            renderJournal();
+            // Expand the newly-rendered PCA row automatically
+            const newRow = document.getElementById('pca-row-'+trade.id);
+            if(newRow) newRow.style.display = '';
+        }
     }catch(e){
         console.warn('[post-close analysis] failed:', e.message);
-        if(cardEl) cardEl.innerHTML=`<div style="font-size:11px;color:var(--red);padding:8px">Analysis failed: ${e.message}</div>`;
+        const errHtml = `<div style="font-size:11px;color:var(--red);padding:10px 12px">⚠️ Analysis failed: ${e.message}</div>`;
+        if(cardEl){
+            cardEl.innerHTML = errHtml;
+        } else {
+            const errRow = document.getElementById('pca-row-'+trade.id);
+            if(errRow){ errRow.style.display=''; const d=errRow.querySelector('td > div'); if(d) d.innerHTML=errHtml; }
+            else renderJournal();
+        }
     }
 }
 
