@@ -4861,7 +4861,12 @@ async function _sbUpsertTrade(trade){
     if(!_sbClient||!_sbUser) return;
     try{
         const { error } = await _sbClient.from('journal_entries').upsert(_tradeToRow(trade), {onConflict:'id'});
-        if(error) console.warn('[supabase] upsert error:', error.message);
+        if(error){
+            console.warn('[supabase] upsert error:', error.message);
+            if(error.message && error.message.includes('column')){
+                console.warn('[supabase] ⚠️ Missing column in journal_entries table. Run this in your Supabase SQL editor:\nALTER TABLE journal_entries ADD COLUMN IF NOT EXISTS exit_rationale text;\nALTER TABLE journal_entries ADD COLUMN IF NOT EXISTS trader_notes text;\nALTER TABLE journal_entries ADD COLUMN IF NOT EXISTS post_analysis text;\nALTER TABLE journal_entries ADD COLUMN IF NOT EXISTS manual_pnl numeric;');
+            }
+        }
     } catch(e){ console.warn('[supabase] upsert failed:', e.message); }
 }
 
@@ -4883,8 +4888,26 @@ async function _loadTradesFromSupabase(){
             .order('created_at', {ascending:false});
         if(error){ console.warn('[supabase] load error:', error.message); return; }
         if(data && data.length > 0){
-            // Supabase is the source of truth when logged in
-            trades = data.map(_rowToTrade);
+            // Merge Supabase data with localStorage — Supabase wins on core fields,
+            // but local wins for fields Supabase may not have columns for yet
+            // (exit_rationale, trader_notes, post_analysis). This prevents a missing
+            // Supabase column from silently wiping user-entered data on every login.
+            const localCache = JSON.parse(localStorage.getItem('darcell_v2_trades')||'[]');
+            const localMap = {};
+            localCache.forEach(t=>{ if(t.id) localMap[t.id]=t; });
+            const PRESERVE_LOCAL = ['exit_rationale','trader_notes','post_analysis'];
+            trades = data.map(row => {
+                const t = _rowToTrade(row);
+                const local = localMap[t.id];
+                if(local){
+                    PRESERVE_LOCAL.forEach(field => {
+                        // Keep local value if Supabase returned nothing for this field
+                        // (column may not exist in schema yet)
+                        if(t[field]==null && local[field]) t[field] = local[field];
+                    });
+                }
+                return t;
+            });
             localStorage.setItem('darcell_v2_trades', JSON.stringify(trades));
             renderJournal();
         } else {
