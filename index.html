@@ -5712,7 +5712,9 @@ function getDNAPromptBlock(){
         ? 'Holds past stop — in account_sizing, give a SPECIFIC stop price and say "honor this stop, do not hold below it." Reference this trader\'s history of ignoring stops.'
         : '';
 
-    const focusSectors = (dna.market_focus||[]).slice(0,3).join(', ');
+    const focusSectors  = (dna.market_focus||[]).slice(0,3).join(', ');
+    const ivNote        = dna.iv_discipline       ? `📊 IV discipline: ${dna.iv_discipline}` : '';
+    const catalystNote  = dna.catalyst_awareness  ? `📰 Catalyst awareness: ${dna.catalyst_awareness}` : '';
 
     return `\n🧠 TRADER DNA — ${dna.trades_analyzed} real closed trades analyzed. USE THIS TO PERSONALIZE EVERY SUGGESTION:
 ✅ Winning patterns: ${wins}
@@ -5720,16 +5722,19 @@ function getDNAPromptBlock(){
 ✅ Best setup for them: ${dna.setup_preference||''}
 🚫 What to avoid: ${avoid}
 📚 Key lessons from their trades: ${topLessons}
+${ivNote}
+${catalystNote}
 ${timingNote ? '⏱ '+timingNote : ''}
 ${exitNote ? '🚪 '+exitNote : ''}
 ${rawPatternNote ? rawPatternNote : ''}
 ${focusSectors ? `📍 Sectors with proven edge: ${focusSectors}` : ''}
 
 → HOW TO APPLY THIS IN YOUR RESPONSE:
-1. In account_sizing: reference this trader's specific tendencies (timing, stop discipline). Use their actual pattern (e.g. "You tend to enter early — wait for stock to reach $X before buying").
+1. In account_sizing: reference this trader's specific tendencies (timing, stop discipline, IV awareness). Use their actual pattern.
 2. In stop_loss: if this trader ignores stops, set the stop wider but make it explicit in account_sizing.
 3. In summary: if this trade matches their winning pattern, say so. If it conflicts with their losses pattern, flag it.
-4. Scan the best opportunities available — do not limit to their usual sectors, but note when a pick fits or breaks their historical pattern.\n`;
+4. If suggesting a trade where IV is elevated (>1.5× typical range), warn this trader explicitly — their DNA shows this is a recurring loss pattern.
+5. Scan the best opportunities available — do not limit to their usual sectors, but note when a pick fits or breaks their historical pattern.\n`;
 }
 
 // ── POST-CLOSE TRADE ANALYST ──────────────────────────────────
@@ -6070,8 +6075,13 @@ function buildTrainingPrompt(closedTrades){
         const wrongItems = pa?.what_went_wrong?.length ? `\n  What went wrong: ${pa.what_went_wrong.map(x=>x.slice(0,80)).join(' | ')}` : '';
         const rightItems = pa?.what_went_right?.length ? `\n  What went right: ${pa.what_went_right.map(x=>x.slice(0,80)).join(' | ')}` : '';
         const nextItems  = pa?.next_time?.length ? `\n  Next time: ${pa.next_time[0].slice(0,100)}` : '';
-        const analysis = pa ? `\n  Coach verdict: "${pa.headline||''}" Entry:${pa.timing_grade||'?'} Exit:${pa.exit_grade||'?'} ${patternFlag}` : '';
-        return `• ${outcome}${pctLost} — ${t.ticker} ${t.type||'CALL'} $${t.strike||'?'} exp ${fmt(t.exp)||'?'}${daysHeld?` (~${daysHeld}d DTE)`:''}${entry?', '+entry:''}${exit?', '+exit:''}${stop?', '+stop:''}${tgt?', '+tgt:''}${rrRatio}${zoneNote?' [stock:'+zoneNote+']':''}${t.thesis?`\n  Thesis: "${t.thesis.slice(0,100)}"`:''}`+notes+analysis+wrongItems+rightItems+nextItems
+        const analysis   = pa ? `\n  Coach verdict: "${pa.headline||''}" Entry:${pa.timing_grade||'?'} Exit:${pa.exit_grade||'?'} ${patternFlag}` : '';
+        // Deep analysis fields — mechanical root causes, IV/catalyst context, setup viability
+        const rootCause  = pa?.root_cause      ? `\n  Root cause: "${pa.root_cause.slice(0,110)}"` : '';
+        const mktCtx     = pa?.market_context  ? `\n  Market context: "${pa.market_context.slice(0,110)}"` : '';
+        const setupVia   = pa?.setup_viability ? `\n  Setup viability: "${pa.setup_viability.slice(0,110)}"` : '';
+        const warnSign   = pa?.warning_signs?.length ? `\n  Key warning sign: "${pa.warning_signs[0].slice(0,90)}"` : '';
+        return `• ${outcome}${pctLost} — ${t.ticker} ${t.type||'CALL'} $${t.strike||'?'} exp ${fmt(t.exp)||'?'}${daysHeld?` (~${daysHeld}d DTE)`:''}${entry?', '+entry:''}${exit?', '+exit:''}${stop?', '+stop:''}${tgt?', '+tgt:''}${rrRatio}${zoneNote?' [stock:'+zoneNote+']':''}${t.thesis?`\n  Thesis: "${t.thesis.slice(0,100)}"`:''}`+notes+analysis+wrongItems+rightItems+nextItems+rootCause+mktCtx+setupVia+warnSign
     }).join('\n');
 
     return `You are analyzing a beginner options trader's closed trade history to build their personalized Trading DNA.
@@ -6082,23 +6092,28 @@ ${tradeLines}
 IMPORTANT ANALYSIS FOCUS:
 - Entry timing: What does the [stock:entered EARLY/LATE/IN ZONE] data show across trades? Is there a consistent pattern?
 - Exit discipline: Look at the pattern flags — ignored_stop, exited_early, held_too_long are recurring mistakes to flag
-- Risk/reward: Does this trader set targets? Trades without targets have no win condition defined
+- Risk/reward: How many trades had no profit target (undefined R:R)? Trades with no target create 'hold until theta wins' structures — flag this as a recurring risk if it appears in multiple losses
 - Premium %: What % of premium do they typically lose on losers vs gain on winners? This reveals discipline
-- What went wrong: Synthesize the "What went wrong" items across multiple trades to find the single biggest recurring mistake
+- Root causes: Look across "Root cause" fields — do the same mechanical forces appear repeatedly? (e.g. theta decay on stalled stocks, IV contraction post-event, stock reversal from stale catalyst)
+- IV discipline: Look at "Key warning sign" and "Setup viability" fields — does this trader enter when IV is elevated vs realized volatility? High IV entries on non-moving stocks are a structural losing pattern
+- Catalyst freshness: Do losses cluster around trades where the thesis cited news that was already 3+ days old at entry? Stale catalysts = news already priced in
+- Market context: What conditions (sector headwinds, stock stalling, no directional follow-through) appear repeatedly in losing trades?
 - Sector fit: What sectors/setups produce wins vs consistent losses?
 - DTE preference: Shorter or longer DTEs performed better?
 
 Return ONLY this JSON (no markdown):
 {
-  "summary": "2-3 sentences: this trader's style, what they win on, and their single biggest recurring mistake",
-  "winning_patterns": ["3-5 specific patterns from winning trades — sector, setup type, timing signal"],
-  "losing_patterns": ["2-4 patterns that appear in losing trades — be specific about the mistake"],
-  "setup_preference": "One sentence: the ideal setup for this trader based on their actual wins",
-  "avoid_setup": "One sentence: what to avoid based on their losses",
-  "timing_tendency": "One of: enters_early | enters_late | on_target | inconsistent — based on the entry zone data",
+  "summary": "2-3 sentences: this trader's style, what they win on, and their single biggest recurring mechanical mistake",
+  "winning_patterns": ["3-5 specific patterns from winning trades — sector, setup type, timing signal, IV environment"],
+  "losing_patterns": ["2-4 patterns from losing trades — prioritize mechanical/market causes over behavioral ones"],
+  "setup_preference": "One sentence: the ideal setup for this trader based on actual wins",
+  "avoid_setup": "One sentence: what to avoid — include IV conditions or catalyst age if those appear in losses",
+  "timing_tendency": "One of: enters_early | enters_late | on_target | inconsistent — based on entry zone data",
   "exit_tendency": "One of: exits_early | holds_too_long | good_discipline | inconsistent",
-  "lessons": ["3-5 actionable lessons — reference tickers where helpful, e.g. 'AMD worked on earnings catalyst — prioritize earnings plays'"],
-  "market_focus": ["2-3 sectors or themes this trader has edge in based on wins — include at least 1 broader market opportunity beyond their usual sectors"]
+  "iv_discipline": "One sentence: does this trader check IV vs realized volatility before entering? Reference specific trades where high IV caused faster-than-expected decay",
+  "catalyst_awareness": "One sentence: does this trader enter on fresh catalysts or stale news? Flag if losses cluster around entries made 3+ days after the catalyst broke",
+  "lessons": ["3-5 actionable lessons with specific prices or conditions where possible — reference tickers e.g. 'BP: do not enter calls when IV is >1.5× HV — theta burns faster than the stock can move'"],
+  "market_focus": ["2-3 sectors or themes this trader has edge in based on wins"]
 }`;
 }
 
