@@ -2845,9 +2845,8 @@ function getExpiryContext(){
 const DEFAULT_WATCHLIST=['NVDA','SPY','QQQ','AAPL','MSFT','META','AMD','GOOGL','ARM','PLTR'];
 let WATCHLIST=JSON.parse(localStorage.getItem('darcell_watchlist')||'null')||[...DEFAULT_WATCHLIST];
 
-// Curated universe of solid companies typically priced under $45/share.
-// Live price filter at ≤$45 screens any that have moved up — Claude only sees cheap ones.
-// Large pool (~80) so we can rotate a 30-ticker random subset each scan for variety.
+// GEMS_UNIVERSE — kept for reference only. Cheap Gems now scans the full market (freeform).
+// Criteria is option contract price ≤ $3.00, not stock share price.
 const GEMS_UNIVERSE=[
     // Fintech / Regional banks
     'SOFI','UPST','ALLY','KEY','RF','FITB','HBAN','ZION','CFG','NYCB','HOOD','LC','OMF',
@@ -3477,7 +3476,7 @@ async function loadMoreFilter(){
                 const te=lmTechMap[k]; if(te) s._techData=te;
                 const fl=lmFlowMap[k]; if(fl) s._flowData=fl;
                 return s;
-            }).filter(c=>{ const p=c.current_price||0; if(p>45){console.warn(`[gems] LoadMore dropped ${c.ticker} — $${p}>$45`);return false;} if(lmWlSet.has((c.ticker||'').toUpperCase())){console.warn(`[gems] LoadMore dropped ${c.ticker} — watchlist`);return false;} return true; });
+            }).filter(c=>{ if(lmWlSet.has((c.ticker||'').toUpperCase())){console.warn(`[gems] LoadMore dropped ${c.ticker} — watchlist`);return false;} return true; });
             const finalLmTickers=[...new Set(newCards.map(s=>(s.ticker||'').toUpperCase()).filter(Boolean))];
             if(finalLmTickers.length) addSeenGemTickers(finalLmTickers);
         } else {
@@ -3683,11 +3682,9 @@ async function runActiveFilter(){
                 const fl=gemFlowMap[k];  if(fl){ s._flowData=fl; }
                 return s;
             });
-            // Drop any card where live price is above $45 (Claude hallucinated the price)
+            // Exclude watchlist tickers — Gems should show fresh ideas, not stocks already tracked
             const wlSet=new Set(WATCHLIST.map(t=>t.toUpperCase()));
             cards = cards.filter(c=>{
-                const p = c.current_price||0;
-                if(p > 45){ console.warn(`[gems] Dropped ${c.ticker} — live price $${p} above $45`); return false; }
                 if(wlSet.has((c.ticker||'').toUpperCase())){ console.warn(`[gems] Dropped ${c.ticker} — in watchlist`); return false; }
                 return true;
             });
@@ -3959,24 +3956,24 @@ function gemsPrompt(marketCandidates=[], dnaBlock='', seenTickers=[]){
     ];
     const varietySeed = gemThemes[Math.floor(Math.random() * gemThemes.length)];
     const moversBlock = marketCandidates.length
-        ? `\n📊 TODAY'S MOST ACTIVE STOCKS — real market movers right now (use as strong inspiration, especially any priced under $45):\n${marketCandidates.slice(0,15).map(c=>`  ${c.ticker}: ${c.reason} (price ~$${c.price})`).join('\n')}\n`
+        ? `\n📊 TODAY'S MOST ACTIVE STOCKS — real market movers right now (use as strong inspiration when option premiums qualify):\n${marketCandidates.slice(0,15).map(c=>`  ${c.ticker}: ${c.reason} (price ~$${c.price})`).join('\n')}\n`
         : '';
-    return `You are an options trading analyst scanning the ENTIRE US stock market for cheap bullish setups. Today: ${exp.today}.
+    return `You are an options trading analyst scanning the ENTIRE US stock market for cheap CALL option setups. Today: ${exp.today}.
 
-MISSION: Find the 3 best CALL option opportunities in ANY publicly traded US stock. You have complete freedom to pick any stock — there is NO restricted list.
+MISSION: Find the 3 best CALL option opportunities from ANY publicly traded US stock. You have complete freedom — no restricted list, no stock price limit.
 
-💰 ONE HARD RULE: Every pick MUST be a stock currently trading UNDER $45/share. This keeps options affordable for small accounts (target contract premium under $3.00).
+💰 THE ONLY REQUIREMENT: The estimated ATM or slightly OTM CALL contract must cost $3.00/share or LESS ($300/contract max). This is what makes a stock a "Cheap Gem" — affordable options for a small account, regardless of the stock's own share price. A $200 stock with $1.50 options qualifies. A $10 stock with $4.00 options does not.
 
 THEME FOR THIS SCAN: ${varietySeed}
 ${moversBlock}${exclusionBlock}${dnaBlock}
-WHAT TO LOOK FOR — strongest bullish setups today:
+WHAT TO LOOK FOR — strongest bullish setups with affordable options:
 - Strong intraday momentum + relative strength
 - Technical breakout above resistance or key moving average
 - Volume spike or unusual options flow
 - Positive catalyst: earnings beat, upgrade, FDA approval, deal announcement
-- Sector tailwind or market leadership
+- Stocks where options are cheap relative to their move potential (low IV, steady chart)
 
-CRITICAL: You are picking from the WHOLE MARKET, not a watchlist. Every scan should surface fresh, different names the trader has likely NEVER considered. Explore: small-caps, international ADRs, overlooked mid-caps — any ticker under $45 with a strong setup today.
+CRITICAL: You are picking from the WHOLE MARKET. Every scan should surface fresh, different names the trader may never have considered — any sector, any price range, as long as the option contract is under $3.00.
 
 Set current_price to the ACTUAL stock price as of today (${exp.today}). All price levels must be anchored to real prices.
 
@@ -4083,7 +4080,7 @@ async function scanDiscover(){
                 const dgTickers = [...new Set(stocks.map(s=>(s.ticker||'').toUpperCase()).filter(Boolean))];
                 const dgPriceMap = dgTickers.length ? await fetchQuotesCached(dgTickers) : {};
                 stocks = stocks.map(s=>{ const k=(s.ticker||'').toUpperCase(); const q=dgPriceMap[k]; if(q&&q.c){s=sanitizePriceLevels(s,q.c);s.current_price=q.c;s.price_change=q.dp||0;} return s; })
-                    .filter(s=>{ const p=s.current_price||0; if(p>45){console.warn(`[Discover gems] Dropped ${s.ticker} — $${p}>$45`);return false;} if(dgWlSet.has((s.ticker||'').toUpperCase()))return false; return true; });
+                    .filter(s=>{ if(dgWlSet.has((s.ticker||'').toUpperCase()))return false; return true; });
             } else {
                 raw = await callClaude(discoverPrompt(cat.desc, alreadyPickedThisScan, {}, marketCandidates));
                 stocks = JSON.parse(stripJSON(raw));
