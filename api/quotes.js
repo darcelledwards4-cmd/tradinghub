@@ -13,7 +13,7 @@ module.exports = async function handler(req, res) {
 
     const raw = (req.query.symbols || '').toUpperCase();
     if (!raw) return res.status(400).json({ error: 'symbols required' });
-    const tickers = [...new Set(raw.split(',').map(s => s.trim()).filter(Boolean))].slice(0, 20);
+    const tickers = [...new Set(raw.split(',').map(s => s.trim()).filter(Boolean))].slice(0, 100);
 
     // ── 1. Tradier — live stock quotes (real-time, brokerage account) ─────────
     const tradierToken = process.env.TRADIER_TOKEN;
