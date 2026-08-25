@@ -3683,6 +3683,7 @@ async function runActiveFilter(){
             cards = injectLivePrices(cards, gemQuotesArr);
             // Mark the entire subset as seen (not just the 3 picked) so next scan avoids all 20
             if(gemSubset.length) addSeenGemTickers(gemSubset);
+            const gemCardTickers=[...new Set(cards.map(s=>(s.ticker||'').toUpperCase()).filter(Boolean))];
             const [gemNewsMap, gemTechMap, gemFlowMap] = await Promise.all([
                 gemCardTickers.length ? fetchNewsForPromptBatch(gemCardTickers) : Promise.resolve({}),
                 gemCardTickers.length ? fetchTechnicalsBatch(gemCardTickers) : Promise.resolve({}),
