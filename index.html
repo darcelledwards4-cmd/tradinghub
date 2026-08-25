@@ -1154,7 +1154,7 @@ function getSeenGemTickers(){
 }
 function addSeenGemTickers(tickers){
     const seen = getSeenGemTickers();
-    const updated = [...new Set([...tickers.map(t=>t.toUpperCase()), ...seen])].slice(0, 60);
+    const updated = [...new Set([...tickers.map(t=>t.toUpperCase()), ...seen])].slice(0, 80);
     localStorage.setItem(LS_SEEN_GEMS, JSON.stringify(updated));
 }
 function clearSeenGems(){ localStorage.removeItem(LS_SEEN_GEMS); }
@@ -3472,9 +3472,11 @@ async function loadMoreFilter(){
             const lmGemQuotesArr = lmGemSubset.map(t=>({ticker:t,price:lmGemAllQuotes[t].c,chg:lmGemAllQuotes[t].dp||0}));
             newCards = JSON.parse(stripJSON(await callClaude(gemsPrompt(lmGemPriceData, getDNAPromptBlock()), 4500)));
             newCards = newCards.filter(c=>{ const t=(c.ticker||'').toUpperCase(); if(!lmGemAllowed.has(t)){console.warn(`[gems] LoadMore dropped ${t}`);return false;} return true; });
+            // Strong entries only — drop low-confidence and avoid-potential cards
+            newCards = newCards.filter(c=>{ const conf=(c.confidence||'').toLowerCase(); const pot=(c.potential||'').toLowerCase(); if(pot==='avoid'||conf==='low'){console.warn(`[gems] LoadMore dropped ${c.ticker} — weak entry`);return false;} return true; });
             newCards = injectLivePrices(newCards, lmGemQuotesArr);
-            const lmGemTickers=[...new Set(newCards.map(s=>(s.ticker||'').toUpperCase()).filter(Boolean))];
-            if(lmGemTickers.length) addSeenGemTickers(lmGemTickers);
+            // Mark entire subset as seen so next scan doesn't repeat any of these 20 stocks
+            if(lmGemSubset.length) addSeenGemTickers(lmGemSubset);
             const [lmGemNews,lmTechMap,lmFlowMap] = await Promise.all([
                 lmGemTickers.length?fetchNewsForPromptBatch(lmGemTickers):Promise.resolve({}),
                 lmGemTickers.length?fetchTechnicalsBatch(lmGemTickers):Promise.resolve({}),
@@ -3676,9 +3678,11 @@ async function runActiveFilter(){
             const gemQuotesArr = gemSubset.map(t=>({ ticker:t, price:gemAllQuotes[t].c, chg:gemAllQuotes[t].dp||0 }));
             cards = JSON.parse(stripJSON(await callClaude(gemsPrompt(gemPriceData, getDNAPromptBlock()), 4500)));
             cards = cards.filter(c=>{ const t=(c.ticker||'').toUpperCase(); if(!gemAllowed.has(t)){console.warn(`[gems] Dropped ${t} — not in live universe`);return false;} return true; });
+            // Strong entries only — drop low-confidence and avoid-potential cards
+            cards = cards.filter(c=>{ const conf=(c.confidence||'').toLowerCase(); const pot=(c.potential||'').toLowerCase(); if(pot==='avoid'||conf==='low'){console.warn(`[gems] Dropped ${c.ticker} — weak entry (conf:${conf} pot:${pot})`);return false;} return true; });
             cards = injectLivePrices(cards, gemQuotesArr);
-            const gemCardTickers=[...new Set(cards.map(s=>(s.ticker||'').toUpperCase()).filter(Boolean))];
-            if(gemCardTickers.length) addSeenGemTickers(gemCardTickers);
+            // Mark the entire subset as seen (not just the 3 picked) so next scan avoids all 20
+            if(gemSubset.length) addSeenGemTickers(gemSubset);
             const [gemNewsMap, gemTechMap, gemFlowMap] = await Promise.all([
                 gemCardTickers.length ? fetchNewsForPromptBatch(gemCardTickers) : Promise.resolve({}),
                 gemCardTickers.length ? fetchTechnicalsBatch(gemCardTickers) : Promise.resolve({}),
@@ -3962,13 +3966,16 @@ ${priceData}
 
 💰 OPTION PRICE GOAL: Pick stocks where the ATM or slightly OTM CALL contract costs $3.00/share or LESS ($300/contract max). Lower-priced stocks and lower-IV names will have the cheapest contracts. Estimate carefully — if a stock's options would cost more than $3, skip it and pick another.
 
+🎯 STRONG ENTRIES ONLY: Every setup you return must have a clear, specific technical trigger firing TODAY — price at or near key support, breakout above resistance, bullish candle pattern, MACD crossover, or unusual volume surge. Do NOT include a stock just because it "looks ok" or has a generally bullish trend. Only return it if there is a concrete, actionable reason to enter RIGHT NOW. All 3 setups must have confidence: "high". If you cannot genuinely assign "high" confidence to a setup, skip it and find a better one from the list.
+
 THEME FOR THIS SCAN: ${varietySeed}
 
 ${dnaBlock}
 WHAT TO LOOK FOR:
-- Strongest bullish setup today: momentum, technical breakout, positive catalyst, volume spike
+- Strong technical trigger firing today (breakout, bounce, volume surge, pattern completion)
 - DNA alignment is fine — but the theme above should push you toward fresh sectors each scan
 - Favor names with good liquidity (avoid illiquid penny stocks)
+- Risk/reward must be at least 1:2
 
 Return ONLY a raw JSON array of exactly 3 objects. No markdown, no code fences.
 
@@ -4076,6 +4083,10 @@ async function scanDiscover(){
                 raw = await callClaude(gemsPrompt(dgPriceData, getDNAPromptBlock()), 4500);
                 stocks = JSON.parse(stripJSON(raw));
                 stocks = stocks.filter(s=>dgAllowed.has((s.ticker||'').toUpperCase()));
+                // Strong entries only
+                stocks = stocks.filter(s=>{ const conf=(s.confidence||'').toLowerCase(); const pot=(s.potential||'').toLowerCase(); return pot!=='avoid' && conf!=='low'; });
+                // Mark entire subset as seen
+                if(dgSubset.length) addSeenGemTickers(dgSubset);
             } else {
                 raw = await callClaude(discoverPrompt(cat.desc, alreadyPickedThisScan, {}, marketCandidates));
                 stocks = JSON.parse(stripJSON(raw));
