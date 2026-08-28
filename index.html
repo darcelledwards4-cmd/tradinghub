@@ -5776,7 +5776,10 @@ function getDNAPromptBlock(){
     const wins   = dna.winning_patterns.slice(0, 3).join(' · ');
     const losses = dna.losing_patterns?.slice(0, 2).join(' · ') || '';
     const avoid  = dna.avoid_setup || '';
-    const topLessons = (dna.lessons||[]).slice(0, 2).join(' | ');
+    const allLessons = (dna.lessons||[]);
+    const lessonRules = allLessons.length
+        ? allLessons.map((l,i)=>`  ${i+1}. ${l}`).join('\n')
+        : '';
 
     const timingNote = dna.timing_tendency==='enters_early'
         ? 'Enters BEFORE zone — set tight entry_low/entry_high so the zone is narrow and clear. In account_sizing, explicitly warn if the stock has not yet reached the entry zone.'
@@ -5794,28 +5797,29 @@ function getDNAPromptBlock(){
     const ivNote        = dna.iv_discipline       ? `📊 IV discipline: ${dna.iv_discipline}` : '';
     const catalystNote  = dna.catalyst_awareness  ? `📰 Catalyst awareness: ${dna.catalyst_awareness}` : '';
 
-    return `\n🧠 TRADER DNA — ${dna.trades_analyzed} closed trades analyzed. USE FOR PERSONALIZED WARNINGS ONLY — not to restrict which trades you pick.
+    return `\n🧠 TRADER DNA — ${dna.trades_analyzed} closed trades analyzed.
 
-⚠️ KNOWN RISK PATTERNS (flag these in cons/account_sizing if present in the trade):
-${losses ? `- Losing patterns: ${losses}` : ''}
-${avoid ? `- Historically avoided: ${avoid}` : ''}
+${lessonRules ? `🔒 KEY LESSONS — ACTIVE SCREENING RULES (apply BEFORE selecting any trade):
+These are hard-won lessons extracted from this trader's actual wins and losses. Every trade you recommend MUST pass these rules. If a stock violates a lesson, do NOT return it — pick a different one that doesn't.
+${lessonRules}
+
+` : ''}⚠️ KNOWN RISK PATTERNS (flag in cons/account_sizing when present):
+${losses ? `- Loss patterns: ${losses}` : ''}
+${avoid ? `- Avoid: ${avoid}` : ''}
 ${ivNote ? `- ${ivNote}` : ''}
 ${catalystNote ? `- ${catalystNote}` : ''}
 ${timingNote ? `- ⏱ ${timingNote}` : ''}
 ${exitNote ? `- 🚪 ${exitNote}` : ''}
 ${rawPatternNote ? `- ${rawPatternNote}` : ''}
 
-📚 Coaching context for account_sizing: ${topLessons}
-
 → HOW TO APPLY THIS:
-**Step 1 — Pick objectively.** Find the 3 best trades available in the market TODAY based on momentum, technicals, flow, news catalyst, and setup quality. Do NOT restrict picks to sectors or patterns from this trader's history. Do NOT skip a strong setup because it doesn't match past wins. The trader is still learning — their DNA should evolve, not limit them.
+**Step 1 — Screen against lessons.** Before picking any trade, check it against every KEY LESSON above. If a stock violates a lesson (e.g. high IV when the lesson says avoid it, or already up 5% when the lesson says catch early moves), skip it. The lessons are not suggestions — they are filters built from real losses.
 
-**Step 2 — Annotate with DNA.** After picking the best trades, personalize each card:
-- In account_sizing: add ONE specific coaching note using their DNA (e.g. "You tend to ${dna.exit_tendency==='holds_too_long'?'hold past your stop — honor the $X stop, no exceptions':'exit before target — hold until at least 60% of target is hit'}")
-- In cons: add a DNA-relevant warning IF this specific trade has a known risk from their history (e.g. elevated IV, no clear target level, sector they've struggled with)
-- In summary: one sentence max mentioning DNA only if highly relevant — otherwise describe the trade on its own merits
+**Step 2 — Pick the best passing trades.** From the stocks that pass the lesson screen, find the 3 strongest setups TODAY based on momentum, technicals, flow, and catalyst quality.
 
-**Step 3 — Variety.** Actively avoid suggesting the same tickers repeatedly. Prioritize the strongest setup regardless of sector.\n`;
+**Step 3 — Annotate with DNA.** For each card: in account_sizing, add ONE sentence confirming the trade passes the key lessons (e.g. "RSI 52 — momentum building, not exhausted ✓" or "IV normal, catalyst fresh within 2 days ✓"). In cons, flag any lesson that is borderline for this trade.
+
+**Step 4 — Variety.** Prioritize the strongest setup regardless of sector. Avoid repeating tickers.\n`;
 }
 
 // ── POST-CLOSE TRADE ANALYST ──────────────────────────────────
