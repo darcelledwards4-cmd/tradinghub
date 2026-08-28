@@ -3475,6 +3475,8 @@ async function loadMoreFilter(){
             // Strong entries only — drop low-confidence and avoid-potential cards
             newCards = newCards.filter(c=>{ const conf=(c.confidence||'').toLowerCase(); const pot=(c.potential||'').toLowerCase(); if(pot==='avoid'||conf==='low'){console.warn(`[gems] LoadMore dropped ${c.ticker} — weak entry`);return false;} return true; });
             newCards = injectLivePrices(newCards, lmGemQuotesArr);
+            // Drop stocks already up 4%+ today — momentum spent
+            newCards = newCards.filter(c=>{ const chg=c.price_change||0; if(chg>4.0){console.warn(`[gems] LoadMore dropped ${c.ticker} — already up ${chg.toFixed(1)}% today`);return false;} return true; });
             // Mark entire subset as seen so next scan doesn't repeat any of these 20 stocks
             if(lmGemSubset.length) addSeenGemTickers(lmGemSubset);
             const [lmGemNews,lmTechMap,lmFlowMap] = await Promise.all([
@@ -3681,6 +3683,8 @@ async function runActiveFilter(){
             // Strong entries only — drop low-confidence and avoid-potential cards
             cards = cards.filter(c=>{ const conf=(c.confidence||'').toLowerCase(); const pot=(c.potential||'').toLowerCase(); if(pot==='avoid'||conf==='low'){console.warn(`[gems] Dropped ${c.ticker} — weak entry (conf:${conf} pot:${pot})`);return false;} return true; });
             cards = injectLivePrices(cards, gemQuotesArr);
+            // Drop stocks already up 4%+ today — momentum likely spent
+            cards = cards.filter(c=>{ const chg=c.price_change||0; if(chg>4.0){console.warn(`[gems] Dropped ${c.ticker} — already up ${chg.toFixed(1)}% today (momentum spent)`);return false;} return true; });
             // Mark the entire subset as seen (not just the 3 picked) so next scan avoids all 20
             if(gemSubset.length) addSeenGemTickers(gemSubset);
             const gemCardTickers=[...new Set(cards.map(s=>(s.ticker||'').toUpperCase()).filter(Boolean))];
@@ -3968,6 +3972,8 @@ ${priceData}
 💰 OPTION PRICE GOAL: Pick stocks where the ATM or slightly OTM CALL contract costs $3.00/share or LESS ($300/contract max). Lower-priced stocks and lower-IV names will have the cheapest contracts. Estimate carefully — if a stock's options would cost more than $3, skip it and pick another.
 
 🎯 STRONG ENTRIES ONLY: Every setup you return must have a clear, specific technical trigger firing TODAY — price at or near key support, breakout above resistance, bullish candle pattern, MACD crossover, or unusual volume surge. Do NOT include a stock just because it "looks ok" or has a generally bullish trend. Only return it if there is a concrete, actionable reason to enter RIGHT NOW. All 3 setups must have confidence: "high". If you cannot genuinely assign "high" confidence to a setup, skip it and find a better one from the list.
+
+⏱️ EARLY MOMENTUM — NOT LATE: This is critical. Avoid stocks where momentum has ALREADY played out. RED FLAGS (skip if present): already up 4%+ today, RSI above 68, price extended 10%+ above 20-day MA, just had a big multi-day run. GREEN FLAGS (prefer these): stock up 0–2% today or pulling back to support after prior strength, RSI in 45–62 range, tight consolidation about to break, first day of volume surge. You want to catch the move AS IT BEGINS — not after it's run. If a stock has already made its primary move for the day, skip it entirely.
 
 THEME FOR THIS SCAN: ${varietySeed}
 
@@ -5729,8 +5735,8 @@ function renderJournal(){
             const ph=p!=null?`<span class="${p>=0?'pos':'neg'}">${p>=0?'+':'-'}$${Math.abs(p).toFixed(0)}</span>`:'—';
             const pa = t.post_analysis;
             const flag = pa?.pattern_flag;
-            const flagLabels = {entered_early:'Entered Early',entered_late:'Entered Late',exited_early:'Exited Early',held_too_long:'Held Too Long',ignored_stop:'Ignored Stop',chased_entry:'Chased Entry',good_discipline:'Good Discipline',unclear:'Unclear'};
-            const flagColors = {entered_early:'#f59e0b',entered_late:'var(--red)',exited_early:'#f59e0b',held_too_long:'var(--red)',ignored_stop:'var(--red)',chased_entry:'var(--red)',good_discipline:'var(--green)',unclear:'var(--muted)'};
+            const flagLabels = {entered_early:'Entered Early',entered_late:'Entered Late',exited_early:'Exited Early',held_too_long:'Held Too Long',ignored_stop:'Ignored Stop',chased_entry:'Chased Entry',momentum_spent:'Momentum Spent',good_discipline:'Good Discipline',unclear:'Unclear'};
+            const flagColors = {entered_early:'#f59e0b',entered_late:'var(--red)',exited_early:'#f59e0b',held_too_long:'var(--red)',ignored_stop:'var(--red)',chased_entry:'var(--red)',momentum_spent:'var(--red)',good_discipline:'var(--green)',unclear:'var(--muted)'};
             const flagBadge = flag ? `<span style="font-size:10px;font-weight:600;padding:1px 5px;border-radius:3px;color:${flagColors[flag]||'var(--muted)'};background:rgba(128,128,128,.1);margin-left:6px">${flagLabels[flag]||flag}</span>` : '';
             const analysisRow = pa ? `<tr id="pca-row-${t.id}" style="display:none"><td colspan="11" style="padding:0 12px 12px;background:var(--bg2)"><div style="border-radius:6px;border:1px solid var(--border);overflow:hidden">${buildPostAnalysisHTML(pa,t.id)}</div></td></tr>` : '';
             return`<tr style="cursor:pointer" onclick="toggleTablePCA(${t.id})"><td style="color:var(--muted);white-space:nowrap">${fmt(t.date)}</td><td><strong>${t.ticker}</strong>${flagBadge}</td><td><span class="badge ${(t.type||'CALL')==='CALL'?'bc':'bp'}">${t.type||'CALL'}</span></td><td>$${t.strike||'?'}</td><td style="color:var(--muted)">${fmt(t.exp)}</td><td>${t.qty}</td><td>$${parseFloat(t.entry||0).toFixed(2)}</td><td>${t.exit!=null?'$'+t.exit.toFixed(2):'—'}</td><td>${ph}</td><td style="max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:11px">${t.thesis||'—'}</td><td style="white-space:nowrap" onclick="event.stopPropagation()"><button class="j-edit-btn" style="padding:3px 8px;margin-right:4px" onclick="openEditModal(${t.id})">✏️</button><button class="j-edit-btn" style="padding:3px 8px;margin-right:4px;border-color:rgba(139,92,246,.4);color:#a78bfa" onclick="runPostCloseAnalysisFromTable(${t.id})" title="${pa?'Re-run analysis':'Run post-trade analysis'}">${pa?'🔍':'🔍 Analyze'}</button><button class="del" onclick="deleteTrade(${t.id})">×</button></td></tr>${analysisRow}`;
@@ -5775,7 +5781,7 @@ function getDNAPromptBlock(){
     const timingNote = dna.timing_tendency==='enters_early'
         ? 'Enters BEFORE zone — set tight entry_low/entry_high so the zone is narrow and clear. In account_sizing, explicitly warn if the stock has not yet reached the entry zone.'
         : dna.timing_tendency==='enters_late'
-        ? 'Enters AFTER zone (chases) — in account_sizing, flag if the stock has already moved past the ideal entry. Emphasize waiting for a pullback.'
+        ? '⚠️ CHRONIC LATE ENTRY: This trader repeatedly enters AFTER momentum has already played out — this is their #1 loss pattern. ACTIVE FILTER: Do NOT return any stock that is already up 4%+ today or extended 10%+ above its 20-day MA. In account_sizing for every gem, include a specific "early entry check" — state what the stock is doing TODAY (e.g. "up 1.2% today, RSI 54 — momentum is building, not exhausted") so the trader knows they are NOT chasing.'
         : '';
 
     const exitNote = dna.exit_tendency==='exits_early'
@@ -5925,6 +5931,7 @@ PATTERN FLAG RULES (apply exactly):
 - entered_early: stock entered BELOW the recommended zone (before the setup was ready)
 - entered_late: stock entered ABOVE the recommended zone (chased the move)
 - chased_entry: entered with no zone defined at peak premium
+- momentum_spent: stock had already made its primary move (up 5%+ on the day or extended 10%+ above key MA) before entry — momentum was exhausted, not beginning
 - good_discipline: honored stop OR hit target OR had clear reasoning for exit
 - unclear: not enough data
 
@@ -5987,6 +5994,7 @@ function buildPostAnalysisHTML(pa, tradeId){
         held_too_long:   {label:'Held Too Long',      color:'var(--red)', bg:'rgba(239,68,68,.12)'},
         ignored_stop:    {label:'Ignored Stop Loss',  color:'var(--red)', bg:'rgba(239,68,68,.12)'},
         chased_entry:    {label:'Chased Entry',       color:'var(--red)', bg:'rgba(239,68,68,.12)'},
+        momentum_spent:  {label:'Momentum Spent',    color:'var(--red)', bg:'rgba(239,68,68,.12)'},
         good_discipline: {label:'Good Discipline ✓',  color:'var(--green)', bg:'rgba(34,197,94,.12)'},
         unclear:         {label:'Pattern Unclear',    color:'var(--muted)', bg:'var(--bg3)'},
     };
@@ -6172,6 +6180,7 @@ IMPORTANT ANALYSIS FOCUS:
 - Root causes: Look across "Root cause" fields — do the same mechanical forces appear repeatedly? (e.g. theta decay on stalled stocks, IV contraction post-event, stock reversal from stale catalyst)
 - IV discipline: Look at "Key warning sign" and "Setup viability" fields — does this trader enter when IV is elevated vs realized volatility? High IV entries on non-moving stocks are a structural losing pattern
 - Catalyst freshness: Do losses cluster around trades where the thesis cited news that was already 3+ days old at entry? Stale catalysts = news already priced in
+- Late momentum entry: Do losses cluster around pattern_flag values of chased_entry, entered_late, or momentum_spent? This means the trader is getting in AFTER the move, not before it. If 2+ losses show these flags, call it out explicitly in losing_patterns and flag timing_tendency as enters_late.
 - Market context: What conditions (sector headwinds, stock stalling, no directional follow-through) appear repeatedly in losing trades?
 - Sector fit: What sectors/setups produce wins vs consistent losses?
 - DTE preference: Shorter or longer DTEs performed better?
