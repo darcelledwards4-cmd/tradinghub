@@ -53,7 +53,7 @@ async function fetchMassiveOptions(symbol, contractType, targetDate, currentPric
     ].join('');
 
     const ctrl = new AbortController();
-    setTimeout(() => ctrl.abort(), 15000); // increased from 12s — near-term options can be slower
+    setTimeout(() => ctrl.abort(), 8000); // keep under 10s so parallel calls fit Vercel budget
 
     const r = await fetch(url, {
         headers: { 'User-Agent': UA, 'Accept': 'application/json' },
@@ -179,7 +179,7 @@ async function fetchTradierOptions(symbol, contractType, targetDateStr, currentP
 
     // Step 1: Get available expiration dates
     const ctrl1 = new AbortController();
-    setTimeout(() => ctrl1.abort(), 10000);
+    setTimeout(() => ctrl1.abort(), 5000); // tight — must leave room for chain call + other sources
     let expirations = [];
     try {
         const r1 = await fetch(`${base}/markets/options/expirations?symbol=${symbol}`, { headers: hdrs, signal: ctrl1.signal });
@@ -201,7 +201,7 @@ async function fetchTradierOptions(symbol, contractType, targetDateStr, currentP
 
     // Step 2: Get options chain for that expiry
     const ctrl2 = new AbortController();
-    setTimeout(() => ctrl2.abort(), 12000);
+    setTimeout(() => ctrl2.abort(), 6000); // tight — total Tradier budget ≤11s
     let contracts = [];
     try {
         const r2 = await fetch(`${base}/markets/options/chains?symbol=${symbol}&expiration=${bestExpiry}&greeks=true`, { headers: hdrs, signal: ctrl2.signal });
@@ -528,6 +528,16 @@ async function fetchYahooV10Options(symbol, contractType, expiryDays) {
     return null;
 }
 
+// ── Black-Scholes ATM estimate (server-side fallback when all live sources fail) ─
+function blackScholesEstimate(stockPrice, contractType, dte) {
+    // ATM approximation: premium ≈ 0.4 × σ × S × √(T)
+    // Using typical IV of 45% for low-price names in the gems universe
+    const sigma = 0.45;
+    const T = Math.max(dte, 1) / 365;
+    const est = 0.4 * sigma * stockPrice * Math.sqrt(T);
+    return parseFloat(Math.max(est, 0.01).toFixed(2));
+}
+
 // ── Main handler ─────────────────────────────────────────────────────────────
 module.exports = async function handler(req, res) {
     res.setHeader('Access-Control-Allow-Origin', '*');
@@ -659,33 +669,30 @@ module.exports = async function handler(req, res) {
             return res.status(200).json(payload);
         };
 
-        // ── Source 1: Tradier (TRADIER_TOKEN) — real-time bid/ask + greeks ──────
+        // ── Sources 1+2: Tradier + Polygon in PARALLEL (saves ~8s vs sequential) ─
         const tradierKey = process.env.TRADIER_TOKEN;
-        if (tradierKey) {
-            const result = await fetchTradierOptions(symbol, contractType, targetDateStr, refPrice, tradierKey);
-            if (result && (result.bid != null || result.ask != null)) {
-                return respond(result, 'tradier');
-            }
-            if (result) console.warn('[options] Tradier returned no live bid/ask — trying Polygon');
-            else console.warn('[options] Tradier failed — trying Polygon');
-        }
-
-        // ── Source 2: Polygon (MASSIVE_API_KEY) — greeks + delayed snapshot ──
         const massiveKey = process.env.MASSIVE_API_KEY;
-        let massiveResult = null;
-        if (massiveKey) {
-            massiveResult = await fetchMassiveOptions(symbol, contractType, targetDateStr, refPrice, massiveKey, targetStrike);
-            if (massiveResult && (massiveResult.bid != null || massiveResult.ask != null)) {
-                return respond(massiveResult, 'massive');
-            }
-            if (massiveResult) console.warn('[options] Polygon returned only prev_close — trying Yahoo');
-            else console.warn('[options] Polygon returned no result — trying Yahoo');
+
+        const [tradierResult, massiveResult] = await Promise.all([
+            tradierKey
+                ? fetchTradierOptions(symbol, contractType, targetDateStr, refPrice, tradierKey).catch(e => { console.warn('[options] Tradier parallel error:', e.message); return null; })
+                : Promise.resolve(null),
+            massiveKey
+                ? fetchMassiveOptions(symbol, contractType, targetDateStr, refPrice, massiveKey, targetStrike).catch(e => { console.warn('[options] Polygon parallel error:', e.message); return null; })
+                : Promise.resolve(null),
+        ]);
+
+        // Prefer Tradier (real-time), then Polygon with live bid/ask
+        if (tradierResult && (tradierResult.bid != null || tradierResult.ask != null)) {
+            return respond(tradierResult, 'tradier');
+        }
+        if (massiveResult && (massiveResult.bid != null || massiveResult.ask != null)) {
+            return respond(massiveResult, 'massive');
         }
 
         // ── Source 3: Yahoo Finance v10 — live bid/ask, no greeks ────────────
         const yahooResult = await fetchYahooV10Options(symbol, contractType, expiryDays);
         if (yahooResult && (yahooResult.bid != null || yahooResult.ask != null)) {
-            // Merge Polygon greeks if available
             if (massiveResult) {
                 yahooResult.delta = massiveResult.delta ?? null;
                 yahooResult.gamma = massiveResult.gamma ?? null;
@@ -695,23 +702,35 @@ module.exports = async function handler(req, res) {
             return respond(yahooResult, 'yahoo_v10');
         }
 
-        // ── Source 4: Polygon prev_close (last resort from Polygon) ──────────
+        // ── Source 4: Polygon prev_close ─────────────────────────────────────
         if (massiveResult) return respond(massiveResult, 'massive');
-        console.warn('[options] All primary sources failed — trying Twelve Data');
 
-        // ── Source 5: Twelve Data (TWELVEDATA_API_KEY) ───────────────────────
+        // ── Source 5: Twelve Data ─────────────────────────────────────────────
         const twelvedataKey = process.env.TWELVEDATA_API_KEY;
         if (twelvedataKey) {
             const result = await fetchTwelvedataOptions(symbol, contractType, targetDateStr, refPrice, twelvedataKey);
             if (result) return respond(result, 'twelvedata');
-            console.warn('[options] TwelveData failed, trying Finnhub');
         }
 
-        // ── Source 6: Finnhub (FINNHUB_API_KEY) ──────────────────────────────
+        // ── Source 6: Finnhub ─────────────────────────────────────────────────
         const finnhubKey = process.env.FINNHUB_API_KEY;
         if (finnhubKey) {
             const result = await fetchFinnhubOptions(symbol, contractType, targetDateStr, refPrice, finnhubKey);
             if (result) return respond(result, 'finnhub');
+        }
+
+        // ── Server-side Black-Scholes fallback — return 200 not 502 ──────────
+        // Client already does BS but a server-side estimate avoids the error cascade
+        if (currentPrice > 0) {
+            const bsAsk = blackScholesEstimate(currentPrice, contractType, expiryDays);
+            console.warn(`[options] All live sources failed for ${symbol} — returning BS estimate $${bsAsk}`);
+            return res.status(200).json({
+                ticker: symbol, contractType, currentPrice,
+                best: { bid: null, ask: bsAsk, mid: bsAsk, last: null, strike: currentPrice, expiry: targetDateStr, priceType: 'bs_estimate', iv: null, delta: contractType === 'call' ? 0.5 : -0.5 },
+                fetchedAt: new Date().toISOString(),
+                source: 'bs_estimate',
+                _bsFallback: true,
+            });
         }
 
         return res.status(502).json({
