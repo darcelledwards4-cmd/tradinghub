@@ -53,7 +53,7 @@ async function fetchMassiveOptions(symbol, contractType, targetDate, currentPric
     ].join('');
 
     const ctrl = new AbortController();
-    setTimeout(() => ctrl.abort(), 8000); // keep under 10s so parallel calls fit Vercel budget
+    setTimeout(() => ctrl.abort(), 6000); // keep under 7s so parallel calls fit within global race timeout
 
     const r = await fetch(url, {
         headers: { 'User-Agent': UA, 'Accept': 'application/json' },
@@ -179,7 +179,7 @@ async function fetchTradierOptions(symbol, contractType, targetDateStr, currentP
 
     // Step 1: Get available expiration dates
     const ctrl1 = new AbortController();
-    setTimeout(() => ctrl1.abort(), 5000); // tight — must leave room for chain call + other sources
+    setTimeout(() => ctrl1.abort(), 3000); // very tight — 3s max for expirations list
     let expirations = [];
     try {
         const r1 = await fetch(`${base}/markets/options/expirations?symbol=${symbol}`, { headers: hdrs, signal: ctrl1.signal });
@@ -201,7 +201,7 @@ async function fetchTradierOptions(symbol, contractType, targetDateStr, currentP
 
     // Step 2: Get options chain for that expiry
     const ctrl2 = new AbortController();
-    setTimeout(() => ctrl2.abort(), 6000); // tight — total Tradier budget ≤11s
+    setTimeout(() => ctrl2.abort(), 4000); // tight — total Tradier budget ≤7s
     let contracts = [];
     try {
         const r2 = await fetch(`${base}/markets/options/chains?symbol=${symbol}&expiration=${bestExpiry}&greeks=true`, { headers: hdrs, signal: ctrl2.signal });
@@ -643,9 +643,24 @@ module.exports = async function handler(req, res) {
         return res.status(200).json({ ...cached, fromCache: true });
     }
 
+    // ── Global safety timeout: guarantee we respond within 8.5s ─────────────
+    // Vercel kills functions at ~10s (Hobby) or 25s (Pro). This ensures we
+    // always return a BS estimate instead of a hard 502 gateway timeout.
+    let _globalResolved = false;
+    const globalTimeoutMs = 8500;
+    const _globalRace = new Promise(resolve => {
+        setTimeout(() => {
+            if (!_globalResolved) {
+                _globalResolved = true;
+                resolve('__timeout__');
+            }
+        }, globalTimeoutMs);
+    });
+
     try {
         // Helper to build, cache, and return a successful response
         const respond = (result, source) => {
+            _globalResolved = true;
             const payload = {
                 ticker: symbol, contractType, currentPrice,
                 targetExpiry: result.expiry,
@@ -669,18 +684,39 @@ module.exports = async function handler(req, res) {
             return res.status(200).json(payload);
         };
 
-        // ── Sources 1+2: Tradier + Polygon in PARALLEL (saves ~8s vs sequential) ─
+        // ── Sources 1+2: Tradier + Polygon in PARALLEL, race against global timeout ─
         const tradierKey = process.env.TRADIER_TOKEN;
         const massiveKey = process.env.MASSIVE_API_KEY;
 
-        const [tradierResult, massiveResult] = await Promise.all([
-            tradierKey
-                ? fetchTradierOptions(symbol, contractType, targetDateStr, refPrice, tradierKey).catch(e => { console.warn('[options] Tradier parallel error:', e.message); return null; })
-                : Promise.resolve(null),
-            massiveKey
-                ? fetchMassiveOptions(symbol, contractType, targetDateStr, refPrice, massiveKey, targetStrike).catch(e => { console.warn('[options] Polygon parallel error:', e.message); return null; })
-                : Promise.resolve(null),
+        const parallelRace = await Promise.race([
+            _globalRace,
+            Promise.all([
+                tradierKey
+                    ? fetchTradierOptions(symbol, contractType, targetDateStr, refPrice, tradierKey).catch(e => { console.warn('[options] Tradier parallel error:', e.message); return null; })
+                    : Promise.resolve(null),
+                massiveKey
+                    ? fetchMassiveOptions(symbol, contractType, targetDateStr, refPrice, massiveKey, targetStrike).catch(e => { console.warn('[options] Polygon parallel error:', e.message); return null; })
+                    : Promise.resolve(null),
+            ]),
         ]);
+
+        // If global timeout fired before both sources returned, skip to BS fallback
+        if (parallelRace === '__timeout__') {
+            console.warn(`[options] Global timeout fired for ${symbol} — skipping to BS estimate`);
+            if (currentPrice > 0) {
+                const bsAsk = blackScholesEstimate(currentPrice, contractType, expiryDays);
+                return res.status(200).json({
+                    ticker: symbol, contractType, currentPrice,
+                    best: { bid: null, ask: bsAsk, mid: bsAsk, last: null, strike: currentPrice, expiry: targetDateStr, priceType: 'bs_estimate', iv: null, delta: contractType === 'call' ? 0.5 : -0.5 },
+                    fetchedAt: new Date().toISOString(),
+                    source: 'bs_estimate',
+                    _bsFallback: true, _reason: 'global_timeout',
+                });
+            }
+            return res.status(502).json({ error: `Options timeout for ${symbol}. No stock price available for BS estimate.` });
+        }
+
+        const [tradierResult, massiveResult] = parallelRace;
 
         // Prefer Tradier (real-time), then Polygon with live bid/ask
         if (tradierResult && (tradierResult.bid != null || tradierResult.ask != null)) {
