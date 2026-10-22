@@ -543,8 +543,22 @@ module.exports = async function handler(req, res) {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
 
+    // ── Hard global timeout: fires at 8.5s from request start ────────────────
+    // Must be set up FIRST, before any awaits, so it covers price fetching too.
+    // Vercel kills functions at ~10-25s; this guarantees we respond with BS 200.
+    let _responded = false;
+    const _hardDeadline = new Promise(resolve => {
+        setTimeout(() => resolve('__deadline__'), 8500);
+    });
+    // Wrap res.status so we can track if we already sent a response
+    const safeRespond = (statusCode, body) => {
+        if (_responded) return;
+        _responded = true;
+        return res.status(statusCode).json(body);
+    };
+
     const { ticker, type = 'call', strike, expiry = '30d' } = req.query;
-    if (!ticker) return res.status(400).json({ error: 'ticker required' });
+    if (!ticker) return safeRespond(400, { error: 'ticker required' });
 
     const symbol       = ticker.toUpperCase().trim();
     const contractType = type.toLowerCase() === 'put' ? 'put' : 'call';
@@ -560,107 +574,75 @@ module.exports = async function handler(req, res) {
     }
     const expiryDays = Math.round((new Date(targetDateStr).getTime() / 1000 - now) / 86400);
 
-    // Get current stock price for ATM strike selection.
+    // ── Stock price: fetch ALL sources in parallel, 3s max total ────────────
+    // Must be fast — we're racing against the 8.5s hard deadline above.
     let currentPrice = 0;
+    try {
+        const tradierTokenForPrice = process.env.TRADIER_TOKEN;
+        const massivePriceKey      = process.env.MASSIVE_API_KEY;
+        const priceTimeout         = 3000;
 
-    // Source 1: Tradier — live stock quote
-    const tradierTokenForPrice = process.env.TRADIER_TOKEN;
-    if (tradierTokenForPrice) {
-        try {
-            const tr = await fetch(
-                `https://api.tradier.com/v1/markets/quotes?symbols=${symbol}&greeks=false`,
-                {
-                    headers: { 'Authorization': `Bearer ${tradierTokenForPrice}`, 'Accept': 'application/json' },
-                    signal: AbortSignal.timeout(5000),
-                }
-            );
-            if (tr.ok) {
-                const td = await tr.json();
-                let q = td?.quotes?.quote;
-                if (Array.isArray(q)) q = q[0];
-                const price = q?.last ? parseFloat(q.last) : 0;
-                if (price > 0) { currentPrice = price; console.log(`[options] Tradier stock price: ${symbol} = $${currentPrice}`); }
-            }
-        } catch(e) { console.warn('[options] Tradier price error:', e.message); }
-    }
+        const tradierPriceP = tradierTokenForPrice
+            ? fetch(`https://api.tradier.com/v1/markets/quotes?symbols=${symbol}&greeks=false`,
+                    { headers: { 'Authorization': `Bearer ${tradierTokenForPrice}`, 'Accept': 'application/json' },
+                      signal: AbortSignal.timeout(priceTimeout) })
+                .then(r => r.ok ? r.json() : null)
+                .then(d => { let q = d?.quotes?.quote; if (Array.isArray(q)) q = q[0]; return parseFloat(q?.last) || 0; })
+                .catch(() => 0)
+            : Promise.resolve(0);
 
-    // Source 2: Yahoo Finance v7/quote — live during market hours
-    for (const host of ['query1', 'query2']) {
-        if (currentPrice) break;
-        try {
-            const yqR = await fetch(
-                `https://${host}.finance.yahoo.com/v7/finance/quote?symbols=${symbol}&fields=regularMarketPrice&formatted=false`,
-                { headers: { 'User-Agent': UA, 'Accept': 'application/json', 'Referer': 'https://finance.yahoo.com/' }, signal: AbortSignal.timeout(5000) }
-            );
-            if (yqR.ok) {
-                const yqD = await yqR.json();
-                const price = yqD?.quoteResponse?.result?.[0]?.regularMarketPrice;
-                if (price && price > 0) { currentPrice = price; console.log(`[options] Yahoo v7/quote price: ${symbol} = $${currentPrice}`); }
-            }
-        } catch(e) {}
-    }
+        const yahooPriceP = fetch(
+            `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${symbol}&fields=regularMarketPrice&formatted=false`,
+            { headers: { 'User-Agent': UA, 'Accept': 'application/json', 'Referer': 'https://finance.yahoo.com/' },
+              signal: AbortSignal.timeout(priceTimeout) })
+            .then(r => r.ok ? r.json() : null)
+            .then(d => parseFloat(d?.quoteResponse?.result?.[0]?.regularMarketPrice) || 0)
+            .catch(() => 0);
 
-    // Source 2: Yahoo v8/chart — backup
-    if (!currentPrice) {
-        try {
-            const qr = await fetch(`https://query2.finance.yahoo.com/v8/finance/chart/${symbol}?interval=1m&range=1d`, {
-                headers: { 'User-Agent': UA, 'Accept': 'application/json', 'Referer': 'https://finance.yahoo.com/' },
-                signal: AbortSignal.timeout(6000),
-            });
-            if (qr.ok) {
-                const qd = await qr.json();
-                currentPrice = qd?.chart?.result?.[0]?.meta?.regularMarketPrice || 0;
-                if (currentPrice) console.log(`[options] Yahoo v8/chart price: ${symbol} = $${currentPrice}`);
-            }
-        } catch(e) {}
-    }
+        const polygonPriceP = massivePriceKey
+            ? fetch(`https://api.polygon.io/v2/aggs/ticker/${symbol}/prev?adjusted=true&apiKey=${massivePriceKey}`,
+                    { headers: { 'Accept': 'application/json' }, signal: AbortSignal.timeout(priceTimeout) })
+                .then(r => r.ok ? r.json() : null)
+                .then(d => parseFloat(d?.results?.[0]?.c) || 0)
+                .catch(() => 0)
+            : Promise.resolve(0);
 
-    // Source 3: Polygon prev-close — always available, used only as last resort
-    if (!currentPrice) {
-        const _priceKey = process.env.MASSIVE_API_KEY;
-        try {
-            const prevR = await fetch(
-                `https://api.polygon.io/v2/aggs/ticker/${symbol}/prev?adjusted=true&apiKey=${_priceKey}`,
-                { headers: { 'Accept': 'application/json' }, signal: AbortSignal.timeout(5000) }
-            );
-            if (prevR.ok) {
-                const prevD = await prevR.json();
-                currentPrice = prevD?.results?.[0]?.c || 0;
-                if (currentPrice) console.log(`[options] Polygon prev-close: ${symbol} = $${currentPrice} (stale — Yahoo unavailable)`);
-            }
-        } catch(e) {}
-    }
+        // First non-zero price wins
+        const [tp, yp, pp] = await Promise.all([tradierPriceP, yahooPriceP, polygonPriceP]);
+        currentPrice = tp || yp || pp;
+        if (currentPrice) console.log(`[options] stock price ${symbol}=$${currentPrice} (t=${tp} y=${yp} p=${pp})`);
+        else console.warn(`[options] WARNING: all price sources returned 0 for ${symbol}`);
+    } catch(e) { console.warn('[options] price fetch error:', e.message); }
 
-    if (!currentPrice) console.error(`[options] WARNING: could not get current price for ${symbol} — ATM selection will be wrong`);
-
-    const refPrice = targetStrike || currentPrice;
+    // refPrice: use query strike as fallback when live price fetch fails
+    const refPrice = currentPrice || targetStrike || 0;
 
     // ── Cache check ───────────────────────────────────────────────────
     const cKey = _cacheKey(symbol, contractType, targetDateStr);
     const cached = _cacheGet(cKey);
     if (cached) {
         console.log(`[options] cache hit for ${symbol} ${contractType} ${targetDateStr}`);
-        return res.status(200).json({ ...cached, fromCache: true });
+        return safeRespond(200, { ...cached, fromCache: true });
     }
 
-    // ── Global safety timeout: guarantee we respond within 8.5s ─────────────
-    // Vercel kills functions at ~10s (Hobby) or 25s (Pro). This ensures we
-    // always return a BS estimate instead of a hard 502 gateway timeout.
-    let _globalResolved = false;
-    const globalTimeoutMs = 8500;
-    const _globalRace = new Promise(resolve => {
-        setTimeout(() => {
-            if (!_globalResolved) {
-                _globalResolved = true;
-                resolve('__timeout__');
-            }
-        }, globalTimeoutMs);
-    });
+    // ── BS helper: always returns 200, uses refPrice with targetStrike fallback ─
+    const bsResponse = (reason) => {
+        const bsPrice = refPrice > 0 ? refPrice : 1; // last resort: $1 placeholder
+        const bsAsk   = blackScholesEstimate(bsPrice, contractType, expiryDays);
+        console.warn(`[options] BS estimate for ${symbol}: $${bsAsk} (reason=${reason} price=$${bsPrice})`);
+        return safeRespond(200, {
+            ticker: symbol, contractType, currentPrice: bsPrice,
+            best: { bid: null, ask: bsAsk, mid: bsAsk, last: null,
+                    strike: bsPrice, expiry: targetDateStr, priceType: 'bs_estimate',
+                    iv: null, delta: contractType === 'call' ? 0.5 : -0.5 },
+            fetchedAt: new Date().toISOString(),
+            source: 'bs_estimate', _bsFallback: true, _reason: reason,
+        });
+    };
 
     try {
         // Helper to build, cache, and return a successful response
         const respond = (result, source) => {
-            _globalResolved = true;
             const payload = {
                 ticker: symbol, contractType, currentPrice,
                 targetExpiry: result.expiry,
@@ -671,7 +653,6 @@ module.exports = async function handler(req, res) {
                     openInterest: result.openInterest ?? result.oi, iv: result.iv,
                     inTheMoney: result.inTheMoney, contractSymbol: result.contractSymbol ?? result.ticker ?? '',
                     priceType: result.priceType,
-                    // Greeks — included here so frontend can access them at data.best.delta etc.
                     delta: result.delta ?? null,
                     gamma: result.gamma ?? null,
                     theta: result.theta ?? null,
@@ -681,15 +662,15 @@ module.exports = async function handler(req, res) {
                 source,
             };
             _cacheSet(cKey, payload);
-            return res.status(200).json(payload);
+            return safeRespond(200, payload);
         };
 
-        // ── Sources 1+2: Tradier + Polygon in PARALLEL, race against global timeout ─
+        // ── Sources 1+2: Tradier + Polygon in PARALLEL, race against hard deadline ─
         const tradierKey = process.env.TRADIER_TOKEN;
         const massiveKey = process.env.MASSIVE_API_KEY;
 
         const parallelRace = await Promise.race([
-            _globalRace,
+            _hardDeadline,
             Promise.all([
                 tradierKey
                     ? fetchTradierOptions(symbol, contractType, targetDateStr, refPrice, tradierKey).catch(e => { console.warn('[options] Tradier parallel error:', e.message); return null; })
@@ -700,82 +681,35 @@ module.exports = async function handler(req, res) {
             ]),
         ]);
 
-        // If global timeout fired before both sources returned, skip to BS fallback
-        if (parallelRace === '__timeout__') {
-            console.warn(`[options] Global timeout fired for ${symbol} — skipping to BS estimate`);
-            if (currentPrice > 0) {
-                const bsAsk = blackScholesEstimate(currentPrice, contractType, expiryDays);
-                return res.status(200).json({
-                    ticker: symbol, contractType, currentPrice,
-                    best: { bid: null, ask: bsAsk, mid: bsAsk, last: null, strike: currentPrice, expiry: targetDateStr, priceType: 'bs_estimate', iv: null, delta: contractType === 'call' ? 0.5 : -0.5 },
-                    fetchedAt: new Date().toISOString(),
-                    source: 'bs_estimate',
-                    _bsFallback: true, _reason: 'global_timeout',
-                });
-            }
-            return res.status(502).json({ error: `Options timeout for ${symbol}. No stock price available for BS estimate.` });
+        if (parallelRace === '__deadline__') {
+            console.warn(`[options] Hard deadline hit for ${symbol} during options fetch`);
+            return bsResponse('hard_deadline');
         }
 
         const [tradierResult, massiveResult] = parallelRace;
 
-        // Prefer Tradier (real-time), then Polygon with live bid/ask
-        if (tradierResult && (tradierResult.bid != null || tradierResult.ask != null)) {
-            return respond(tradierResult, 'tradier');
-        }
-        if (massiveResult && (massiveResult.bid != null || massiveResult.ask != null)) {
-            return respond(massiveResult, 'massive');
-        }
+        if (tradierResult && (tradierResult.bid != null || tradierResult.ask != null)) return respond(tradierResult, 'tradier');
+        if (massiveResult && (massiveResult.bid != null || massiveResult.ask != null)) return respond(massiveResult, 'massive');
 
-        // ── Source 3: Yahoo Finance v10 — live bid/ask, no greeks ────────────
-        const yahooResult = await fetchYahooV10Options(symbol, contractType, expiryDays);
-        if (yahooResult && (yahooResult.bid != null || yahooResult.ask != null)) {
-            if (massiveResult) {
-                yahooResult.delta = massiveResult.delta ?? null;
-                yahooResult.gamma = massiveResult.gamma ?? null;
-                yahooResult.theta = massiveResult.theta ?? null;
-                yahooResult.vega  = massiveResult.vega  ?? null;
-            }
-            return respond(yahooResult, 'yahoo_v10');
+        // ── Source 3: Yahoo Finance v10 — race remaining time ────────────────
+        const yahooRace = await Promise.race([
+            _hardDeadline,
+            fetchYahooV10Options(symbol, contractType, expiryDays).catch(() => null),
+        ]);
+        if (yahooRace !== '__deadline__' && yahooRace && (yahooRace.bid != null || yahooRace.ask != null)) {
+            if (massiveResult) { yahooRace.delta = massiveResult.delta ?? null; yahooRace.gamma = massiveResult.gamma ?? null; yahooRace.theta = massiveResult.theta ?? null; yahooRace.vega = massiveResult.vega ?? null; }
+            return respond(yahooRace, 'yahoo_v10');
         }
+        if (yahooRace === '__deadline__') return bsResponse('hard_deadline');
 
         // ── Source 4: Polygon prev_close ─────────────────────────────────────
         if (massiveResult) return respond(massiveResult, 'massive');
 
-        // ── Source 5: Twelve Data ─────────────────────────────────────────────
-        const twelvedataKey = process.env.TWELVEDATA_API_KEY;
-        if (twelvedataKey) {
-            const result = await fetchTwelvedataOptions(symbol, contractType, targetDateStr, refPrice, twelvedataKey);
-            if (result) return respond(result, 'twelvedata');
-        }
-
-        // ── Source 6: Finnhub ─────────────────────────────────────────────────
-        const finnhubKey = process.env.FINNHUB_API_KEY;
-        if (finnhubKey) {
-            const result = await fetchFinnhubOptions(symbol, contractType, targetDateStr, refPrice, finnhubKey);
-            if (result) return respond(result, 'finnhub');
-        }
-
-        // ── Server-side Black-Scholes fallback — return 200 not 502 ──────────
-        // Client already does BS but a server-side estimate avoids the error cascade
-        if (currentPrice > 0) {
-            const bsAsk = blackScholesEstimate(currentPrice, contractType, expiryDays);
-            console.warn(`[options] All live sources failed for ${symbol} — returning BS estimate $${bsAsk}`);
-            return res.status(200).json({
-                ticker: symbol, contractType, currentPrice,
-                best: { bid: null, ask: bsAsk, mid: bsAsk, last: null, strike: currentPrice, expiry: targetDateStr, priceType: 'bs_estimate', iv: null, delta: contractType === 'call' ? 0.5 : -0.5 },
-                fetchedAt: new Date().toISOString(),
-                source: 'bs_estimate',
-                _bsFallback: true,
-            });
-        }
-
-        return res.status(502).json({
-            error: `Options data unavailable for ${symbol}. All sources failed.`,
-            hint: 'Check Vercel logs for source-specific errors.',
-        });
+        // ── All sources failed — return BS estimate (always 200) ─────────────
+        return bsResponse('all_sources_failed');
 
     } catch(err) {
         console.error('[options] handler error:', err.message);
-        return res.status(500).json({ error: err.message });
+        return bsResponse('handler_error');
     }
 };
