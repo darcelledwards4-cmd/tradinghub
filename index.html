@@ -2682,10 +2682,22 @@ function computeEntryPct(tech, flow, expiryIdx, isCall){
 function applyEntryFilter(techMap, flowMap){
     Object.entries(window._cardData||{}).forEach(([cardId,data])=>{
         const ticker=(data.ticker||'').toUpperCase();
-        const tech=techMap[ticker], flow=flowMap[ticker];
-        if(!tech && !flow) return;
         const idea=data[data.activeDir||'call']||data.call||{};
         const isCall=(idea.option_type||'CALL').toUpperCase()!=='PUT';
+        // Live price filter — runs after Tradier enrichment populates _livePrice
+        const opts=idea.expiry_options||[];
+        const livePrices=opts.map(o=>o._livePrice).filter(p=>p!=null&&p>0);
+        if(livePrices.length){
+            const minLive=Math.min(...livePrices);
+            if(minLive>3.50){
+                const w=document.getElementById('cwrap-'+cardId);
+                if(w){ w.style.display='none'; console.warn('[price-filter] Hidden '+ticker+' — min live ask $'+minLive); }
+                return;
+            }
+        }
+        // Entry signal filter — needs MI data
+        const tech=techMap[ticker], flow=flowMap[ticker];
+        if(!tech && !flow) return;
         const passes=[0,1,2].some(idx=>computeEntryPct(tech,flow,idx,isCall)>=0.5);
         if(!passes){ const w=document.getElementById('cwrap-'+cardId); if(w){ w.style.display='none'; console.warn('[mi-filter] Hidden '+ticker); } }
     });
