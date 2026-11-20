@@ -2698,7 +2698,7 @@ function applyEntryFilter(techMap, flowMap){
         // Entry signal filter — needs MI data
         const tech=techMap[ticker], flow=flowMap[ticker];
         if(!tech && !flow) return;
-        const passes=[0,1,2].some(idx=>computeEntryPct(tech,flow,idx,isCall)>=0.5);
+        const activeExpiryIdx=data.activeExpiryIdx??0; const passes=computeEntryPct(tech,flow,activeExpiryIdx,isCall)>=0.5;
         if(!passes){ const w=document.getElementById('cwrap-'+cardId); if(w){ w.style.display='none'; console.warn('[mi-filter] Hidden '+ticker); } }
     });
 }
@@ -2765,10 +2765,11 @@ function buildCard(idea, existingCardId=null){
 
     // Initialize or update card data store (preserve other direction if re-using cardId)
     if (!window._cardData[cardId]) {
-        window._cardData[cardId] = { call:null, put:null, ticker:idea.ticker, current_price:idea.current_price, price_change:idea.price_change };
+        window._cardData[cardId] = { call:null, put:null, ticker:idea.ticker, current_price:idea.current_price, price_change:idea.price_change, activeExpiryIdx:0 };
     }
     window._cardData[cardId][activeDir]      = idea;
     window._cardData[cardId].activeDir       = activeDir;
+    window._cardData[cardId].activeExpiryIdx = 0;
     window._cardData[cardId].ticker          = idea.ticker;
     window._cardData[cardId].current_price   = idea.current_price;
     window._cardData[cardId].price_change    = idea.price_change;
@@ -3101,6 +3102,8 @@ function switchCardExpiry(cardId, idx){
     if(!idea||!idea.expiry_options) return;
     const opt=idea.expiry_options[idx];
     if(!opt) return;
+    // Track active expiry index for entry filter
+    cardData.activeExpiryIdx = idx;
     // Update tab active state
     const tabs=document.querySelectorAll(`#etabs-${cardId} .expiry-tab`);
     tabs.forEach((t,i)=>t.classList.toggle('active',i===idx));
