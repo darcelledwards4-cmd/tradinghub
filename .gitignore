@@ -1,5 +1,5 @@
-# API keys — never commit this
-config.js
+# config.js is a safe stub with no keys — it is committed intentionally
+# If you add real API keys to config.js locally, add it back here
 
 # OS files
 .DS_Store
