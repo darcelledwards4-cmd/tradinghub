@@ -2695,8 +2695,22 @@ function applyEntryFilter(techMap, flowMap){
             const minLive=Math.min(...livePrices);
             if(minLive>3.00){
                 const w=document.getElementById('cwrap-'+cardId);
-                if(w){ w.style.display='none'; console.warn('[price-filter] Hidden '+ticker+' — min live ask $'+minLive); }
+                if(w){ w.style.display='none'; console.warn('[price-filter] Hidden '+ticker+' — max price: $'+minLive.toFixed(2)); }
                 return;
+            }
+            if(minLive<0.10){
+                const w=document.getElementById('cwrap-'+cardId);
+                if(w){ w.style.display='none'; console.warn('[price-filter] Hidden '+ticker+' — penny option: $'+minLive.toFixed(2)); }
+                return;
+            }
+            const stockPrice=data.current_price||0;
+            if(stockPrice>0){
+                const badData=opts.some(o=>{ const lp=o._livePrice; if(!lp||typeof lp!=='object') return false; const p=lp.ask??lp.mid; const d=Math.abs(lp.delta||0); return p&&d>=0.3&&(p/(d*stockPrice))<0.05; });
+                if(badData){
+                    const w=document.getElementById('cwrap-'+cardId);
+                    if(w){ w.style.display='none'; console.warn('[price-filter] Hidden '+ticker+' — suspect data (delta/price mismatch)'); }
+                    return;
+                }
             }
         }
         // Entry signal filter — needs MI data
