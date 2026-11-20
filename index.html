@@ -2690,7 +2690,7 @@ function applyEntryFilter(techMap, flowMap){
         const isCall=(idea.option_type||'CALL').toUpperCase()!=='PUT';
         // Live price filter — runs after Tradier enrichment populates _livePrice
         const opts=idea.expiry_options||[];
-        const livePrices=opts.map(o=>o._livePrice).filter(p=>p!=null&&p>0);
+        const livePrices=opts.map(o=>{ const lp=o._livePrice; if(lp==null) return null; return typeof lp==='number'?lp:(lp.ask??lp.mid??null); }).filter(p=>p!=null&&p>0);
         if(livePrices.length){
             const minLive=Math.min(...livePrices);
             if(minLive>3.00){
