@@ -2046,6 +2046,8 @@ async function _runEnrichQueue(){
         if(_enrichQueue.length) await new Promise(r => setTimeout(r, 500));
     }
     _enrichRunning = false;
+    // Re-run price+entry filter now that all Tradier prices are loaded
+    applyEntryFilter(window._lastTechMap||{}, window._lastFlowMap||{});
 }
 
 function enrichCardsWithOptionPrices(cardIds){
@@ -2667,6 +2669,8 @@ function buildTechPillsHTML(tech, flow, expiryIdx=0, optType='CALL'){
 
 // Injects tech/flow pills into already-rendered cards without a full re-render
 function computeEntryPct(tech, flow, expiryIdx, isCall){
+    // Hard fail: IV > 1.5x HV means premium is too expensive for entry
+    if(flow?.atmIV!=null && tech?.hv30!=null && (flow.atmIV/tech.hv30)>1.5) return 0;
     let score=0, possible=0;
     if(tech?.rsi!=null){ possible+=2; if(isCall) score+=tech.rsi<65?(tech.rsi<50?2:1):0; else score+=tech.rsi>35?(tech.rsi>50?2:1):0; }
     const useMa=expiryIdx<=1?tech?.ma50:tech?.ma200;
@@ -2689,7 +2693,7 @@ function applyEntryFilter(techMap, flowMap){
         const livePrices=opts.map(o=>o._livePrice).filter(p=>p!=null&&p>0);
         if(livePrices.length){
             const minLive=Math.min(...livePrices);
-            if(minLive>3.50){
+            if(minLive>3.00){
                 const w=document.getElementById('cwrap-'+cardId);
                 if(w){ w.style.display='none'; console.warn('[price-filter] Hidden '+ticker+' — min live ask $'+minLive); }
                 return;
@@ -2752,6 +2756,9 @@ function injectTechPillsIntoCards(techMap, flowMap){
             if(el) el.innerHTML=html;
         });
     }
+    // Store maps globally so enrichment callback can re-run the filter after Tradier loads
+    window._lastTechMap = Object.assign(window._lastTechMap||{}, techMap);
+    window._lastFlowMap = Object.assign(window._lastFlowMap||{}, flowMap);
     doInject();
     applyEntryFilter(techMap, flowMap);
     setTimeout(()=>{ doInject(); applyEntryFilter(techMap, flowMap); }, 1500);
@@ -5404,6 +5411,7 @@ function buildJournalCard(trade){
             </div>
             <div style="font-size:10px;color:var(--muted);margin-bottom:6px;opacity:.7">Option Stop &amp; Target are contract price levels — click <strong>✏️ Edit</strong> to set your exits for accurate analysis.</div>`:''}
             ${trade.option_summary?`<div class="j-action-box" style="border-left-color:var(--blue)">📊 ${trade.option_summary}</div>`:''}
+            ${trade.mi_health?`<div class="j-action-box" style="border-left-color:rgba(99,179,237,.45);color:var(--muted);font-size:11px">📡 Signals: ${trade.mi_health}</div>`:''}
             ${trade.action?`<div class="j-action-box">💡 ${trade.action}</div>`:''}
             ${trade.news_summary?`<div class="j-news-line">📰 ${trade.news_summary.slice(0,140)}${trade.news_summary.length>140?'…':''}</div>`:''}
             ${trade.trader_notes?`<div class="j-action-box" style="border-left:2px solid rgba(139,92,246,.4);font-style:italic;color:var(--muted)">📝 Your notes: ${trade.trader_notes}</div>`:''}
@@ -5578,6 +5586,12 @@ Compare: was the entry made when signals were favorable? Are they still favorabl
 5. A green stock price does NOT automatically mean hold — the option could be losing value due to theta decay, IV crush, or moving against the strike. Always factor option P&L% when available.
 6. If the trade has no stop set, still assess proximity to loss of full premium and flag urgency accordingly.
 7. STOP LOSS IS ABSOLUTE: If a stop is set, your "hold" recommendation must explicitly state the option must remain ABOVE the stop to justify holding. This analysis tool should NEVER be the reason a trader ignores their own stop. If signals are mixed but the option is near the stop, err toward "adjust" or "exit" — not "hold". A predetermined stop loss takes priority over this tool's real-time read.
+8. MI SIGNAL HEALTH — After reviewing the Market Intelligence section above, check these conditions:
+   • Flow reversal: Call flow <50% on a CALL trade (or put flow <50% on a PUT trade) = market positioning has shifted against the thesis → downgrade rating one level.
+   • RSI extremes: CALL trade with RSI >70 = momentum may stall, warn and flag "adjust" if near target. PUT trade with RSI <30 = bounce risk, flag "adjust".
+   • IV inflation + expiry proximity: If IV/HV ratio >1.5 AND expiry is within 14 days → theta + IV crush double risk. Flag in mi_health even if stop is not yet hit.
+   • Unusual activity reversal: Unusual flow in the OPPOSITE direction of the trade (Unusual PUTs on a CALL, or Unusual CALLs on a PUT) = smart money positioning against → downgrade one level.
+   If 2 or more of these red flags apply simultaneously, treat it as thesis degradation and recommend "adjust" or "exit" regardless of stop distance.
 
 Based on ALL the facts above, give your recommendation:
 - "exit" = stop hit, thesis clearly failed, or option has lost >50% of value
@@ -5585,10 +5599,11 @@ Based on ALL the facts above, give your recommendation:
 - "hold" = option well above stop, thesis intact, signals confirming
 
 Return ONLY this JSON (no markdown):
-{"recommendation":"hold","reason":"2-3 sentences — reference option price vs stop/target explicitly, P&L%, and what the technicals/Greeks say about thesis health","rating":"moderate","action":"1 specific actionable sentence — give the exact option price level to watch","option_summary":"1 plain-English sentence covering where the option stands vs stop/target and what to do"}
+{"recommendation":"hold","reason":"2-3 sentences — reference option price vs stop/target explicitly, P&L%, and what the technicals/Greeks say about thesis health","rating":"moderate","action":"1 specific actionable sentence — give the exact option price level to watch","option_summary":"1 plain-English sentence covering where the option stands vs stop/target and what to do","mi_health":"1 sentence: start with 🟢 🟡 or 🔴 then describe flow direction, RSI position, and whether IV is elevated vs HV — flag any reversals"}
 
 recommendation: "hold", "adjust", or "exit" only
-rating: "high" (well above stop, thesis confirming), "moderate" (above stop but mixed signals), "low" (near stop or bleeding), or "exit" (stop hit)`;
+rating: "high" (well above stop, thesis confirming), "moderate" (above stop but mixed signals), "low" (near stop or bleeding), or "exit" (stop hit)
+mi_health: begin with 🟢 (signals aligned with trade), 🟡 (mixed — some concern), or 🔴 (signals degraded or reversed)`;
 }
 // Fetch live option price + Greeks for a specific logged trade
 async function fetchLiveOptionData(trade){
@@ -5681,6 +5696,7 @@ async function analyzeOpenTrades(){
                     trades[idx].rating=result.rating||'moderate';
                     trades[idx].action=result.action||'';
                     trades[idx].option_summary=result.option_summary||'';
+                    trades[idx].mi_health=result.mi_health||'';
                     trades[idx].current_price=currentPrice;
                     trades[idx].price_change=priceChange;
                     trades[idx].news_summary=newsText.replace(/\n/g,' ').slice(0,200);
