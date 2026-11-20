@@ -3470,14 +3470,22 @@ async function loadMoreFilter(){
             const lmGemAllowed = new Set(lmGemSubset.map(t=>t.toUpperCase()));
             const lmGemPriceData = lmGemSubset.map(t=>{ const q=lmGemAllQuotes[t]; return `${t}: $${q.c.toFixed(2)} (${(q.dp||0)>=0?'+':''}${(q.dp||0).toFixed(2)}% today)`; }).join('\n');
             const lmGemQuotesArr = lmGemSubset.map(t=>({ticker:t,price:lmGemAllQuotes[t].c,chg:lmGemAllQuotes[t].dp||0}));
-            newCards = JSON.parse(stripJSON(await callClaude(gemsPrompt(lmGemPriceData, getDNAPromptBlock()), 4500)));
+            const lmMarketNews = await fetchMarketNewsContext();
+            newCards = JSON.parse(stripJSON(await callClaude(gemsPrompt(lmGemPriceData, getDNAPromptBlock(), lmMarketNews), 4500)));
             newCards = newCards.filter(c=>{ const t=(c.ticker||'').toUpperCase(); if(!lmGemAllowed.has(t)){console.warn(`[gems] LoadMore dropped ${t}`);return false;} return true; });
             // Strong entries only — drop low-confidence and avoid-potential cards
             newCards = newCards.filter(c=>{ const conf=(c.confidence||'').toLowerCase(); const pot=(c.potential||'').toLowerCase(); if(pot==='avoid'||conf==='low'){console.warn(`[gems] LoadMore dropped ${c.ticker} — weak entry`);return false;} return true; });
             newCards = injectLivePrices(newCards, lmGemQuotesArr);
             // Drop stocks already up 4%+ today — momentum spent
             newCards = newCards.filter(c=>{ const chg=c.price_change||0; if(chg>4.0){console.warn(`[gems] LoadMore dropped ${c.ticker} — already up ${chg.toFixed(1)}% today`);return false;} return true; });
-            // Mark entire subset as seen so next scan doesn't repeat any of these 20 stocks
+            // Options price filter
+            newCards = cards.filter(c=>{
+                const od = (c.expiry_options && c.expiry_options[0] && c.expiry_options[0].option_detail) || c.option_detail || '';
+                const m = od.match(/Est\.\s*\$([0-9]+(?:\.[0-9]+)?)/i);
+                if(m && parseFloat(m[1]) > 3.50){ console.warn(`[gems] LM dropped ${c.ticker} — est. $${m[1]} > $3.50`); return false; } return true;
+            });
+            (function(){ const sof={}; for(const [s,ts] of Object.entries(GEMS_UNIVERSE_BY_SECTOR)) ts.forEach(t=>{ sof[t.toUpperCase()]=s; }); const seen=new Set(); cards=cards.filter(c=>{ const s=sof[(c.ticker||"").toUpperCase()]||"X"; if(seen.has(s)){ console.warn(`[gems] LM dropped ${c.ticker} — sector dupe`); return false; } seen.add(s); return true; }); })();
+                        // Mark entire subset as seen so next scan doesn't repeat any of these 20 stocks
             if(lmGemSubset.length) addSeenGemTickers(lmGemSubset);
             const [lmGemNews,lmTechMap,lmFlowMap] = await Promise.all([
                 lmGemTickers.length?fetchNewsForPromptBatch(lmGemTickers):Promise.resolve({}),
@@ -3678,14 +3686,22 @@ async function runActiveFilter(){
             const gemAllowed = new Set(gemSubset.map(t=>t.toUpperCase()));
             const gemPriceData = gemSubset.map(t=>{ const q=gemAllQuotes[t]; return `${t}: $${q.c.toFixed(2)} (${(q.dp||0)>=0?'+':('')}${(q.dp||0).toFixed(2)}% today)`; }).join('\n');
             const gemQuotesArr = gemSubset.map(t=>({ ticker:t, price:gemAllQuotes[t].c, chg:gemAllQuotes[t].dp||0 }));
-            cards = JSON.parse(stripJSON(await callClaude(gemsPrompt(gemPriceData, getDNAPromptBlock()), 4500)));
+            const gemMarketNews = await fetchMarketNewsContext();
+            cards = JSON.parse(stripJSON(await callClaude(gemsPrompt(gemPriceData, getDNAPromptBlock(), gemMarketNews), 4500)));
             cards = cards.filter(c=>{ const t=(c.ticker||'').toUpperCase(); if(!gemAllowed.has(t)){console.warn(`[gems] Dropped ${t} — not in live universe`);return false;} return true; });
             // Strong entries only — drop low-confidence and avoid-potential cards
             cards = cards.filter(c=>{ const conf=(c.confidence||'').toLowerCase(); const pot=(c.potential||'').toLowerCase(); if(pot==='avoid'||conf==='low'){console.warn(`[gems] Dropped ${c.ticker} — weak entry (conf:${conf} pot:${pot})`);return false;} return true; });
             cards = injectLivePrices(cards, gemQuotesArr);
             // Drop stocks already up 4%+ today — momentum likely spent
             cards = cards.filter(c=>{ const chg=c.price_change||0; if(chg>4.0){console.warn(`[gems] Dropped ${c.ticker} — already up ${chg.toFixed(1)}% today (momentum spent)`);return false;} return true; });
-            // Mark the entire subset as seen (not just the 3 picked) so next scan avoids all 20
+            // Options price filter
+            cards = cards.filter(c=>{
+                const od = (c.expiry_options && c.expiry_options[0] && c.expiry_options[0].option_detail) || c.option_detail || '';
+                const m = od.match(/Est\.\s*\$([0-9]+(?:\.[0-9]+)?)/i);
+                if(m && parseFloat(m[1]) > 3.50){ console.warn(`[gems] Dropped ${c.ticker} — est. $${m[1]} > $3.50`); return false; } return true;
+            });
+            (function(){ const sof={}; for(const [s,ts] of Object.entries(GEMS_UNIVERSE_BY_SECTOR)) ts.forEach(t=>{ sof[t.toUpperCase()]=s; }); const seen=new Set(); cards=cards.filter(c=>{ const s=sof[(c.ticker||"").toUpperCase()]||"X"; if(seen.has(s)){ console.warn(`[gems] Dropped ${c.ticker} — sector dupe`); return false; } seen.add(s); return true; }); })();
+                        // Mark the entire subset as seen (not just the 3 picked) so next scan avoids all 20
             if(gemSubset.length) addSeenGemTickers(gemSubset);
             const gemCardTickers=[...new Set(cards.map(s=>(s.ticker||'').toUpperCase()).filter(Boolean))];
             const [gemNewsMap, gemTechMap, gemFlowMap] = await Promise.all([
@@ -3926,7 +3942,7 @@ function freeFormScanPrompt(optionType, marketCandidates=[], excludeTickers=[], 
 ${dnaBlock}${tierBlock}
 Find the TOP 3 best ${isPut?'PUT (bearish) option setups':'CALL (bullish) option setups'} in today's market. You have full freedom to pick ANY publicly traded US stock — not limited to a watchlist.
 
-THEME FOR THIS SCAN: ${varietySeed}
+THEME FOR THIS SCAN: ${varietySeed}\n\n🌐 SECTOR VARIETY: Return picks from 3 DIFFERENT sectors/industries. No two cards from the same sector — this ensures diversified exposure.
 ${moversBlock}${exclusionBlock}
 ${isPut
     ? 'Look for: overbought RSI, breaking below key MAs, bad news/earnings risk, sector weakness, stocks that have run too far.'
@@ -3947,7 +3963,7 @@ Use DIFFERENT strikes and levels per timeframe. ENTIRE response must be a single
 }
 
 // ── CHEAP GEMS PROMPT — 260-stock diverse universe, live-price-filtered, option ≤$3 ──
-function gemsPrompt(priceData='', dnaBlock=''){
+function gemsPrompt(priceData='', dnaBlock='', newsContext=''){
     const exp = getExpiryContext();
     const gemThemes = [
         'Focus on EV, clean energy, or battery supply chain names from the list.',
@@ -3969,7 +3985,7 @@ ${priceData}
 
 🚫 HARD RULE: You may ONLY return tickers that appear in the list above. Any ticker not on this list is auto-rejected. Zero exceptions.
 
-💰 OPTION PRICE GOAL: Pick stocks where the ATM or slightly OTM CALL contract costs $3.00/share or LESS ($300/contract max). Lower-priced stocks and lower-IV names will have the cheapest contracts. Estimate carefully — if a stock's options would cost more than $3, skip it and pick another.
+💰 OPTION PRICE GOAL: Pick stocks where the ATM or slightly OTM CALL contract costs $3.50/share or LESS ($350/contract max). Lower-priced stocks and lower-IV names will have the cheapest contracts. Estimate carefully — if a stock's options would cost more than $3, skip it and pick another.
 
 🎯 STRONG ENTRIES ONLY: Every setup you return must have a clear, specific technical trigger firing TODAY — price at or near key support, breakout above resistance, bullish candle pattern, MACD crossover, or unusual volume surge. Do NOT include a stock just because it "looks ok" or has a generally bullish trend. Only return it if there is a concrete, actionable reason to enter RIGHT NOW. All 3 setups must have confidence: "high". If you cannot genuinely assign "high" confidence to a setup, skip it and find a better one from the list.
 
@@ -3977,7 +3993,7 @@ ${priceData}
 
 THEME FOR THIS SCAN: ${varietySeed}
 
-${dnaBlock}
+${dnaBlock}${newsContext ? '\n\n📰 CURRENT MARKET CONTEXT (factor this into your picks — favor names with tailwinds):\n' + newsContext + '\n' : ''}
 WHAT TO LOOK FOR:
 - Strong technical trigger firing today (breakout, bounce, volume surge, pattern completion)
 - DNA alignment is fine — but the theme above should push you toward fresh sectors each scan
@@ -3989,9 +4005,9 @@ Return ONLY a raw JSON array of exactly 3 objects. No markdown, no code fences.
 Each object must have:
 ticker, company, current_price (number), price_change (number), direction ("bullish"), summary (1 sentence why this is a gem), pros (array of 2 short strings), cons (array of 1 short string), potential ("high"|"moderate"|"avoid"), entry_low (number), entry_high (number), stop_loss (number), target (number), option_type ("CALL"), option_detail (same as expiry_options[0].option_detail), account_sizing (same as expiry_options[0].account_sizing), confidence ("high"|"medium"|"low"), risk_reward (string e.g. "1:2.5"),
 expiry_options (array of EXACTLY 3 objects):
-  [0] {"label":"1 Mo · Aggressive",   "entry_low":number,"entry_high":number,"stop_loss":number,"target":number,"option_detail":"$X Call · Expires [options Friday around ${exp.aggressive}] · Est. $X.XX/contract (under $3)","account_sizing":"3 sentences: (1) RSI and specific MA level, (2) strike ATM or OTM vs today's price, (3) catalyst with dollar target or timeline","potential":"high"|"moderate"|"avoid"}
-  [1] {"label":"3 Mo · Moderate",     "entry_low":number,"entry_high":number,"stop_loss":number,"target":number,"option_detail":"$X Call · Expires [options Friday around ${exp.moderate}] · Est. $X.XX/contract (under $3)","account_sizing":"same 3-sentence structure","potential":"high"|"moderate"|"avoid"}
-  [2] {"label":"6 Mo · Conservative", "entry_low":number,"entry_high":number,"stop_loss":number,"target":number,"option_detail":"$X Call · Expires [options Friday around ${exp.sixMonth}] · Est. $X.XX/contract (under $3)","account_sizing":"same 3-sentence structure","potential":"high"|"moderate"|"avoid"}
+  [0] {"label":"1 Mo · Aggressive",   "entry_low":number,"entry_high":number,"stop_loss":number,"target":number,"option_detail":"$X Call · Expires [options Friday around ${exp.aggressive}] · Est. $X.XX/contract (under $3.50)","account_sizing":"3 sentences: (1) RSI and specific MA level, (2) strike ATM or OTM vs today's price, (3) catalyst with dollar target or timeline","potential":"high"|"moderate"|"avoid"}
+  [1] {"label":"3 Mo · Moderate",     "entry_low":number,"entry_high":number,"stop_loss":number,"target":number,"option_detail":"$X Call · Expires [options Friday around ${exp.moderate}] · Est. $X.XX/contract (under $3.50)","account_sizing":"same 3-sentence structure","potential":"high"|"moderate"|"avoid"}
+  [2] {"label":"6 Mo · Conservative", "entry_low":number,"entry_high":number,"stop_loss":number,"target":number,"option_detail":"$X Call · Expires [options Friday around ${exp.sixMonth}] · Est. $X.XX/contract (under $3.50)","account_sizing":"same 3-sentence structure","potential":"high"|"moderate"|"avoid"}
 Use DIFFERENT strikes and levels per timeframe. Your ENTIRE response must be a single JSON array starting with [ and ending with ].`;
 }
 
@@ -5754,11 +5770,27 @@ function clearDNA(){ localStorage.removeItem(DNA_KEY); renderDNACard(); }
 
 // Returns a concise prompt block to inject into Claude scan prompts
 // Called from discoverPrompt(), watchlistScanPrompt(), gemsPrompt() — returns '' if no DNA
+async function fetchMarketNewsContext(){
+    const marketTickers = ['SPY', 'QQQ', 'IWM'];
+    try {
+        const newsMap = await fetchNewsForPromptBatch(marketTickers);
+        const lines = [];
+        for(const t of marketTickers){
+            const n = newsMap[t];
+            if(n && n.items && n.items.length){
+                n.items.slice(0, 2).forEach(item => { if(item.headline) lines.push('• ' + item.headline); });
+            }
+        }
+        return lines.slice(0, 6).join('\n');
+    } catch(e){ return ''; }
+}
+
 function getDNAPromptBlock(){
     const dna = getDNA();
 
     // Even without trained DNA, inject raw trade pattern data if available
     const closed = (typeof trades !== 'undefined') ? trades.filter(t => t.status !== 'Open') : [];
+    const recentTrades = closed.slice(-20).map(t => `${t.ticker||'?'} | ${t.entry_date||'?'} | P&L: ${t.pnl!=null?t.pnl:'?'} | flag: ${t.post_analysis?.pattern_flag||'none'}`).join('\n');
     const patternCounts = {};
     closed.forEach(t => {
         const f = t.post_analysis?.pattern_flag;
@@ -5770,7 +5802,7 @@ function getDNAPromptBlock(){
 
     if(!dna || !dna.winning_patterns?.length){
         // No trained DNA yet — inject raw pattern warning if we have one
-        return rawPatternNote ? `\n🧠 TRADER PATTERN DATA (from ${closed.length} closed trades):\n${rawPatternNote}\n→ Keep this recurring pattern in mind when sizing entry zones, stops, and account_sizing guidance.\n` : '';
+        return rawPatternNote ? `\n🧠 TRADER PATTERN DATA (from ${closed.length} closed trades):\n${rawPatternNote}\n→ Keep this recurring pattern in mind when sizing entry zones, stops, and account_sizing guidance.${recentTrades ? '\n\n📋 LAST 20 TRADES (most recent):\n' + recentTrades : ''}\n` : '';
     }
 
     const wins   = dna.winning_patterns.slice(0, 3).join(' · ');
@@ -5819,7 +5851,7 @@ ${rawPatternNote ? `- ${rawPatternNote}` : ''}
 
 **Step 3 — Annotate with DNA.** For each card: in account_sizing, add ONE sentence confirming the trade passes the key lessons (e.g. "RSI 52 — momentum building, not exhausted ✓" or "IV normal, catalyst fresh within 2 days ✓"). In cons, flag any lesson that is borderline for this trade.
 
-**Step 4 — Variety.** Prioritize the strongest setup regardless of sector. Avoid repeating tickers.\n`;
+**Step 4 — Variety.** Prioritize the strongest setup regardless of sector. Avoid repeating tickers.${recentTrades ? '\n\n📋 LAST 20 TRADES (most recent):\n' + recentTrades + '\n\nUse these results to reinforce wins and avoid repeat mistakes.' : ''}\n`;
 }
 
 // ── POST-CLOSE TRADE ANALYST ──────────────────────────────────
