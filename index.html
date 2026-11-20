@@ -2670,7 +2670,7 @@ function buildTechPillsHTML(tech, flow, expiryIdx=0, optType='CALL'){
 // Injects tech/flow pills into already-rendered cards without a full re-render
 function computeEntryPct(tech, flow, expiryIdx, isCall){
     // Hard fail: IV > 1.5x HV means premium is too expensive for entry
-    if(flow?.atmIV!=null && tech?.hv30!=null && (flow.atmIV/tech.hv30)>1.5) return 0;
+    if(flow?.atmIV!=null && tech?.hv30!=null && (flow.atmIV/tech.hv30)>2.5) return 0;
     let score=0, possible=0;
     if(tech?.rsi!=null){ possible+=2; if(isCall) score+=tech.rsi<65?(tech.rsi<50?2:1):0; else score+=tech.rsi>35?(tech.rsi>50?2:1):0; }
     const useMa=expiryIdx<=1?tech?.ma50:tech?.ma200;
